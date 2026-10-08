@@ -522,12 +522,19 @@ private struct MarkdownListView: View {
     @ScaledMetric(relativeTo: .body) private var markerSize: CGFloat = 24
 
     var body: some View {
+        // Every number reserves the widest one's width, so "99." and "100."
+        // end on the same edge and their items share one text column.
+        let widestOrdinal = start.map { MarkdownListMarker.widestOrdinal(start: $0, count: items.count) }
         VStack(alignment: .leading, spacing: 8) {
             ForEach(items.indices, id: \.self) { offset in
                 let item = items[offset]
                 HStack(alignment: .top, spacing: 8) {
-                    marker(for: item, offset: offset)
+                    marker(for: item, offset: offset, widestOrdinal: widestOrdinal)
                         .frame(minWidth: markerSize, minHeight: markerSize, alignment: .trailing)
+                        // The item text gives way, never the marker: a
+                        // squeezed "100." wraps into a broken number.
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(1)
                     MarkdownBlocksView(blocks: item.blocks, spacing: 7)
                 }
                 .accessibilityElement(children: .contain)
@@ -536,7 +543,11 @@ private struct MarkdownListView: View {
     }
 
     @ViewBuilder
-    private func marker(for item: MarkdownRenderedListItem, offset: Int) -> some View {
+    private func marker(
+        for item: MarkdownRenderedListItem,
+        offset: Int,
+        widestOrdinal: String?
+    ) -> some View {
         if let task = item.task {
             Image(systemName: task == .complete ? "checkmark.square.fill" : "square")
                 .font(T3Typography.control)
@@ -545,16 +556,36 @@ private struct MarkdownListView: View {
                 )
                 .accessibilityLabel(task == .complete ? "Completed" : "Not completed")
         } else if let start {
-            Text("\(start + offset).")
-                .font(T3Typography.supporting.monospaced())
-                .foregroundStyle(T3Colors.textSecondary)
-                .accessibilityLabel("Item \(start + offset)")
+            // The hidden widest number sizes the gutter in the marker's own
+            // font, so it tracks Dynamic Type without a width table.
+            ZStack(alignment: .trailing) {
+                Text(verbatim: widestOrdinal ?? "").hidden()
+                Text(verbatim: MarkdownListMarker.ordinal(start + offset))
+            }
+            .font(T3Typography.supporting.monospaced())
+            .foregroundStyle(T3Colors.textSecondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Item \(start + offset)")
         } else {
             Text("•")
                 .font(T3Typography.threadBody.weight(.semibold))
                 .foregroundStyle(T3Colors.textSecondary)
                 .accessibilityHidden(true)
         }
+    }
+}
+
+/// Ordered-list marker text. Each list sizes its marker gutter to its widest
+/// marker, which `MarkdownListView` reserves on every row.
+enum MarkdownListMarker {
+    static func ordinal(_ number: Int) -> String { "\(number)." }
+
+    /// The longest marker a list of `count` items starting at `start` draws.
+    /// Digits are monospaced in the marker font, so length decides width.
+    static func widestOrdinal(start: Int, count: Int) -> String {
+        let first = ordinal(start)
+        let last = ordinal(start + max(count - 1, 0))
+        return last.count >= first.count ? last : first
     }
 }
 

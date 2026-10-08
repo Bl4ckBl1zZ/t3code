@@ -98,6 +98,7 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
         XCTAssertEqual(subagent.workflow?.phases.last?.detail, "Write it up")
         XCTAssertEqual(subagent.usage?.totalTokens, 4200)
         XCTAssertEqual(subagent.usage?.toolUses, 6)
+        XCTAssertEqual(subagent.startedAt, Self.timestamp)
         // Not reported is not zero: a driver that never emits reasoning tokens
         // must not render as having spent none.
         XCTAssertNil(subagent.usage?.reasoningOutputTokens)
@@ -125,6 +126,7 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
         XCTAssertNil(subagent.providerInstanceId)
         XCTAssertNil(subagent.workflow)
         XCTAssertNil(subagent.usage)
+        XCTAssertNil(subagent.startedAt)
         XCTAssertEqual(subagent.result, "done")
     }
 

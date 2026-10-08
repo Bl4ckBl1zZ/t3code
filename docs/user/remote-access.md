@@ -321,6 +321,11 @@ add it to the agent. For example:
 claude mcp add --transport http t3 https://<environment-address>/mcp
 ```
 
+In the native iOS app, open **Settings → Servers**, then a server's details, and tap **Copy MCP
+URL**. The server you're using also offers it from its long-press menu in Servers, as does any
+server whose details you've opened. The app offers an address only when the server supports agent
+sign-in and is reachable over HTTPS or T3 Connect.
+
 The first time the agent connects, it opens a sign-in page on the environment.
 Enter a pairing code from **Settings → Connections** on a device that can manage
 access, or from `t3 auth pairing create` on the host, and choose what the agent

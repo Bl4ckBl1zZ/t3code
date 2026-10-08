@@ -62,6 +62,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var environmentConnectionDetails: [String: String] = [:]
     private var latestServerConfig: ServerConfigSnapshot?
     private var serverConfigsByEnvironmentID: [String: ServerConfigSnapshot] = [:]
+    /// Whether each server keeps GitHub choices per host, asked once per session.
+    private var gitHubSettingsSupport: [String: Bool] = [:]
+    /// Whether each MCP address signs outside agents in with OAuth, keyed by
+    /// the address and asked once per session.
+    private var mcpOAuthSupport: [String: Bool] = [:]
+    /// Each environment's last auth session and when it was read. It gates
+    /// features by permission and drives the re-pair notice in Settings.
+    private var authSessions: [String: (session: AuthSessionState, readAt: Date)] = [:]
+    /// The read in flight per environment. Replacing a credential drops it, so
+    /// a read made with the old one is not saved.
+    private var authSessionReads: [String: Task<AuthSessionState, Error>] = [:]
     private var environmentThemesByEnvironmentID: [String: [EnvironmentTheme]] = [:]
     private var projectScriptActionsInFlight: Set<String> = []
     private var pendingProjectScripts: [String: (terminalID: String, startedAt: Date)] = [:]
@@ -219,6 +230,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             pairedClient = try await runtime.pair(url: endpoint, client: identity)
         }
         await adoptEnvironment(pairedClient.environment, client: pairedClient)
+        // Pairing a saved server again replaces its credential.
+        await credentialReplaced(pairedClient)
         startPolling(pairedClient, reason: "pair")
     }
 
@@ -290,6 +303,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         // A machine already saved over another route keeps those routes and
         // gains T3 Connect, so adopt the saved record rather than the relay-only one.
         await adoptEnvironment(managedClient.environment, client: managedClient)
+        await credentialReplaced(managedClient)
         do {
             try await refresh(client: managedClient)
         } catch {
@@ -303,6 +317,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             publish(snapshot)
         }
         startPolling(managedClient, reason: "connect-managed")
+    }
+
+    func renewEnvironmentAccess(id: String) async throws {
+        try await runtime.renewManagedCredential(environmentID: id)
+        guard let client = environmentClients[id] else { return }
+        await credentialReplaced(client)
+        // Joins the read just started, so the notice is settled on return.
+        _ = try? await authSession(for: client)
+    }
+
+    /// After a new credential replaced an environment's old one: the socket
+    /// reopens so the server applies the new grant, and the session is read
+    /// again so the re-pair notice follows.
+    private func credentialReplaced(_ client: T3Client) async {
+        let environmentID = client.environment.id
+        authSessions[environmentID] = nil
+        authSessionReads[environmentID] = nil
+        await client.reconnectWithNewCredential()
+        Task { [weak self] in _ = try? await self?.authSession(for: client) }
     }
 
     func activateEnvironment(id: String) async throws {
@@ -616,7 +649,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func importAgentSessions(environmentID: String, candidate: AgentSessionProjectCandidate, proposedProjectID: String) async throws -> AgentSessionImportResult {
         let client = try await environmentClient(id: environmentID)
-        try await requireScope("orchestration:operate", client: client)
+        try await requireScope(AuthScope.orchestrationOperate, client: client)
         guard try await client.serverConfig().environment?.capabilities.agentSessionImport == true else { throw FeatureCapabilityUnavailable("CLI history import; update this server") }
         let shell = try await client.shellSnapshot()
         let existing = shell.projects.first {
@@ -648,11 +681,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         partialPath: String
     ) async throws -> FilesystemBrowseResult {
         let client = try await projectCreationClient(environmentID: environmentID)
+        try await requireScope(AuthScope.filesystemRead, client: client)
         return try await client.browseFilesystem(partialPath: partialPath)
     }
 
     func workspaceAssetURL(threadID: String, path: String) async throws -> URL {
         let route = try threadRoute(for: threadID)
+        try await requireScope(AuthScope.filesystemRead, client: route.client)
         let config = try await route.client.serverConfig()
         let hostFiles = config.environment?.capabilities.fileDocumentPreviews == true
         let root = try workspaceContext(route: route).cwd
@@ -685,6 +720,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func consumeResetCredit(environmentID: String, instanceID: String) async throws -> ProviderConsumeResetCreditResult {
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.providersManage, client: client)
         return try await client.consumeResetCredit(instanceID: instanceID)
     }
 
@@ -693,7 +729,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func consumeResetCredit(environmentID: String, sourceID: String, accountID: String, creditID: String) async throws -> ProviderConsumeResetCreditResult {
-        try await environmentClient(id: environmentID).consumeResetCredit(sourceID: sourceID, accountID: accountID, creditID: creditID)
+        let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.providersManage, client: client)
+        return try await client.consumeResetCredit(sourceID: sourceID, accountID: accountID, creditID: creditID)
     }
 
     private var desktopUpdatesInFlight: Set<String> = []
@@ -704,6 +742,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
         defer { desktopUpdatesInFlight.remove(environmentID) }
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.environmentMaintain, client: client)
         return try await client.updateDesktopApp(progress: progress)
     }
 
@@ -718,11 +757,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func usageSummary(environmentID: String, input: UsageSummaryInput) async throws -> UsageSummary {
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.diagnosticsRead, client: client)
         return try await client.getUsageSummary(input: input)
     }
 
     func refreshUsageRates(environmentID: String) async throws {
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.diagnosticsRead, client: client)
         _ = try await client.refreshUsageRates()
     }
 
@@ -733,6 +774,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         timeZone: String
     ) async throws -> UsageSummary {
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.diagnosticsRead, client: client)
         return try await client.getUsageSummary(
             sinceDay: sinceDay,
             untilDay: untilDay,
@@ -784,6 +826,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         destinationPath: String
     ) async throws -> SourceControlCloneResult {
         let client = try await projectCreationClient(environmentID: environmentID)
+        try await requireScope(AuthScope.sourceControlWrite, client: client)
         do {
             return try await client.cloneRepository(
                 remoteURL: remoteURL,
@@ -2057,7 +2100,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func loadDeviceSessions() async throws -> [FeatureDeviceSession] {
         let client = try requireClient()
-        try await requireScope("access:read", client: client)
+        try await requireScope(AuthScope.accessRead, client: client)
         return try await client.clientSessions().map { session in
             FeatureDeviceSession(
                 sessionID: session.sessionId,
@@ -2077,7 +2120,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func revokeDeviceSession(id: String) async throws {
         let client = try requireClient()
-        try await requireScope("access:write", client: client)
+        try await requireScope(AuthScope.accessWrite, client: client)
         guard try await client.revokeClientSession(id: id) else {
             throw NativeFeatureClientError.deviceSessionNotFound
         }
@@ -2085,13 +2128,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func revokeOtherDeviceSessions() async throws {
         let client = try requireClient()
-        try await requireScope("access:write", client: client)
+        try await requireScope(AuthScope.accessWrite, client: client)
         _ = try await client.revokeOtherClientSessions()
     }
 
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
         let route = try threadRoute(for: threadID)
         let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.filesystemRead, client: route.client)
         let result = try await route.client.listProjectEntries(cwd: context.cwd)
         return NativeWorkspaceMapper.files(result.entries, directory: path)
     }
@@ -2103,6 +2147,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) async throws -> [FeatureFileEntry] {
         let route = try projectRoute(for: projectID)
         let project = try project(for: route)
+        try await requireScope(AuthScope.filesystemRead, client: route.client)
         let result = try await route.client.searchProjectEntries(
             cwd: project.workspaceRoot,
             query: query,
@@ -2118,6 +2163,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) async throws -> [FeatureFileEntry] {
         let route = try threadRoute(for: threadID)
         let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.filesystemRead, client: route.client)
         let result = try await route.client.searchProjectEntries(
             cwd: context.cwd,
             query: query,
@@ -2147,6 +2193,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent {
         let route = try threadRoute(for: threadID)
         let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.filesystemRead, client: route.client)
         let result = try await route.client.readProjectFile(
             cwd: context.cwd,
             relativePath: path
@@ -2163,6 +2210,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func loadReview(threadID: String) async throws -> FeatureReview {
         let route = try threadRoute(for: threadID)
         let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.filesystemRead, client: route.client)
         let preview = try await route.client.reviewDiffPreview(cwd: context.cwd)
         return NativeWorkspaceMapper.review(preview)
     }
@@ -2281,6 +2329,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             : "rename-changed"
         case .modified, .binary: "change"
         }
+        try await requireScope(AuthScope.filesystemRead, client: route.client)
         let contents = try await route.client.reviewDiffFileContents(
             cwd: context.cwd,
             sourceKind: sourceKind,
@@ -2340,6 +2389,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws {
         let route = try threadRoute(for: threadID)
+        try await requireScope(AuthScope.sourceControlWrite, client: route.client)
         guard let shell = shellsByEnvironmentID[route.environmentID],
               let thread = shell.threads.first(where: { $0.id == route.wireID }),
               let project = shell.projects.first(where: { $0.id == thread.projectId }),
@@ -2360,6 +2410,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
         let route = try threadRoute(for: threadID)
+        try await requireScope(AuthScope.sourceControlWrite, client: route.client)
         guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else {
             throw FeatureCapabilityUnavailable("Stack actions")
         }
@@ -2413,6 +2464,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func preparePullRequestAgentThread(scope: FeaturePullRequestScope, number: Int, expectedURL: String, title: String, mode: PullRequestCheckoutMode?) async throws -> FeaturePullRequestPreparedThread {
+        if mode != nil {
+            try await requireScope(AuthScope.sourceControlWrite, client: pullRequestRoute(scope: scope).client)
+        }
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         let environmentID = route.client.environment.id
         let generation = environmentGeneration
@@ -2476,13 +2530,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return route
     }
 
+    /// ``validatedPullRequestRoute(scope:number:expectedURL:)`` for a write,
+    /// checked for permission before the pull request is read.
+    private func writablePullRequestRoute(scope: FeaturePullRequestScope, number: Int, expectedURL: String) async throws -> (client: T3Client, projectID: String, repository: String, host: String?) {
+        try await requireScope(AuthScope.sourceControlWrite, client: pullRequestRoute(scope: scope).client)
+        return try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+    }
+
     func replyToPullRequestThread(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, body: String) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.replyToPullRequestThread(projectID: route.projectID, repository: route.repository, host: route.host, number: number, threadID: threadID, body: body)
     }
 
     func setPullRequestThreadResolution(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, resolved: Bool) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, host: route.host, number: number, threadID: threadID, resolved: resolved)
     }
 
@@ -2492,39 +2553,39 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func requestPullRequestReviewers(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestReviewerRequest) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.requestPullRequestReviewers(projectID: route.projectID, repository: route.repository, host: route.host, number: number, request: request)
     }
 
     func setPullRequestReaction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestReactionRequest) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.setPullRequestReaction(projectID: route.projectID, repository: route.repository, host: route.host, number: number, request: request)
     }
 
     func updatePullRequestText(scope: FeaturePullRequestScope, number: Int, expectedURL: String, update: PullRequestTextUpdate) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.updatePullRequestText(projectID: route.projectID, repository: route.repository, host: route.host, number: number, update: update)
         pullRequestPreviewCache.removeAll(keepingCapacity: true)
     }
 
     func updatePullRequestComment(scope: FeaturePullRequestScope, number: Int, expectedURL: String, commentID: String, kind: String, body: String) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.updatePullRequestComment(projectID: route.projectID, repository: route.repository, host: route.host, number: number, commentID: commentID, kind: kind, body: body)
     }
 
     func commentOnPullRequest(scope: FeaturePullRequestScope, number: Int, expectedURL: String, body: String) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.commentOnPullRequest(projectID: route.projectID, repository: route.repository, host: route.host, number: number, body: body)
     }
 
     func runPullRequestAction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestActionRequest) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.runPullRequestAction(projectID: route.projectID, repository: route.repository, host: route.host, number: number, request: request)
         pullRequestPreviewCache.removeAll(keepingCapacity: true)
     }
 
     func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws {
-        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let route = try await writablePullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.submitPullRequestReview(projectID: route.projectID, repository: route.repository, host: route.host, number: number, submission: submission)
     }
 
@@ -2563,6 +2624,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func setProjectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int, labels: [String], applied: Bool) async throws {
         let (route, repository) = try projectPullRequestRoute(scope)
+        try await requireScope(AuthScope.sourceControlWrite, client: route.client)
         try await route.client.setPullRequestLabels(projectID: route.wireID, repository: repository, host: scope.host, number: number, labels: labels, applied: applied)
         pullRequestPreviewCache.removeAll(keepingCapacity: true)
     }
@@ -2575,6 +2637,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func runProjectPullRequestStackAction(scope: FeaturePullRequestProjectScope, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
         let (route, repository) = try projectPullRequestRoute(scope)
+        try await requireScope(AuthScope.sourceControlWrite, client: route.client)
         guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { throw FeatureCapabilityUnavailable("Stack actions") }
         try await route.client.runPullRequestStackAction(projectID: route.wireID, repository: repository, host: scope.host, number: number,
             stack: stack, action: action, mergeMethod: mergeMethod)
@@ -2791,6 +2854,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let route = try threadRoute(for: threadID)
         let client = route.client
         let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.sourceControlWrite, client: client)
 
         if action == .pull {
             _ = try await client.pull(cwd: context.cwd)
@@ -2932,6 +2996,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             let task = Task { [weak self] in
                 var summaries = [TerminalSummary]()
                 do {
+                    try await self?.requireScope(AuthScope.terminalRead, client: client)
                     for try await event in await client.terminalMetadataEvents() {
                         guard !Task.isCancelled else { break }
                         guard let self else { break }
@@ -2990,6 +3055,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         defer { projectScriptActionsInFlight.remove(route.uiID) }
         let generation = environmentGeneration
         let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.terminalRead, client: route.client)
         let sessions = try await route.client.terminalMetadataSnapshot(threadID: route.wireID)
         guard isKnownClient(route.client, environmentID: route.environmentID, generation: generation) else { throw CancellationError() }
         let currentContext = try workspaceContext(route: route)
@@ -4246,6 +4312,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environmentConnectionDetails = environmentConnectionDetails.filter {
             savedIDs.contains($0.key)
         }
+        authSessions = authSessions.filter { savedIDs.contains($0.key) }
 
         for load in loads {
             environmentClients[load.environment.id] = load.client
@@ -4266,6 +4333,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
         }
         rebuildEntityIndexes(savedEnvironments)
+        refreshStaleAuthSessions()
     }
 
     private func rebuildEntityIndexes(_ environments: [Environment]) {
@@ -4836,6 +4904,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
         mapped.unsupportedReason = environment.unsupportedReason
         mapped.serverUpdateRequired = environment.serverUpdateRequired
+        mapped.mcpURL = EnvironmentRoutes.mcpURL(environment.routes)
+            .flatMap { mcpOAuthSupport[$0.absoluteString] == true ? $0 : nil }
+        mapped.permissionUpdate = permissionUpdate(environmentID: environment.id)
         return mapped
     }
 
@@ -5001,9 +5072,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environmentID: String
     ) -> [String: SubagentRowMetadata] {
         guard !projection.subagents.isEmpty else { return [:] }
-        let providers = serverConfigsByEnvironmentID[environmentID]?.providers ?? []
+        let config = serverConfigsByEnvironmentID[environmentID]
+        let providers = config?.providers ?? []
         let drivers = providers.map(\.driver)
         let shell = shellsByEnvironmentID[environmentID]
+        // The catalog the composer's model chip reads, so a subagent's effort
+        // is labelled the way its child thread's chip labels it.
+        let catalog = shell.map { mapProviders(environmentID: environmentID, shell: $0, config: config) } ?? []
         func project(_ id: String?) -> ThreadLifecycle.SubagentWorkspaceProject? {
             guard let id, let project = shell?.projects.first(where: { $0.id == id }) else { return nil }
             return .init(id: project.id, title: project.title, workspaceRoot: project.workspaceRoot)
@@ -5039,6 +5114,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             } ?? false
             result[subagent.id] = SubagentRowMetadata(
                 modelLabel: resolved.modelLabel,
+                traits: ThreadLifecycle.resolveSubagentModelTraits(
+                    origin: subagent.origin,
+                    model: subagent.model,
+                    providerInstanceID: subagent.providerInstanceId,
+                    childSelection: child.map { mapSelection($0.modelSelection) },
+                    provider: catalog.first { $0.id == subagent.providerInstanceId }
+                ),
                 account: showsAccount ? provider.map { $0.displayName ?? providerDisplayName($0.driver) } : nil,
                 accentColor: showsAccount ? ProviderAccountBadge.normalizedAccent(provider?.accentColor) : nil,
                 workspace: resolved.workspace
@@ -5082,14 +5164,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let subagents = projection.subagents.map { subagent -> ThreadRelationshipSubagentLink in
             let link = ThreadRelationshipSubagentLink(subagent)
             guard let childThreadID = link.childThreadID else { return link }
-            return ThreadRelationshipSubagentLink(
-                id: link.id,
-                childThreadID: scoped(childThreadID),
-                status: link.status,
-                title: link.title,
-                workflow: link.workflow,
-                usage: link.usage
-            )
+            return link.withChildThreadID(scoped(childThreadID))
         }
 
         let transfers = projection.contextTransfers.map { transfer in
@@ -6289,11 +6364,65 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
+    /// Stops a feature the connection may not use before its request is sent.
+    /// When the session cannot be read the server decides, as it always does.
     private func requireScope(_ scope: String, client: T3Client) async throws {
-        let session = try await client.authSession()
-        guard session.scopes?.contains(scope) == true else {
-            throw NativeFeatureClientError.missingScope(scope)
+        guard let session = try? await authSession(for: client), session.authenticated,
+              !session.grants(scope) else { return }
+        throw AuthPermissionRequired(scope) ?? NativeFeatureClientError.missingScope(scope)
+    }
+
+    /// The environment's auth session, read again after five minutes so a
+    /// server that starts reporting granular permissions is noticed.
+    private func authSession(for client: T3Client) async throws -> AuthSessionState {
+        let environmentID = client.environment.id
+        if let cached = authSessions[environmentID], cached.readAt.timeIntervalSinceNow > -300 {
+            return cached.session
         }
+        if let read = authSessionReads[environmentID] { return try await read.value }
+        let read = Task { try await client.authSession() }
+        authSessionReads[environmentID] = read
+        let session: AuthSessionState
+        do {
+            session = try await read.value
+        } catch {
+            if authSessionReads[environmentID] == read { authSessionReads[environmentID] = nil }
+            throw error
+        }
+        guard authSessionReads[environmentID] == read else { return session }
+        authSessionReads[environmentID] = nil
+        let noticeChanged = authSessions[environmentID]?.session.hasLegacyPermissions
+            != session.hasLegacyPermissions
+        authSessions[environmentID] = (session, .now)
+        if noticeChanged, var snapshot = latestSnapshot {
+            snapshot.environments = snapshot.environments.map { environment in
+                var environment = environment
+                environment.permissionUpdate = permissionUpdate(environmentID: environment.id)
+                return environment
+            }
+            publish(snapshot)
+        }
+        return session
+    }
+
+    /// Reads, in the background, the sessions of reachable environments whose
+    /// last read is missing or stale.
+    private func refreshStaleAuthSessions() {
+        for (environmentID, client) in environmentClients
+        where environmentConnectionStates[environmentID] == .connected
+            && authSessionReads[environmentID] == nil
+            && (authSessions[environmentID]?.readAt.timeIntervalSinceNow ?? -.infinity) <= -300 {
+            Task { [weak self] in _ = try? await self?.authSession(for: client) }
+        }
+    }
+
+    /// How this device gets the grant the server's granular permissions
+    /// expect: renew T3 Connect access when that is the route in use,
+    /// otherwise pair again.
+    private func permissionUpdate(environmentID: String) -> FeaturePermissionUpdate? {
+        guard authSessions[environmentID]?.session.hasLegacyPermissions == true else { return nil }
+        let kind = environmentClients[environmentID]?.routeSelector.current().kind
+        return kind == .managedDPoP ? .renewManagedAccess : .pairAgain
     }
 
     private static func title(from prompt: String, hasAttachments: Bool) -> String {
@@ -6911,7 +7040,10 @@ private enum NativeFeatureClientError: LocalizedError {
         case .invalidProjectPath: "Enter a workspace path on the connected environment."
         case .branchRequired: "Choose a base branch for the new worktree."
         case .deviceSessionNotFound: "That device session is no longer active."
-        case .missingScope: "This connection does not have permission to manage devices."
+        case let .missingScope(scope):
+            scope.hasPrefix("access:")
+                ? "This connection does not have permission to manage devices."
+                : "This connection does not have permission to change this server."
         case let .attachmentLimit(message): message
         case .crossEnvironmentMerge:
             "These threads are on different environments and cannot be merged."
@@ -7066,10 +7198,12 @@ extension NativeFeatureClient: FeatureScheduledTaskManaging {
 extension NativeFeatureClient: FeatureServerSettingsManaging {
     func providerSetup(environmentID: String, instanceID: String, action: NativeProviderSetupAction) async throws {
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.providersManage, client: client)
         try await client.providerSetup(instanceID: instanceID, action: action)
     }
     func providerAuthEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderAuthState, Error> {
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.providersManage, client: client)
         return await client.providerAuthEvents(instanceID: instanceID)
     }
     func providerInstallEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderInstallState, Error> {
@@ -7099,6 +7233,7 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
 
     func updateProvider(environmentID: String, driver: String, instanceID: String, targetVersion: String?) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
+        try await requireScope(AuthScope.providersManage, client: client)
         let providers = try await client.updateProvider(driver: driver, instanceID: instanceID, targetVersion: targetVersion)
         // Propagate the new catalog through the same environment-owned snapshot path.
         _ = try? await providerModelConfiguration(environmentID: environmentID)
@@ -7137,6 +7272,9 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             throw FeatureCapabilityUnavailable("Custom model pricing")
         }
         let client = try await environmentClient(id: environmentID)
+        for scope in AuthScope.required(forSettingsPatch: patch.json) {
+            try await requireScope(scope, client: client)
+        }
         let sourceConfig = try await client.serverConfig()
         if patch.usageLimitSources != nil, sourceConfig.environment?.capabilities.usageLimitSources != true {
             throw FeatureCapabilityUnavailable("Quota hubs")
@@ -7219,6 +7357,68 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             patch: SharedServerSettings.pick(settings, restartSupported: config.environment?.capabilities.threadRestartContinuation == true))
     }
 
+}
+
+// MARK: - Server details
+
+extension NativeFeatureClient: FeatureMcpAccessProbing {
+    func verifiedMcpURL(environmentID: String) async -> URL? {
+        guard let environment = (try? await runtime.environments())?.first(where: { $0.id == environmentID }),
+              let url = EnvironmentRoutes.mcpURL(environment.routes) else { return nil }
+        if let known = mcpOAuthSupport[url.absoluteString] { return known ? url : nil }
+        // No answer (offline, timed out) is not a "no": the next visit asks again.
+        guard let supported = try? await runtime.supportsMcpOAuth(at: url) else { return nil }
+        mcpOAuthSupport[url.absoluteString] = supported
+        // The Servers list reads the address from the snapshot, so its menu
+        // offers it from now on without asking the server itself.
+        if supported, let shell = latestShell {
+            await emitSnapshot(shell, markSourceConnected: false)
+        }
+        return supported ? url : nil
+    }
+}
+
+extension NativeFeatureClient: FeatureGitHubSettingsManaging {
+    func supportsGitHubSettings(environmentID: String) async -> Bool {
+        if let known = gitHubSettingsSupport[environmentID] { return known }
+        do {
+            var config = serverConfigsByEnvironmentID[environmentID]
+            if config?.settings?.github == nil {
+                config = try await providerModelConfiguration(environmentID: environmentID)
+            }
+            // Settings carry `github` only once something was saved, so a
+            // server that never saved any shows support through discovery:
+            // only one that knows per-host accounts reports gh's logins.
+            var supported = config?.settings?.github != nil
+            if !supported {
+                let discovery = try await environmentClient(id: environmentID).discoverSourceControl()
+                supported = discovery.sourceControlProviders.contains {
+                    $0.kind == .github && $0.auth.accounts != nil
+                }
+            }
+            gitHubSettingsSupport[environmentID] = supported
+            return supported
+        } catch {
+            return false
+        }
+    }
+
+    func gitHubSettings(environmentID: String) async throws -> FeatureGitHubSettingsState {
+        let config = try await providerModelConfiguration(environmentID: environmentID)
+        let discovery = try await environmentClient(id: environmentID).discoverSourceControl()
+        return FeatureGitHubSettingsState(
+            settings: config.settings?.github,
+            provider: discovery.sourceControlProviders.first { $0.kind == .github }
+        )
+    }
+
+    func updateGitHubSettings(environmentID: String, patch: GitHubSettingsPatch) async throws {
+        try await requireScope("orchestration:operate", client: environmentClient(id: environmentID))
+        try await updateServerSettings(
+            environmentID: environmentID,
+            patch: ServerSettingsPatchInput(github: patch)
+        )
+    }
 }
 
 // MARK: - Voice Input

@@ -14,9 +14,9 @@ sheets use the system glass material.
   On iOS 27 the **+** sits in its own circle beside the tabs. On iPad, use the compose button in
   the toolbar or `Cmd+N`.
 
-- **No project.** In a new task, the project menu ends with **No Project** for each connected
-  machine that keeps a folder for tasks outside any repository. Choosing it starts the task in
-  that folder.
+- **No project.** In a new task, the project menu lists **No Project** right after the current
+  project, or first when none is chosen, once for each connected machine that keeps a folder for
+  tasks outside any repository. Choosing it starts the task in that folder.
 - **Settings.** The **T3** button at the top left opens Settings.
   - A red dot means an environment is unreachable, and an amber dot means one is reconnecting.
   - While a dot shows, the button opens **Settings → Servers**.
@@ -92,6 +92,11 @@ sheets use the system glass material.
   setting goes back to its previous value and the reason appears under its section.
 - **Servers.** **Settings → Servers** switches, adds, removes and disconnects servers. Removing or
   disconnecting asks first.
+- **Permissions.** A server that gives Files, Git, settings and other features their own permissions
+  keeps a device paired before that on its old ones. Its row and details page then say new
+  permissions are available. **Pair Again** opens Add Server for a new pairing code from that
+  server; a T3 Connect server shows **Renew Access** instead, which needs no code. Until then those
+  features say to pair the device again.
 - **Notifications.** **Settings → Notifications** chooses which events alert you: a task that needs
   your input, finishes, or fails. Tapping a notification opens its thread, waiting for it to load if
   it was started elsewhere.

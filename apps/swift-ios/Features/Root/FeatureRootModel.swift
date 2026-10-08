@@ -289,6 +289,12 @@ public final class FeatureRootModel {
         await client.environmentRouteInUse(id: id)
     }
 
+    /// Renews a T3 Connect server's credential so it carries the current
+    /// grant. Throws so Settings can say why beside the notice that asked.
+    public func renewEnvironmentAccess(_ id: String) async throws {
+        try await client.renewEnvironmentAccess(id: id)
+    }
+
     /// Updates an outdated server this app cannot connect to and switches it
     /// back on. `serverUpdateStages[id]` holds the current stage while it runs.
     @discardableResult

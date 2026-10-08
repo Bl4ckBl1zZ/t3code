@@ -111,9 +111,40 @@ enum PullRequestActionLogic {
     /// way to close it. GitHub only, where the row's state is enough to know
     /// what the host offers; nothing on a merged pull request.
     static func quickActions(_ entry: PullRequestListEntry) -> [NativePullRequestAction] {
-        guard entry.provider == "github", entry.state != .merged else { return [] }
-        if entry.state == .closed { return [.reopen] }
-        return entry.isDraft ? [.ready, .close] : [.merge, .close]
+        quickActions(isGitHub: entry.provider == "github", state: entry.state, isDraft: entry.isDraft)
+    }
+
+    /// The same for a thread's linked pull request, read from the snapshot the
+    /// server keeps on the link: nothing until a snapshot says its state, and
+    /// no merge on a layer of a known stack, which merges through its stack.
+    static func quickActions(_ link: FeatureLinkedPullRequest) -> [NativePullRequestAction] {
+        guard let snapshot = link.snapshot, let state = PullRequestState(rawValue: snapshot.state) else { return [] }
+        let host = (link.host ?? URL(string: link.url)?.host ?? "").lowercased()
+        // `isGitHubHost` from packages/shared/src/sourceControl.ts: Enterprise
+        // hosts carry a "github" label.
+        let isGitHub = host == "github.com" || host.split(separator: ".").contains("github")
+        let actions = quickActions(isGitHub: isGitHub, state: state, isDraft: snapshot.isDraft)
+        return link.stack != nil || link.source == "stack" ? actions.filter { $0 != .merge } : actions
+    }
+
+    private static func quickActions(isGitHub: Bool, state: PullRequestState, isDraft: Bool) -> [NativePullRequestAction] {
+        guard isGitHub, state != .merged else { return [] }
+        if state == .closed { return [.reopen] }
+        return isDraft ? [.ready, .close] : [.merge, .close]
+    }
+
+    /// What a pull request is once the host accepts an action: its new state,
+    /// and its draft flag where the action sets one (nil keeps it). Nil for
+    /// actions that change neither.
+    static func outcome(of action: NativePullRequestAction, state: PullRequestState) -> (state: PullRequestState, isDraft: Bool?)? {
+        switch action {
+        case .close: (.closed, nil)
+        case .reopen: (.open, nil)
+        case .merge: (.merged, nil)
+        case .draft: (state, true)
+        case .ready: (state, false)
+        default: nil
+        }
     }
 
     static let stackedQuickMergeRefusal = "Open this pull request to merge its stack."
@@ -190,6 +221,57 @@ enum PullRequestActionLogic {
         case "rebase": "Rebase on Base Branch"
         default: method.capitalized
         }
+    }
+}
+
+/// What a quick action just did to a thread's linked pull request, shown on its
+/// row until the server's next read of the request lands on the thread.
+struct LinkedPullRequestOverlay: Equatable {
+    let state: PullRequestState
+    let isDraft: Bool
+    /// The thread's snapshot of the request when the action ran. Any other
+    /// snapshot is a newer read, and the server's word wins from then on.
+    let basis: FeaturePullRequestSnapshot
+}
+
+enum LinkedPullRequestOverlays {
+    /// Per thread and per link: a request linked again starts without one.
+    static func key(threadID: String, link: FeatureLinkedPullRequest) -> String {
+        "\(threadID)|\(link.identity)|\(link.linkedAt ?? "")"
+    }
+
+    /// The overlay an accepted action leaves: the state the row showed, moved
+    /// on by the action, over the thread's current snapshot.
+    static func overlay(after action: NativePullRequestAction, shown: FeaturePullRequestSnapshot?,
+                        basis: FeaturePullRequestSnapshot?) -> LinkedPullRequestOverlay? {
+        guard let shown, let basis, let state = PullRequestState(rawValue: shown.state),
+              let outcome = PullRequestActionLogic.outcome(of: action, state: state) else { return nil }
+        return LinkedPullRequestOverlay(state: outcome.state, isDraft: outcome.isDraft ?? shown.isDraft, basis: basis)
+    }
+
+    /// Only while the thread still reports the snapshot it was written over,
+    /// and that snapshot does not already say the same.
+    static func holds(_ overlay: LinkedPullRequestOverlay, over snapshot: FeaturePullRequestSnapshot?) -> Bool {
+        guard let snapshot, snapshot == overlay.basis else { return false }
+        return snapshot.state != overlay.state.rawValue || snapshot.isDraft != overlay.isDraft
+    }
+
+    /// The link as its row shows it, and the state its actions start from.
+    static func shown(_ link: FeatureLinkedPullRequest, overlay: LinkedPullRequestOverlay?) -> FeatureLinkedPullRequest {
+        guard let overlay, holds(overlay, over: link.snapshot) else { return link }
+        var shown = link
+        shown.snapshot?.state = overlay.state.rawValue
+        shown.snapshot?.isDraft = overlay.isDraft
+        return shown
+    }
+
+    /// Keeps the overlays that still hold for a link the thread has: one whose
+    /// link was unlinked, or whose request the server has read again, goes.
+    static func reconcile(_ overlays: [String: LinkedPullRequestOverlay], threadID: String,
+                          links: [FeatureLinkedPullRequest]) -> [String: LinkedPullRequestOverlay] {
+        guard !overlays.isEmpty else { return overlays }
+        let byKey = Dictionary(links.map { (key(threadID: threadID, link: $0), $0) }, uniquingKeysWith: { first, _ in first })
+        return overlays.filter { key, overlay in byKey[key].map { holds(overlay, over: $0.snapshot) } ?? false }
     }
 }
 

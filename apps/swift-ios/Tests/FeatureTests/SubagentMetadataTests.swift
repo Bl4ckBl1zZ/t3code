@@ -137,6 +137,140 @@ final class SubagentMetadataTests: XCTestCase {
         XCTAssertEqual(ProviderAccountBadge.normalizedAccent(" #A1b2C3 "), "#A1b2C3")
     }
 
+    // MARK: Traits
+
+    /// Ports the `resolveSubagentModelTraits` cases from
+    /// apps/web/src/components/chat/threadModelBadge.test.ts.
+    private let serviceTier = FeatureModelOptionDescriptor(
+        id: "serviceTier",
+        label: "Service Tier",
+        kind: .select,
+        choices: [
+            .init(id: "default", label: "Standard", isDefault: true),
+            .init(id: "priority", label: "Fast"),
+            .init(id: "ultrafast", label: "Ultrafast"),
+            .init(id: "flex", label: "Flex"),
+        ],
+        defaultValue: .string("priority")
+    )
+    private let fastMode = FeatureModelOptionDescriptor(
+        id: "fastMode", label: "Fast Mode", kind: .boolean, defaultValue: .boolean(true)
+    )
+    private let reasoning = FeatureModelOptionDescriptor(
+        id: "reasoningEffort",
+        label: "Reasoning",
+        kind: .select,
+        choices: [.init(id: "medium", label: "Medium", isDefault: true), .init(id: "high", label: "High")],
+        defaultValue: .string("medium")
+    )
+
+    private func provider(_ driver: String, _ descriptors: [FeatureModelOptionDescriptor]) -> FeatureProvider {
+        FeatureProvider(
+            id: "codex",
+            name: "Codex",
+            driver: driver,
+            models: [FeatureModel(id: "gpt-5.4", name: "My GPT", options: [reasoning] + descriptors)]
+        )
+    }
+
+    private func traits(
+        origin: String = "app_owned",
+        model: String? = "gpt-5.4",
+        selection: FeatureSelection? = FeatureSelection(providerID: "codex", modelID: "gpt-5.4"),
+        provider: FeatureProvider?
+    ) -> SubagentModelTraits? {
+        ThreadLifecycle.resolveSubagentModelTraits(
+            origin: origin,
+            model: model,
+            providerInstanceID: "codex",
+            childSelection: selection,
+            provider: provider
+        )
+    }
+
+    func testNamesTheEffortAndOnlyASavedSpeedOfAT3OwnedSubagent() {
+        let cases: [(String, FeatureModelOptionDescriptor, FeatureModelOptionValue?, SubagentModelTraits.Speed?)] = [
+            ("codex", serviceTier, .string("default"), nil),
+            ("codex", serviceTier, .string("priority"), .fast),
+            ("codex", serviceTier, .string("ultrafast"), .ultrafast),
+            ("codex", serviceTier, .string("flex"), nil),
+            ("codex", serviceTier, .string("unknown"), nil),
+            ("codex", serviceTier, .boolean(true), nil),
+            // The descriptor defaults to Fast, but a default is not a choice.
+            ("codex", serviceTier, nil, nil),
+            ("claudeAgent", fastMode, .boolean(true), .fast),
+            ("claudeAgent", fastMode, .boolean(false), nil),
+            ("cursor", fastMode, .string("true"), nil),
+            // Only Codex reports speed as a service tier.
+            ("cursor", serviceTier, .string("priority"), nil),
+        ]
+        for (driver, descriptor, value, expected) in cases {
+            let options = [FeatureModelOptionSelection(id: "reasoningEffort", value: .string("high"))]
+                + (value.map { [FeatureModelOptionSelection(id: descriptor.id, value: $0)] } ?? [])
+            XCTAssertEqual(
+                traits(
+                    selection: FeatureSelection(providerID: "codex", modelID: "gpt-5.4", options: options),
+                    provider: provider(driver, [descriptor])
+                ),
+                SubagentModelTraits(effort: "High", speed: expected),
+                "\(driver) \(descriptor.id)=\(String(describing: value))"
+            )
+        }
+    }
+
+    func testResolvesASubagentModelReportedByDisplayName() {
+        XCTAssertEqual(
+            traits(
+                model: "my gpt",
+                selection: FeatureSelection(
+                    providerID: "codex",
+                    modelID: "gpt-5.4",
+                    options: [.init(id: "fastMode", value: .boolean(true))]
+                ),
+                provider: provider("claudeAgent", [fastMode])
+            ),
+            // Unsaved effort falls back to the model's default, as the chip does.
+            SubagentModelTraits(effort: "Medium", speed: .fast)
+        )
+    }
+
+    func testClaimsNothingForASelectionTheSubagentDoesNotRunOn() {
+        let options: [FeatureModelOptionSelection] = [
+            .init(id: "reasoningEffort", value: .string("high")),
+            .init(id: "serviceTier", value: .string("priority")),
+        ]
+        let entry = provider("codex", [serviceTier])
+        let selection = FeatureSelection(providerID: "codex", modelID: "gpt-5.4", options: options)
+        XCTAssertNotNil(traits(selection: selection, provider: entry))
+        XCTAssertNil(traits(origin: "provider_native", selection: selection, provider: entry))
+        XCTAssertNil(traits(model: nil, selection: selection, provider: entry))
+        XCTAssertNil(traits(model: " ", selection: selection, provider: entry))
+        XCTAssertNil(traits(model: "gpt-5.5", selection: selection, provider: entry))
+        XCTAssertNil(traits(
+            selection: FeatureSelection(providerID: "other", modelID: "gpt-5.4", options: options),
+            provider: entry
+        ))
+        XCTAssertNil(traits(
+            selection: FeatureSelection(providerID: "codex", modelID: "gpt-5.5", options: options),
+            provider: entry
+        ))
+        XCTAssertNil(traits(selection: nil, provider: entry))
+    }
+
+    func testKeepsTheMatchButNoTraitsOnceTheProviderInstanceIsGone() {
+        XCTAssertEqual(
+            traits(
+                selection: FeatureSelection(
+                    providerID: "codex",
+                    modelID: "gpt-5.4",
+                    options: [.init(id: "reasoningEffort", value: .string("high"))]
+                ),
+                provider: nil
+            ),
+            SubagentModelTraits()
+        )
+    }
+
     func testDetailLeadsWithProgressWhileLiveAndResultOnceSettled() {
         XCTAssertEqual(
             ThreadLifecycle.subagentDetailPreview(status: .running, progress: "Reading", result: "Done"),

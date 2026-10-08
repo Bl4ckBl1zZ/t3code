@@ -1,9 +1,21 @@
 import SwiftUI
 import UIKit
 
+/// Asks a server whether agents outside T3 Code (Claude Code, Codex) can sign
+/// in to its MCP endpoint.
+@MainActor
+protocol FeatureMcpAccessProbing: AnyObject {
+    /// `/mcp` on the server's first qualifying route once the server confirms
+    /// it signs outside agents in with OAuth, else nil. Asked at most once per
+    /// address per session (details pages, and Servers for the server in
+    /// use); a confirmed address also reaches `FeatureEnvironment.mcpURL`,
+    /// which the Servers list's menu reads.
+    func verifiedMcpURL(environmentID: String) async -> URL?
+}
+
 /// One saved server: whether this device connects to it, the routes it is
-/// reached over, and the way to remove it. Pushed from the info button on a
-/// Servers row.
+/// reached over, what else it offers, and the way to remove it. Pushed from
+/// the info button on a Servers row.
 struct SettingsServerDetailView: View {
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @Bindable var model: FeatureRootModel
@@ -14,6 +26,9 @@ struct SettingsServerDetailView: View {
     @State private var routeInUse: String?
     @State private var routeToRemove: FeatureEnvironmentRoute?
     @State private var addingRoute = false
+    @State private var supportsGitHubSettings = false
+    @State private var probedMcpURL: URL?
+    @State private var pairingAgain = false
 
     private var environment: FeatureEnvironment? {
         (model.snapshot.environments + model.snapshot.switchedOffEnvironments)
@@ -25,6 +40,22 @@ struct SettingsServerDetailView: View {
         let ids = environment?.routes.map(\.id).joined(separator: ",") ?? ""
         let state = environment?.connectionState?.rawValue ?? ""
         return "\(ids)|\(model.snapshot.connection.state.rawValue)|\(state)"
+    }
+
+    /// Changes when what the server offers may have: its routes, or it being
+    /// switched on. Each answer is cached per session, so re-asking is cheap.
+    private var extrasKey: String {
+        let ids = environment?.routes.map(\.id).joined(separator: ",") ?? ""
+        return "\(ids)|\(environment?.isEnabled == true)|\(environment?.unsupportedReason == nil)"
+    }
+
+    private var canProbe: Bool {
+        environment?.isEnabled == true && environment?.unsupportedReason == nil
+    }
+
+    private var mcpURL: URL? {
+        guard canProbe else { return nil }
+        return environment?.mcpURL ?? probedMcpURL
     }
 
     var body: some View {
@@ -46,11 +77,28 @@ struct SettingsServerDetailView: View {
         .task(id: routeRefreshKey) {
             routeInUse = await model.environmentRouteInUse(environmentID)
         }
+        .task(id: extrasKey) {
+            guard canProbe, let probing = model.client as? any FeatureMcpAccessProbing else {
+                probedMcpURL = nil
+                return
+            }
+            probedMcpURL = await probing.verifiedMcpURL(environmentID: environmentID)
+        }
+        .task(id: extrasKey) {
+            guard canProbe, let manager = model.client as? any FeatureGitHubSettingsManaging else {
+                supportsGitHubSettings = false
+                return
+            }
+            supportsGitHubSettings = await manager.supportsGitHubSettings(environmentID: environmentID)
+        }
         .sheet(isPresented: $addingRoute) {
             SettingsAddRouteSheet(
                 serverName: environment?.name ?? "this server",
                 onAdd: { url in await model.addEnvironmentRoute(environmentID, pairingURL: url) }
             )
+        }
+        .sheet(isPresented: $pairingAgain) {
+            ConnectionOnboardingView(model: model, onCancel: { pairingAgain = false })
         }
     }
 
@@ -58,6 +106,19 @@ struct SettingsServerDetailView: View {
     private func content(_ environment: FeatureEnvironment) -> some View {
         if let reason = environment.unsupportedReason {
             compatibilitySection(environment, reason: reason)
+        }
+
+        if let update = environment.permissionUpdate {
+            Section {
+                SettingsPermissionUpdateNotice(
+                    model: model,
+                    environmentID: environment.id,
+                    update: update,
+                    onPairAgain: { pairingAgain = true }
+                )
+            } header: {
+                Text("Permissions")
+            }
         }
 
         Section {
@@ -76,6 +137,36 @@ struct SettingsServerDetailView: View {
         }
 
         routesSection(environment)
+
+        if supportsGitHubSettings, canProbe {
+            let route = SettingsRoute.sourceControl(environmentID: environment.id)
+            Section {
+                NavigationLink(value: route) {
+                    SettingsTileLabel(title: route.title, systemImage: route.systemImage, tint: route.tint)
+                }
+            }
+        }
+
+        if let mcpURL {
+            Section {
+                Button {
+                    UIPasteboard.general.string = mcpURL.absoluteString
+                    T3HUD.show("MCP URL Copied", systemImage: "doc.on.doc")
+                } label: {
+                    SettingsTileLabel(
+                        title: "Copy MCP URL",
+                        systemImage: "doc.on.doc",
+                        tint: .indigo,
+                        subtitle: mcpURL.absoluteString
+                    )
+                }
+                .accessibilityHint("Copies the address outside agents sign in to")
+            } header: {
+                Text("Outside Agents")
+            } footer: {
+                Text("Paste into an outside agent; it signs in with OAuth and asks you to approve.")
+            }
+        }
 
         if !environment.isActive {
             Section {

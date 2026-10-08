@@ -190,6 +190,7 @@ public struct SettingsView: View {
             SettingsServersView(
                 model: model,
                 onAddServer: { path.append(.addServer) },
+                onShowDetails: { path.append(.serverDetail(environmentID: $0)) },
                 onDisconnected: { dismiss() }
             )
         case .appearance:
@@ -215,6 +216,18 @@ public struct SettingsView: View {
             // Pushed without `onCancel`: Back leaves, and it pops itself once
             // the server connects.
             ConnectionOnboardingView(model: model, onConnected: {})
+        case let .serverDetail(environmentID):
+            SettingsServerDetailView(model: model, environmentID: environmentID)
+        case let .sourceControl(environmentID):
+            if let manager = model.client as? any FeatureGitHubSettingsManaging {
+                SettingsSourceControlView(environmentID: environmentID, manager: manager)
+            } else {
+                ContentUnavailableView(
+                    "Source Control Unavailable",
+                    systemImage: "arrow.triangle.branch",
+                    description: Text("This version of the app can't change GitHub settings.")
+                )
+            }
         case .t3Connect:
             if let capability = model.client as? any T3ConnectCapable {
                 T3ConnectView(
