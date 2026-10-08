@@ -2103,12 +2103,31 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity,
+        steer: FeatureSteerTarget?
+    ) async throws {
+        try await sendMessageResolved(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: attachments,
+            submissionIdentity: identity,
+            steer: steer
+        )
+    }
+
     private func sendMessageResolved(
         threadID: String,
         text: String,
         selection: FeatureSelection?,
         attachments: [FeatureUploadAttachment],
-        submissionIdentity: FeatureSubmissionIdentity?
+        submissionIdentity: FeatureSubmissionIdentity?,
+        steer: FeatureSteerTarget? = nil
     ) async throws {
         let route = try threadRoute(for: threadID)
         let client = route.client
@@ -2156,6 +2175,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 text: text,
                 model: model,
                 attachments: uploads,
+                // The shell is live, so a steer whose run just ended goes out
+                // as an ordinary send instead of being rejected.
+                dispatchMode: ComposerFollowUp.dispatchMode(steer: steer, liveActiveRunID: shellThread.activeRunId),
                 commandID: pending.identity.commandID,
                 messageID: pending.identity.messageID
             )
@@ -2247,6 +2269,41 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
         approvalRoutes[id] = nil
         removeCachedApproval(id: id, threadID: route.uiID)
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    func answerSecretRequest(
+        threadID: String,
+        sourceThreadID: String,
+        turnItemID: String,
+        answer: SecretRequestAnswer
+    ) async throws {
+        let route = try threadRoute(for: threadID)
+        do {
+            try await requireScope(AuthScope.orchestrationOperate, client: route.client)
+        } catch {
+            throw SecretRequestPermissionMissing()
+        }
+        try await route.client.answerSecretRequest(threadID: sourceThreadID, turnItemID: turnItemID, answer: answer)
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    func updateLimitRecovery(
+        threadID: String,
+        runID: String,
+        resetAt: String,
+        autoResume: Bool?,
+        snooze: Bool?
+    ) async throws {
+        let route = try threadRoute(for: threadID)
+        try await requireScope(AuthScope.orchestrationOperate, client: route.client)
+        try await route.client.dispatch(OrchestrationCommands.updateLimitRecovery(
+            threadID: route.wireID,
+            runID: runID,
+            resetAt: resetAt,
+            autoResume: autoResume,
+            snooze: snooze
+        ))
         try? await refreshThread(id: route.uiID, client: route.client)
     }
 
@@ -5396,7 +5453,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             )
         }
 
-        return FeatureThreadWorkflow(
+        var workflow = FeatureThreadWorkflow(
             backgroundWorkStopRunID: projection.backgroundWorkStopRunID,
             appThreadID: projection.thread.id,
             activeProviderThreadID: projection.thread.activeProviderThreadId,
@@ -5420,6 +5477,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 parseDate: parseValidDate
             )
         )
+        workflow.usageLimit = ThreadUsageLimits.resolve(projection)
+        return workflow
     }
 
     /// The open thread as the relationship graph reads it.
@@ -5620,7 +5679,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             // than leaving a hole in the transcript.
             return message(.system, "", tool: type.replacingOccurrences(of: "_", with: " "))
 
-        case .approvalRequest, .userInputRequest:
+        case .approvalRequest, .userInputRequest, .secretRequest:
             // Rendered as cards above the composer, not as transcript rows.
             return nil
         }

@@ -135,12 +135,15 @@ public struct OrchestrationV2ProviderFailure: Codable, Equatable, Sendable {
     public let message: String
     public let code: String?
     public let retryable: Bool?
+    /// When a usage limit resets, if the provider named a time. Absent on
+    /// other failures and on servers that predate it.
+    public var resetAt: OrchestrationV2Timestamp? = nil
 
     // `class` is a Swift keyword, so the wire key is remapped rather than
     // escaped at every use site.
     private enum CodingKeys: String, CodingKey {
         case failureClass = "class"
-        case message, code, retryable
+        case message, code, retryable, resetAt
     }
 }
 
@@ -570,6 +573,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case threadCreated(targetThreadID: String, targetRunID: String?, targetProviderInstanceID: String, targetModel: String)
         case subagent(subagentID: String, origin: String, driver: String, providerInstanceID: String, childThreadID: String?, prompt: String, progress: String?, result: String?)
         case dynamicTool(toolName: String?, input: JSONValue?, output: JSONValue?)
+        /// A secret an agent asked the user for. Only what was asked and how it
+        /// was answered: the value never passes through orchestration.
+        case secretRequest(label: String, reason: String, placeholder: String?, status: OrchestrationV2SecretRequestStatus)
         /// A type this build does not know. Retained so ordinals and counts stay
         /// correct and the row can render as a neutral placeholder.
         case unknown(type: String)
@@ -597,6 +603,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case subagentId, origin, providerInstanceId, childThreadId, progress, result
         case toolName, toolSurface, toolIcon, toolSource
         case senderThreadId
+        case label, reason, placeholder, secretStatus
     }
 
     public init(from decoder: any Decoder) throws {
@@ -760,6 +767,15 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
                 input: try container.decodeIfPresent(JSONValue.self, forKey: .input),
                 output: try container.decodeIfPresent(JSONValue.self, forKey: .output)
             )
+        case "secret_request":
+            payload = .secretRequest(
+                label: try container.decodeIfPresent(String.self, forKey: .label) ?? "Secret",
+                reason: try container.decodeIfPresent(String.self, forKey: .reason) ?? "",
+                placeholder: try container.decodeIfPresent(String.self, forKey: .placeholder),
+                status: try container.decodeIfPresent(
+                    OrchestrationV2SecretRequestStatus.self, forKey: .secretStatus
+                ) ?? .unknown
+            )
         default:
             payload = .unknown(type: type)
         }
@@ -877,6 +893,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             try container.encodeIfPresent(toolName, forKey: .toolName)
             try container.encodeIfPresent(input, forKey: .input)
             try container.encodeIfPresent(output, forKey: .output)
+        case let .secretRequest(label, reason, placeholder, status):
+            try container.encode(label, forKey: .label)
+            try container.encode(reason, forKey: .reason)
+            try container.encodeIfPresent(placeholder, forKey: .placeholder)
+            try container.encode(status, forKey: .secretStatus)
         case .unknown:
             break
         }
@@ -972,6 +993,9 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public let lastVisitedAt: OrchestrationV2Timestamp?
     public let titleRegeneration: OrchestrationV2TitleRegeneration?
     public let deletedAt: OrchestrationV2Timestamp?
+    /// The user's choice about continuing after a usage-limit stop. Absent
+    /// until one is made, and on servers that predate limit recovery.
+    public var limitRecovery: OrchestrationV2LimitRecovery? = nil
 }
 
 // MARK: - Projection
@@ -1022,6 +1046,9 @@ public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Iden
     /// server predates the descriptor, which reads as "no capability evidence"
     /// rather than as a denial-by-default at every call site.
     public let capabilities: OrchestrationV2ProviderCapabilities?
+    public var providerInstanceId: String? = nil
+    /// The session's own failure, which supersedes a turn's classification.
+    public var lastError: String? = nil
 }
 
 public struct OrchestrationV2ProviderThread: Codable, Equatable, Sendable, Identifiable {
@@ -1047,6 +1074,8 @@ public struct OrchestrationV2ContextUsage: Codable, Equatable, Sendable {
     public let usedTokens: Int
     public var maxTokens: Int? = nil
     public var autoCompactThreshold: Int? = nil
+    public var totalProcessedTokens: Int? = nil
+    public var compactsAutomatically: Bool? = nil
 }
 
 /// A provider's live usage report for one turn.
@@ -1193,6 +1222,9 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
     /// How a launch prepares this run's workspace; `prepared-run.retry`
     /// repeats it. Older servers never record it, so they never offer the retry.
     public var workspacePreparation: OrchestrationV2WorkspacePreparation? = nil
+    /// The run's own execution node; a failure on any other node belongs to a
+    /// subagent, not to the run.
+    public var rootNodeId: String? = nil
 }
 
 /// `OrchestrationV2ThreadLaunchWorkspaceStrategy`: where a launched run works.

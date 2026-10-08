@@ -41,6 +41,7 @@ public struct ThreadDetailView: View {
     /// in a run. See `pendingHandoffItem`.
     @State private var pendingProviderSwitch: PendingProviderSwitch?
     @State private var isSending = false
+    @AppStorage(ComposerFollowUpBehavior.storageKey) private var followUpBehavior: ComposerFollowUpBehavior = .queue
     /// Previous/next turn, from the keyboard shortcuts and the transcript's
     /// accessibility actions.
     @State private var turnNavigationRequest = 0
@@ -703,6 +704,7 @@ public struct ThreadDetailView: View {
                     // reader has scrolled away from, so it must not move the
                     // transcript's bottom inset.
                     VStack(spacing: 0) {
+                        usageLimitBanner(detail)
                         queueSurfaces
                         ComposerTasksView(detail: detail) { isShowingPlan = true }
                         sendFailureCallout
@@ -718,7 +720,8 @@ public struct ThreadDetailView: View {
                             // composer returns for exactly that: with a request
                             // pending it shows only the request panel.
                             providerSubagentBar(detail)
-                            if !detail.approvals.isEmpty || !detail.userInputs.isEmpty {
+                            if !detail.approvals.isEmpty || !detail.userInputs.isEmpty
+                                || !SecretRequestPresentation.pending(in: detail.timelineItems).isEmpty {
                                 composer(detail)
                             }
                         } else {
@@ -1003,6 +1006,24 @@ public struct ThreadDetailView: View {
         return ThreadDetailsBackgroundTasks.backgroundCommands(detail.timelineItems.map(\.item))
     }
 
+    /// Above the queue it holds back: when the usage limit resets, and the
+    /// choice to resume or snooze until then.
+    @ViewBuilder
+    private func usageLimitBanner(_ detail: FeatureThreadDetail) -> some View {
+        if let limit = detail.workflow.usageLimit, !currentThread.isArchived {
+            UsageLimitRecoveryBanner(limit: limit) { autoResume, snooze in
+                guard let resetAt = limit.resetAt else { return }
+                try await model.client.updateLimitRecovery(
+                    threadID: thread.id,
+                    runID: limit.runID,
+                    resetAt: resetAt,
+                    autoResume: autoResume,
+                    snooze: snooze
+                )
+            }
+        }
+    }
+
     /// Queued runs, above the composer that will add to them.
     ///
     /// One surface, not two. `ThreadQueueControlView` used to appear alongside
@@ -1124,9 +1145,25 @@ public struct ThreadDetailView: View {
             onStop: {
                 Task { await model.cancelTurn(threadID: thread.id) }
             },
+            contextMeter: contextMeter(detail),
             readingHistory: readingHistoryThreadID == thread.id,
             pendingApprovals: detail.approvals,
             pendingUserInputs: detail.userInputs,
+            pendingSecretRequests: SecretRequestPresentation.pending(in: detail.timelineItems),
+            onSecretRequestAnswer: { request, answer in
+                try await model.client.answerSecretRequest(
+                    threadID: thread.id,
+                    sourceThreadID: request.sourceThreadID,
+                    turnItemID: request.turnItemID,
+                    answer: answer
+                )
+            },
+            steering: ComposerFollowUp.steerTarget(
+                queueState: detail.workflow.queueState,
+                capabilities: detail.workflow.providerSession?.turns
+            ).map { target in
+                ComposerSteering(defaultsToSteer: followUpBehavior == .steer, onSteer: { send(steer: target) })
+            },
             isResolvingRequest: model.isPerformingAction,
             powerFeatures: composerPowerFeatures,
             historyMessages: { detail.messages },
@@ -1684,9 +1721,50 @@ public struct ThreadDetailView: View {
         ))
     }
 
+    /// The composer's context ring. Compact Now runs Claude's native `/compact`
+    /// as its own turn, as web does; other providers compact on their own.
+    private func contextMeter(_ detail: FeatureThreadDetail) -> ComposerContextMeter? {
+        guard let window = detail.workflow.contextWindow else { return nil }
+        let selection = currentSelection
+        let provider = threadProviders.first { $0.id == selection?.providerID }
+        let modelName = provider?.models.first { $0.id == selection?.modelID }?.name ?? selection?.modelID
+        guard provider?.driver == "claudeAgent" else {
+            return ComposerContextMeter(window: window, modelName: modelName, compaction: nil)
+        }
+        let state = detail.thread.state
+        let idle = (state == .idle || state == .completed || state == .failed)
+            && detail.approvals.isEmpty && detail.userInputs.isEmpty
+            && queueState.activeRun == nil && !isSending && !currentThread.isArchived
+        let reason: String? = if provider?.isAvailable != true {
+            "Enable a Claude provider before compacting."
+        } else if !idle || !ClaudeResumeCompaction.hasCompactableConversation(detail.timelineItems) {
+            "Compacting is available once the agent is idle and the conversation has started."
+        } else {
+            nil
+        }
+        return ComposerContextMeter(
+            window: window,
+            modelName: modelName,
+            compaction: .init(disabledReason: reason) { compactNow() }
+        )
+    }
+
+    private func compactNow() {
+        guard !isSending else { return }
+        isSending = true
+        Task {
+            let sent = await submitMessage(
+                FeatureMessageSubmission(threadID: thread.id, text: "/compact", selection: currentSelection)
+            )
+            if !sent { PlatformHapticEngine.shared.play(.error) }
+            isSending = false
+        }
+    }
+
     /// `keepFullHistory` is "Send with Full History": it skips the compaction
-    /// a stale Claude session would otherwise run first.
-    private func send(keepFullHistory: Bool = false) {
+    /// a stale Claude session would otherwise run first. `steer` sends into the
+    /// running turn instead of queueing behind it.
+    private func send(keepFullHistory: Bool = false, steer: FeatureSteerTarget? = nil) {
         let message = draft
         let pendingAttachments = attachments
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1696,7 +1774,7 @@ public struct ThreadDetailView: View {
         // A stale Claude session compacts before this message so the turn does
         // not re-read the old history. The message then waits behind the
         // /compact run: the server queues a send that meets an active run.
-        let compactFirst = !keepFullHistory
+        let compactFirst = !keepFullHistory && steer == nil
             && detail.flatMap(resumeCompactionTokens) != nil
             && !ClaudeResumeCompaction.isCompactCommand(message)
         if pendingAttachments.isEmpty,
@@ -1729,14 +1807,14 @@ public struct ThreadDetailView: View {
                 )
             }
             if sent {
-                sent = await submitMessage(
-                    FeatureMessageSubmission(
+                var submission = FeatureMessageSubmission(
                     threadID: thread.id,
                     text: message,
                     selection: currentSelection,
                     attachments: pendingAttachments
-                    )
                 )
+                submission.steer = steer
+                sent = await submitMessage(submission)
             }
             if sent {
                 let followUpDraft = composerDraft

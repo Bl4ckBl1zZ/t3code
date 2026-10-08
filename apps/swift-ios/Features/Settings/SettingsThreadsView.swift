@@ -7,6 +7,7 @@ struct SettingsThreadsView: View {
     @Binding var settings: FeatureSettings
     var saveError: String?
     @AppStorage(HomeWorkingSection.enabledKey) private var isWorkingSectionEnabled = false
+    @AppStorage(ComposerFollowUpBehavior.storageKey) private var followUpBehavior: ComposerFollowUpBehavior = .queue
 
     var body: some View {
         SettingsForm {
@@ -24,6 +25,20 @@ struct SettingsThreadsView: View {
                 Toggle("Activity Detail", isOn: $settings.alwaysExpandActivity)
             } footer: {
                 Text("Keeps every tool call and reasoning step expanded on settled turns.")
+            }
+
+            Section {
+                Picker("While Agent Works", selection: $followUpBehavior) {
+                    ForEach(ComposerFollowUpBehavior.allCases, id: \.self) { behavior in
+                        Text(behavior.title).tag(behavior)
+                    }
+                }
+                .pickerStyle(.menu)
+            } footer: {
+                Text(
+                    "What Send does while a turn runs: queue the message for the next turn, or steer "
+                        + "the running one. Touch and hold Send for the other. Applies to this device only."
+                )
             }
 
             Section {

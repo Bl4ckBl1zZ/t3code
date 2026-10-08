@@ -146,8 +146,35 @@ public protocol FeatureClient: AnyObject {
     /// Implement in New Thread: a Build-mode thread on the same branch and
     /// worktree whose first turn carries the plan. Answers with that thread.
     func implementProposedPlanInNewThread(_ implementation: FeatureProposedPlanImplementation) async throws -> FeatureThread
+    /// Sends into a running turn: `steer` names the run to steer. When that run
+    /// has already ended the message is sent normally instead.
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity,
+        steer: FeatureSteerTarget?
+    ) async throws
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
+    /// Answers a `secret_request` item. `sourceThreadID` is the item's own wire
+    /// thread id; `threadID` routes to its environment.
+    func answerSecretRequest(
+        threadID: String,
+        sourceThreadID: String,
+        turnItemID: String,
+        answer: SecretRequestAnswer
+    ) async throws
+    /// Arms or clears auto-resume, or snoozes until reset, for the run a usage
+    /// limit stopped.
+    func updateLimitRecovery(
+        threadID: String,
+        runID: String,
+        resetAt: String,
+        autoResume: Bool?,
+        snooze: Bool?
+    ) async throws
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws
 
@@ -463,6 +490,42 @@ public extension FeatureClient {
 
     func retryWorkspacePreparation(threadID _: String, runID _: String) async throws {
         throw FeatureCapabilityUnavailable("Retrying setup")
+    }
+
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity,
+        steer _: FeatureSteerTarget?
+    ) async throws {
+        try await sendMessage(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: attachments,
+            identity: identity
+        )
+    }
+
+    func answerSecretRequest(
+        threadID _: String,
+        sourceThreadID _: String,
+        turnItemID _: String,
+        answer _: SecretRequestAnswer
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Secret requests")
+    }
+
+    func updateLimitRecovery(
+        threadID _: String,
+        runID _: String,
+        resetAt _: String,
+        autoResume _: Bool?,
+        snooze _: Bool?
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Usage limit recovery")
     }
 
     func loadReviewFileContents(

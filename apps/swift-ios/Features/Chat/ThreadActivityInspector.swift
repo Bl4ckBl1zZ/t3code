@@ -525,6 +525,9 @@ public enum ThreadActivityInspector {
         case .checkpoint, .checkpointRollback, .fork, .threadCreated, .userMessage,
             .assistantMessage, .unknown:
             break
+        // Its one line says everything; the value never reaches the client.
+        case .secretRequest:
+            break
         }
 
         var checkpointFiles: [OrchestrationV2CheckpointFileSummary]?

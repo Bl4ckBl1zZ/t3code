@@ -1011,6 +1011,9 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
     public var providerSubagentStatus: ProviderSubagentStatus?
     /// How full the context window is, for the stale-Claude compaction offer.
     public var contextWindow: ThreadContextWindow?
+    /// Set while the thread is stopped on a usage limit; drives the recovery
+    /// banner above the composer.
+    public var usageLimit: ThreadUsageLimit? = nil
 
     public init(
         backgroundWorkStopRunID: String? = nil,

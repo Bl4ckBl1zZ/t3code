@@ -83,9 +83,11 @@ public struct ThreadWorkLogLiveRun: Equatable, Sendable {
 public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Icon: String, Equatable, Sendable {
         case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap, pullRequest, computer
+        case key
 
         var symbolName: String {
             switch self {
+            case .key: "key"
             case .agent: "sparkles"
             case .alert: "exclamationmark.triangle"
             case .check: "checkmark"
@@ -374,6 +376,7 @@ public enum ThreadWorkLogPresentation {
         case .error: .alert
         case .checkpoint, .proposedPlan, .todoList: .check
         case .checkpointRollback, .compaction, .handoff, .fork, .threadCreated: .zap
+        case .secretRequest: .key
         case .unknown: .wrench
         }
     }
@@ -437,6 +440,8 @@ public enum ThreadWorkLogPresentation {
             return "User message"
         case .assistantMessage:
             return "Assistant message"
+        case let .secretRequest(label, _, _, _):
+            return label
         case let .unknown(type):
             return capitalizePhrase(type.replacingOccurrences(of: "_", with: " "))
         }
@@ -501,6 +506,8 @@ public enum ThreadWorkLogPresentation {
             return text.isEmpty ? nil : text
         case let .assistantMessage(_, text, _):
             return text.isEmpty ? nil : text
+        case let .secretRequest(_, _, _, status):
+            return SecretRequestPresentation.display(status: status, visibility: .local).label
         case .unknown:
             return nil
         }
@@ -1263,6 +1270,13 @@ struct ThreadWorkLog: View {
                 isExpanded: isRowExpanded(row.id),
                 onToggle: { toggleRow(row.id) },
                 onOpenDiff: { onOpenDiff(checkpointID, $0) }
+            )
+        } else if UsageLimitTimelineCallout.applies(to: row.item) {
+            UsageLimitTimelineCallout(row: row, onRetry: onRetryTurn)
+        } else if case let .secretRequest(label, _, _, status) = row.item.payload {
+            SecretRequestTimelineRow(
+                label: label,
+                display: SecretRequestPresentation.display(status: status, visibility: row.projectedItem.visibility)
             )
         } else if row.item.type == "error" {
             if let runID = row.runID, retryableSetupRunIDs.contains(runID), let onRetrySetup {

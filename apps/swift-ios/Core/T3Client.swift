@@ -1001,6 +1001,23 @@ public actor T3Client {
         )
     }
 
+    /// `secrets.answerRequest`. The secret lives only in this call's payload.
+    public func answerSecretRequest(
+        threadID: String,
+        turnItemID: String,
+        answer: SecretRequestAnswer
+    ) async throws {
+        guard let answer = answer.jsonValue else { return }
+        try await rpc.request(
+            "secrets.answerRequest",
+            payload: .object([
+                "threadId": .string(threadID),
+                "turnItemId": .string(turnItemID),
+                "answer": answer,
+            ])
+        )
+    }
+
     @discardableResult
     public func respondToUserInput(
         threadID: String,

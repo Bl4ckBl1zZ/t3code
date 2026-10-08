@@ -80,6 +80,9 @@ public struct FeatureMessageSubmission: Sendable, Equatable {
     public var text: String
     public var selection: FeatureSelection?
     public var attachments: [FeatureDraftAttachment]
+    /// Steers this run instead of queueing behind it. Never held in the
+    /// outbox: a delayed delivery is an ordinary send.
+    public var steer: FeatureSteerTarget? = nil
 
     public init(
         threadID: String,

@@ -9,6 +9,13 @@ import Foundation
 public struct ThreadContextWindow: Equatable, Sendable {
     public let usedTokens: Int
     public let updatedAt: Date?
+    /// The window's size, when the provider reports one; the meter shows a
+    /// fill only then.
+    public var maxTokens: Int? = nil
+    public var totalProcessedTokens: Int? = nil
+    /// True when the provider compacts on its own; nil when it never said.
+    public var compactsAutomatically: Bool? = nil
+    public var autoCompactThreshold: Int? = nil
 
     static func latest(
         providerTurns: [OrchestrationV2ProviderTurn],
@@ -17,14 +24,31 @@ public struct ThreadContextWindow: Equatable, Sendable {
         parseDate: (String) -> Date?
     ) -> ThreadContextWindow? {
         if let live = providerTurns.last(where: { $0.tokenUsage != nil })?.tokenUsage {
-            return ThreadContextWindow(usedTokens: max(0, live.usedTokens), updatedAt: parseDate(live.updatedAt))
+            return ThreadContextWindow(
+                usedTokens: max(0, live.usedTokens),
+                updatedAt: parseDate(live.updatedAt),
+                maxTokens: live.maxTokens,
+                compactsAutomatically: true
+            )
         }
         if let usage = providerThread?.contextUsage, let updatedAt = providerThread?.updatedAt {
-            return ThreadContextWindow(usedTokens: usage.usedTokens, updatedAt: parseDate(updatedAt))
+            return ThreadContextWindow(
+                usedTokens: usage.usedTokens,
+                updatedAt: parseDate(updatedAt),
+                maxTokens: usage.maxTokens,
+                totalProcessedTokens: usage.totalProcessedTokens,
+                compactsAutomatically: usage.compactsAutomatically,
+                autoCompactThreshold: usage.autoCompactThreshold
+            )
         }
         for item in items.reversed() {
-            guard case let .compaction(_, _, _, after) = item.payload, let after, after >= 0 else { continue }
-            return ThreadContextWindow(usedTokens: after, updatedAt: parseDate(item.base.updatedAt))
+            guard case let .compaction(_, _, before, after) = item.payload, let after, after >= 0 else { continue }
+            return ThreadContextWindow(
+                usedTokens: after,
+                updatedAt: parseDate(item.base.updatedAt),
+                totalProcessedTokens: before,
+                compactsAutomatically: true
+            )
         }
         return nil
     }
