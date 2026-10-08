@@ -22,6 +22,7 @@ import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { loadProductionPlannerStatistics } from "../persistence/productionPlannerStatistics.testkit.ts";
 import { EventSinkV2, layer as eventSinkLayer } from "./EventSink.ts";
 import { EventStoreV2, layer as eventStoreLayer } from "./EventStore.ts";
 import {
@@ -386,7 +387,7 @@ it.effect("finds older versions through the partial indexes", () =>
       .pipe(Effect.withTracer(tracer));
     assert.equal(statements.size, 2);
 
-    const plans = yield* Effect.forEach([...statements], (text) =>
+    const explainAll = Effect.forEach([...statements], (text) =>
       sql
         .unsafe<{ readonly detail: string }>(
           `EXPLAIN QUERY PLAN ${text}`,
@@ -394,15 +395,22 @@ it.effect("finds older versions through the partial indexes", () =>
         )
         .pipe(Effect.map((rows) => rows.map((row) => row.detail).join("\n"))),
     );
-    for (const plan of plans) {
+    const withoutStatistics = yield* explainAll;
+    // The plans are pinned, so production statistics must not move them.
+    yield* loadProductionPlannerStatistics;
+    const withStatistics = yield* explainAll;
+    for (const plan of withStatistics) {
+      // At production size the range is bounded on both ends. (On this tiny
+      // table the planner may skip the upper bound; it costs nothing here.)
+      assert.include(plan, "USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)");
+    }
+    for (const plan of [...withoutStatistics, ...withStatistics]) {
       // Seeks by type, entity id, and sequence, not just by type.
       assert.include(
         plan,
         "SEARCH version USING INDEX idx_orch_events_versions (event_type=? AND <expr>=? AND sequence<?)",
         plan,
       );
-    }
-    for (const plan of plans) {
       // The range is read by rowid and older versions by index; nothing scans
       // the table or walks a whole index.
       assert.include(plan, "SEARCH orchestration_events USING INTEGER PRIMARY KEY");

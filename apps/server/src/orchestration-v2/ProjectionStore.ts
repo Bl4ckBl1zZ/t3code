@@ -2860,21 +2860,35 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           `,
           skip("providerThreads")
             ? none
-            : sql<PayloadRow>`
+            : // One index-driven leg per relation. As a single OR, SQLite
+              // either probed the owner index once per node of the thread or,
+              // with planner statistics, scanned the whole table: 5-11ms per
+              // read for a 5k-node thread. Few provider threads have an owner
+              // node at all, so that leg starts from them instead: ~0.1ms.
+              sql<PayloadRow>`
             SELECT payload_json
             FROM orchestration_v2_projection_provider_threads
-            WHERE thread_id = ${threadId}
-               OR owner_node_id IN (
-                 SELECT node_id
-                 FROM orchestration_v2_projection_nodes
-                 WHERE thread_id = ${threadId}
-               )
-               OR provider_thread_id IN (
-                 SELECT provider_thread_id
-                 FROM orchestration_v2_projection_subagents
-                 WHERE thread_id = ${threadId}
-                   AND provider_thread_id IS NOT NULL
-               )
+            WHERE provider_thread_id IN (
+              SELECT provider_thread_id
+              FROM orchestration_v2_projection_provider_threads
+              WHERE thread_id = ${threadId}
+              UNION
+              SELECT owned.provider_thread_id
+              FROM orchestration_v2_projection_provider_threads AS owned
+                INDEXED BY orchestration_v2_projection_provider_threads_owner_idx
+              WHERE owned.owner_node_id IS NOT NULL
+                AND EXISTS (
+                  SELECT 1
+                  FROM orchestration_v2_projection_nodes AS node
+                  WHERE node.node_id = owned.owner_node_id
+                    AND node.thread_id = ${threadId}
+                )
+              UNION
+              SELECT provider_thread_id
+              FROM orchestration_v2_projection_subagents
+              WHERE thread_id = ${threadId}
+                AND provider_thread_id IS NOT NULL
+            )
             ORDER BY COALESCE(first_run_ordinal, 0), provider_thread_id ASC
           `,
           skip("providerTurns")

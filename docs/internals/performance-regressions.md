@@ -157,4 +157,8 @@ Planner statistics: `sqlite_stat1` now exists (`PRAGMA optimize` at open and aft
 `analysis_limit = 400` the sample is the first entries of each index, so low-cardinality leading
 columns are underestimated, for example `aggregate_kind` at 201 rows per value against a real
 390k. Do not count on statistics to pick a plan for a hot query: pin it, and check its plan on a
-copy of a large real store.
+copy of a large real store. Plan tests run on tiny databases, so they should also load
+`loadProductionPlannerStatistics` (from `persistence/productionPlannerStatistics.testkit.ts`) and
+assert the plan holds with it. The provider-thread read in thread snapshots was the one case that
+flipped: as a single `OR` it scanned the whole table under statistics and is now a `UNION` of
+index-driven legs.

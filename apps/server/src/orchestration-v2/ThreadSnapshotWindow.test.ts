@@ -40,6 +40,10 @@ import {
   SqlitePersistenceMemory,
   makeSqlitePersistenceLive,
 } from "../persistence/Layers/Sqlite.ts";
+import {
+  clearPlannerStatistics,
+  loadProductionPlannerStatistics,
+} from "../persistence/productionPlannerStatistics.testkit.ts";
 import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
@@ -775,6 +779,53 @@ it.layer(TestLayer)("windowed thread snapshots", (it) => {
       for (const detail of [...keyPlan, ...itemPlan, ...messagePlan]) {
         assert.notMatch(detail, /^SCAN orchestration_v2|TEMP B-TREE/);
       }
+    }),
+  );
+
+  it.effect("read every snapshot table through an index under production statistics", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const sourceId = ThreadId.make("thread:window:stats-source");
+      const forkId = ThreadId.make("thread:window:stats-fork");
+      yield* createThread(sourceId);
+      for (let ordinal = 1; ordinal <= 2; ordinal++) {
+        yield* createRun(sourceId, ordinal);
+        yield* addTurn({ threadId: sourceId, runOrdinal: ordinal, start: ordinal * 10 });
+      }
+      yield* createThread(forkId, {
+        forkedFrom: { threadId: sourceId, runId: runIdFor(sourceId, 2) },
+      });
+      yield* createRun(forkId, 1);
+      yield* addTurn({ threadId: forkId, runOrdinal: 1, start: 10 });
+
+      const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile());
+          return statement;
+        });
+      yield* Effect.all([
+        store.getThreadSnapshot(forkId, { maxVisibleItems: 2 }),
+        store.getThreadSnapshot(forkId),
+        store.getThreadRecords(forkId, []),
+      ]).pipe(Effect.provideService(Statement.CurrentTransformer, record));
+
+      // Production statistics flipped the provider-thread read to a full table
+      // scan; a plan that only holds without them is not a pinned plan.
+      yield* loadProductionPlannerStatistics;
+      const scans = yield* Effect.forEach(queries, ([text, params]) =>
+        sql.unsafe<{ readonly detail: string }>(`EXPLAIN QUERY PLAN ${text}`, params).pipe(
+          Effect.map((plan) =>
+            plan
+              .map((row) => row.detail)
+              .filter((detail) => detail.startsWith("SCAN orchestration_v2"))
+              .map((detail) => `${detail} in ${text.replace(/\s+/g, " ").slice(0, 120)}`),
+          ),
+        ),
+      ).pipe(Effect.ensuring(Effect.orDie(clearPlannerStatistics)));
+      assert.isAbove(queries.length, 10);
+      assert.deepStrictEqual(scans.flat(), []);
     }),
   );
 });
