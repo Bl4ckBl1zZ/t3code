@@ -36,13 +36,18 @@ case "$cmd" in
     grep -o '\[conn\] [a-z-]*' "$file" | awk '{print $2}' | sort | uniq -c | sort -rn
     echo
     echo "== start-polling / reload attribution =="
-    grep -o 'reason=[a-z-]*' "$file" | sort | uniq -c | sort -rn
+    { grep -o 'reason=[a-z-]*' "$file" || true; } | sort | uniq -c | sort -rn
     echo
     echo "== client-replaced fields =="
-    grep -o 'changed=[a-zA-Z,]*' "$file" | sort | uniq -c | sort -rn
+    { grep -o 'changed=[a-zA-Z,]*' "$file" || true; } | sort | uniq -c | sort -rn
     echo
     echo "== Failure reasons (deduped) =="
-    grep -o 'error=.*' "$file" | sort | uniq -c | sort -rn | head -20
+    { grep -o 'error=.*' "$file" || true; } | sort | uniq -c | sort -rn | head -20
+    echo
+    echo "== Thread opens: milestone, count, average and worst ms since the tap =="
+    { grep -o 'thread-open [a-z-]* thread=[^ ]* ms=[0-9]*' "$file" || true; } \
+      | awk '{ split($4, v, "="); n[$2]++; s[$2] += v[2]; if (v[2] > w[$2]) w[$2] = v[2] }
+             END { for (k in n) printf "%-12s %5d %8.0f %8d\n", k, n[k], s[k] / n[k], w[k] }'
     ;;
   *)
     usage

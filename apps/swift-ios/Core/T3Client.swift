@@ -3033,12 +3033,27 @@ public struct OrchestrationSourcePlanRef: Equatable, Sendable {
     }
 }
 
-/// `orchestration.launchThread`'s reply. The full result also carries the new
-/// thread's projection; this decodes only the identity so a projection the
-/// Swift models cannot yet parse never turns an accepted launch into a failure.
+/// `orchestration.launchThread`'s reply. The projection decodes leniently: one
+/// the Swift models cannot parse is dropped rather than turning an accepted
+/// launch into a failure. It paints the new thread's first open.
 public struct ThreadLaunchResult: Decodable, Equatable, Sendable {
     public let threadId: String
     public let resumed: Bool
+    public let projection: OrchestrationV2ThreadProjection?
+
+    private enum CodingKeys: String, CodingKey {
+        case threadId, resumed, projection
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        threadId = try container.decode(String.self, forKey: .threadId)
+        resumed = try container.decode(Bool.self, forKey: .resumed)
+        projection = try? container.decodeIfPresent(
+            OrchestrationV2ThreadProjection.self,
+            forKey: .projection
+        )
+    }
 }
 
 /// `orchestration.generateHandoffScript`'s reply.

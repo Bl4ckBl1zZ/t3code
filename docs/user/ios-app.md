@@ -31,8 +31,8 @@ sheets use the system glass material.
 - **Connection problems** appear as a banner at the top of the list, with **Reconnect**. The tabs
   stay available, and threads from reachable environments keep working. Pull down on the list to
   refresh.
-- **Opening the app.** Home appears right away, with placeholder rows until your environments
-  respond.
+- **Opening the app.** Home appears right away with the threads from your last visit, marked as
+  connecting until your environments respond. The first time, it shows placeholder rows instead.
 
 ## Threads
 
@@ -54,6 +54,8 @@ sheets use the system glass material.
 - **Failed setup.** When preparing a new task's workspace fails, for example creating its
   worktree, the error offers **Retry setup**. It prepares the workspace again and then starts the
   task, without sending your message twice.
+- **Opening a thread.** A thread you opened before shows its last messages immediately and catches
+  up in place. Going back to the thread you just left shows it current without reloading.
 - **Unavailable threads.** An offline, archived or unavailable thread says so, with **Reconnect**,
   **Unarchive** or **Try Again**.
 - **Agents.** An agent's row shows its model, the provider account when you have more than one,

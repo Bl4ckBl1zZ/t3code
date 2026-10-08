@@ -243,3 +243,34 @@ Session listings retain unrevoked connected sessions after token expiry so clien
 see and revoke them. Expired tokens cannot authorize new HTTP requests or socket upgrades.
 Swift's independent EnvironmentAPI follows the same request-time refresh model, including
 unauthenticated successful responses from the session endpoint.
+
+## Swift client sync cache
+
+The SwiftUI client does not use this runtime, but follows the same cache rules.
+`SyncSnapshotCache` (`apps/swift-ios/Core`) keeps each environment's shell and,
+per thread, the last windowed projection paired with the stream sequence it is
+current through, in Application Support (excluded from backup). Entries from
+another app build are discarded; removing an environment drops its entries; a
+saved shell drops threads it no longer lists as active.
+
+- **Cold start** paints cached shells as `connecting`, loads the active
+  environment, publishes, then loads the others. Without a cached shell it
+  loads every environment before the first snapshot, as before.
+- **Opening a thread** paints the cached projection and subscribes with
+  `afterSequence`; the server replays the gap or sends a fresh snapshot, which
+  replaces the cached state even at a lower sequence. A miss loads the HTTP
+  snapshot first. The visible-item window is requested unless the server's
+  config says it is unsupported; older servers ignore the field.
+- **Starting a thread** seeds the cache in memory from the `launchThread`
+  reply, so its first open subscribes without an HTTP read. The launch skips
+  its follow-up shell read while the shell stream is live.
+- **Leaving a thread** keeps its stream for three minutes, one thread at most;
+  another open, a memory warning, or backgrounding ends it. The projection is
+  saved whenever the thread stops being followed and on backgrounding, never
+  per event.
+- **The outbox** sends while the published state reads reconnecting if the
+  socket is open, but discards only on a synchronized snapshot.
+
+`[conn] thread-open` log lines (and a `thread-open` signpost interval) report
+milliseconds to `cache-hit`/`cache-miss`/`seeded`/`kept-alive`, `first-paint`
+and `live`.
