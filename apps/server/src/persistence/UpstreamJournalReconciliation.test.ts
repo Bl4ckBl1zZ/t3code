@@ -198,11 +198,15 @@ freshDatabase()("renumbered fork journal", (it) => {
         SELECT migration_id, name FROM effect_sql_migrations
         WHERE migration_id >= 36 ORDER BY migration_id
       `;
-      assert.strictEqual(journal.length, 32);
+      assert.strictEqual(journal.length, 33);
       assert.deepStrictEqual(journal[0], { migration_id: 36, name: "OrchestrationV2" });
       assert.deepStrictEqual(journal[31], {
         migration_id: 67,
         name: "ProjectionMessagesThreadRunIndex",
+      });
+      assert.deepStrictEqual(journal[32], {
+        migration_id: 68,
+        name: "OrchestrationEventCompaction",
       });
     }),
   );

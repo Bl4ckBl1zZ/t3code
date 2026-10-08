@@ -15,6 +15,7 @@
 - [Remote access](./user/remote-access.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Keeping app and server in sync](./user/updating.md)
+- [Disk space](./user/storage.md)
 - [Source control integrations](./user/source-control.md)
 - [Background commands](./user/background-commands.md)
 - [MCP apps](./user/mcp-apps.md)
@@ -52,5 +53,6 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
+- [Database maintenance](./operations/database-maintenance.md)
 - [Relay observability](./operations/relay-observability.md)
 - [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)
