@@ -1954,6 +1954,115 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    func implementProposedPlan(_ implementation: FeatureProposedPlanImplementation) async throws {
+        let route = try threadRoute(for: implementation.threadID)
+        let client = route.client
+        let generation = environmentGeneration
+        // Web persists the mode before starting the turn, so a failed switch
+        // never leaves an implementation running under Plan.
+        _ = try await client.setInteractionMode(threadID: route.wireID, mode: coreInteractionMode(.standard))
+        try await sendPlanImplementation(
+            implementation,
+            threadID: route.wireID,
+            sourceThreadID: route.wireID,
+            client: client,
+            environmentID: route.environmentID,
+            generation: generation
+        )
+        try? await refreshThread(id: route.uiID, client: client)
+        try? await refresh(client: client)
+    }
+
+    func implementProposedPlanInNewThread(
+        _ implementation: FeatureProposedPlanImplementation
+    ) async throws -> FeatureThread {
+        let source = try threadRoute(for: implementation.threadID)
+        let client = source.client
+        let environment = client.environment
+        let generation = environmentGeneration
+        guard let sourceThread = shellsByEnvironmentID[source.environmentID]?.threads
+            .first(where: { $0.id == source.wireID }) else {
+            throw NativeFeatureClientError.threadNotFound
+        }
+        let model = modelSelection(
+            implementation.selection,
+            projectID: sourceThread.projectId,
+            environmentID: environment.id,
+            shell: shellsByEnvironmentID[environment.id]
+        )
+        let threadID = UUID().uuidString
+        _ = try await client.createThread(
+            threadID: threadID,
+            projectID: sourceThread.projectId,
+            title: implementation.newThreadTitle,
+            model: model,
+            runtimeMode: .fullAccess,
+            interactionMode: .default,
+            branch: sourceThread.branch,
+            worktreePath: sourceThread.worktreePath
+        )
+        do {
+            try await sendPlanImplementation(
+                implementation,
+                threadID: threadID,
+                sourceThreadID: source.wireID,
+                client: client,
+                environmentID: environment.id,
+                generation: generation
+            )
+        } catch {
+            // Web's cleanup: an implementation thread that never started is noise.
+            _ = try? await client.delete(threadID: threadID)
+            throw error
+        }
+        registerProvisionalThread(wireID: threadID, environmentID: environment.id)
+        try? await refresh(client: client)
+        let uiID = FeatureScopedID.thread(environmentID: environment.id, wireID: threadID)
+        return latestSnapshot?.threads.first { $0.id == uiID } ?? FeatureThread(
+            id: uiID,
+            wireID: threadID,
+            projectID: FeatureScopedID.project(environmentID: environment.id, wireID: sourceThread.projectId),
+            environmentID: environment.id,
+            environmentName: environment.label,
+            title: implementation.newThreadTitle,
+            providerID: model.instanceId,
+            providerName: providerDisplayName(model.instanceId),
+            modelID: model.model
+        )
+    }
+
+    /// The implementation turn, carrying the plan and naming it as its source.
+    /// A failure the server committed anyway is a success, as for any send.
+    private func sendPlanImplementation(
+        _ implementation: FeatureProposedPlanImplementation,
+        threadID: String,
+        sourceThreadID: String,
+        client: T3Client,
+        environmentID: String,
+        generation: Int
+    ) async throws {
+        let messageID = UUID().uuidString
+        do {
+            _ = try await client.sendTurn(
+                threadID: threadID,
+                text: implementation.prompt,
+                model: implementation.selection.map(coreModelSelection),
+                sourcePlan: OrchestrationSourcePlanRef(threadID: sourceThreadID, planID: implementation.planID),
+                messageID: messageID
+            )
+        } catch {
+            guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
+                throw CancellationError()
+            }
+            guard await messageWasCommitted(client: client, threadID: threadID, messageID: messageID) else {
+                throw error
+            }
+        }
+        guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
+            throw CancellationError()
+        }
+    }
+
     private func sendMessageResolved(
         threadID: String,
         text: String,
@@ -2242,6 +2351,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             isTruncated: result.truncated,
             totalBytes: result.byteLength
         )
+    }
+
+    func writeThreadFile(threadID: String, path: String, contents: String) async throws -> String {
+        let route = try threadRoute(for: threadID)
+        let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.filesystemWrite, client: route.client)
+        return try await route.client.writeProjectFile(cwd: context.cwd, relativePath: path, contents: contents).relativePath
     }
 
     func loadReview(threadID: String) async throws -> FeatureReview {
@@ -5096,6 +5212,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             mappedThread.preview = previewText(latestVisible.text)
             mappedThread.previewIsFromUser = latestVisible.role == .user
         }
+        // The projection's thread carries no plan state; the shell's verdict
+        // keeps the plan banner from flickering as the two streams alternate.
+        mappedThread.hasActionableProposedPlan = shellsByEnvironmentID[environment.id]?.threads
+            .first(where: { $0.id == projection.thread.id })?.hasActionableProposedPlan
         // Same formula as `lastActivityDate`: real activity wins; the mapper's
         // own value (run completion, else the `updatedAt` floor) is the
         // fallback.

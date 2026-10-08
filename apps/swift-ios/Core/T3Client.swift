@@ -521,6 +521,7 @@ public actor T3Client {
         model: ModelSelection? = nil,
         attachments: [UploadChatAttachment] = [],
         dispatchMode: MessageDispatchMode = .startImmediately,
+        sourcePlan: OrchestrationSourcePlanRef? = nil,
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString
     ) async throws -> DispatchResult {
@@ -536,6 +537,7 @@ public actor T3Client {
                 model: model,
                 attachments: persisted,
                 dispatchMode: dispatchMode,
+                sourcePlan: sourcePlan,
                 commandID: commandID,
                 messageID: messageID
             )
@@ -2981,6 +2983,19 @@ public enum MessageDispatchMode: Equatable, Sendable {
     }
 }
 
+/// `message.dispatch`'s `sourcePlanRef`: the proposed plan a turn implements.
+/// The run records it, which is how clients find the plan behind a run that
+/// was started from one — in this thread or in the thread it was planned in.
+public struct OrchestrationSourcePlanRef: Equatable, Sendable {
+    public let threadID: String
+    public let planID: String
+
+    public init(threadID: String, planID: String) {
+        self.threadID = threadID
+        self.planID = planID
+    }
+}
+
 /// `orchestration.launchThread`'s reply. The full result also carries the new
 /// thread's projection; this decodes only the identity so a projection the
 /// Swift models cannot yet parse never turns an accepted launch into a failure.
@@ -3114,6 +3129,7 @@ public enum OrchestrationCommands {
         model: ModelSelection? = nil,
         attachments: [JSONValue] = [],
         dispatchMode: MessageDispatchMode = .startImmediately,
+        sourcePlan: OrchestrationSourcePlanRef? = nil,
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString
     ) throws -> JSONValue {
@@ -3130,6 +3146,12 @@ public enum OrchestrationCommands {
         ]
         if let model {
             command["modelSelection"] = try .encode(model)
+        }
+        if let sourcePlan {
+            command["sourcePlanRef"] = .object([
+                "threadId": .string(sourcePlan.threadID),
+                "planId": .string(sourcePlan.planID),
+            ])
         }
         return .object(command)
     }

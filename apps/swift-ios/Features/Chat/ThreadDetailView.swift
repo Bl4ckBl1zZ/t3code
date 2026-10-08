@@ -67,6 +67,7 @@ public struct ThreadDetailView: View {
     @State private var toolSurface: FeatureThreadToolSurface?
     /// A pending checkpoint restore, previewed in a sheet before it commits.
     @State private var restoreRequest: CheckpointRestoreRequest?
+    @State private var isShowingPlan = false
     /// The queued run a reorder, edit or cancel is in flight for. One at a time:
     /// two overlapping reorders would race for the same positions.
     @State private var queueBusyRunID: String?
@@ -234,6 +235,9 @@ public struct ThreadDetailView: View {
                     _ = await model.detail(for: thread.id, force: true)
                 }
             )
+        }
+        .sheet(isPresented: $isShowingPlan) {
+            ThreadPlanSheet(model: model, threadID: thread.id, saver: planWorkspaceSaver)
         }
         .sheet(item: $toolSurface) { surface in
             if let tool = surface.tool {
@@ -446,6 +450,11 @@ public struct ThreadDetailView: View {
                     }
                 }
             }
+            if let detail, ThreadProposedPlans.hasPlan(in: detail) {
+                Section {
+                    Button("Plan", systemImage: "list.bullet.clipboard") { isShowingPlan = true }
+                }
+            }
             if !isChatConversation {
                 Section {
                     Button("Files", systemImage: "folder") { toolSurface = .files(path: nil, line: nil) }
@@ -653,7 +662,7 @@ public struct ThreadDetailView: View {
                     // transcript's bottom inset.
                     VStack(spacing: 0) {
                         queueSurfaces
-                        ComposerTasksView(detail: detail)
+                        ComposerTasksView(detail: detail) { isShowingPlan = true }
                         sendFailureCallout
                         if currentThread.isArchived {
                             ThreadArchivedBar {
@@ -671,6 +680,7 @@ public struct ThreadDetailView: View {
                                 composer(detail)
                             }
                         } else {
+                            planFollowUpBanner(detail)
                             composer(detail)
                         }
                     }
@@ -787,6 +797,7 @@ public struct ThreadDetailView: View {
                     composerFocused = true
                 },
                 mcpApps: mcpApps,
+                planSaver: planWorkspaceSaver,
                 threadLinks: threadLinks,
                 statusLine: ThreadStatusLine.resolve(currentThread, now: .now),
                 onStatusLineAction: { [model, threadID = thread.id] kind in
@@ -817,6 +828,30 @@ public struct ThreadDetailView: View {
     /// well; earlier systems keep the opaque bar and stop at it.
     private static var transcriptBleedEdges: Edge.Set {
         if #available(iOS 26, *) { [.top, .bottom] } else { .bottom }
+    }
+
+    @ViewBuilder
+    private func planFollowUpBanner(_ detail: FeatureThreadDetail) -> some View {
+        if let plan = ThreadProposedPlans.followUp(in: detail, thread: currentThread) {
+            ComposerPlanFollowUpBanner(
+                model: model,
+                threadID: thread.id,
+                plan: plan,
+                selection: currentSelection,
+                hasDraft: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
+                isBlocked: isSending || isEnvironmentOffline,
+                onOpenPlan: { isShowingPlan = true }
+            )
+        }
+    }
+
+    /// Save to Workspace for plans, offered only where the thread has one.
+    private var planWorkspaceSaver: ProposedPlanWorkspaceSaver? {
+        threadWorkspaceRoot.map { root in
+            ProposedPlanWorkspaceSaver(workspaceRoot: root) { [client = model.client, threadID = thread.id] path, contents in
+                try await client.writeThreadFile(threadID: threadID, path: path, contents: contents)
+            }
+        }
     }
 
     /// Why this thread's last message did not send. Retry resends what failed:
@@ -1886,6 +1921,8 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     case workLog(WorkLog)
     /// An MCP App a completed tool call captured, hosted where the call happened.
     case mcpApp(McpApp)
+    /// A proposed plan, as a card that never folds or groups away.
+    case proposedPlan(ThreadProposedPlanEntry)
     case dayDivider(id: String, date: Date)
 
     struct Lifecycle: Equatable {
@@ -1935,6 +1972,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .lifecycle(lifecycle): lifecycle.id
         case let .workLog(workLog): workLog.id
         case let .mcpApp(app): app.id
+        case let .proposedPlan(entry): entry.id
         case let .dayDivider(id, _): id
         }
     }
@@ -1948,6 +1986,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .lifecycle(lifecycle): lifecycle.date
         case let .workLog(workLog): workLog.date
         case let .mcpApp(app): app.date
+        case let .proposedPlan(entry): entry.plan.date
         case let .dayDivider(_, date): date
         }
     }
@@ -2058,6 +2097,7 @@ enum ThreadTimelineFeed {
             openLifecycle.removeAll(keepingCapacity: true)
         }
 
+        let proposedPlans = ThreadProposedPlans.Feed(timelineItems)
         // One Stop is one boundary: a request whose run already reports the
         // result says nothing the result does not.
         var interruptedRunIDs = Set<String>()
@@ -2081,6 +2121,12 @@ enum ThreadTimelineFeed {
                 closeWork()
                 closeLifecycle()
                 entries.append(.message(message, caption: ThreadMessageCaption.origin(of: item)))
+                continue
+            }
+            if let plan = proposedPlans.entry(for: projected) {
+                closeWork()
+                closeLifecycle()
+                entries.append(.proposedPlan(plan))
                 continue
             }
             if let app = McpAppReference.from(item) {
@@ -2287,6 +2333,10 @@ private struct ThreadTimelineEntryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
+        case let .proposedPlan(entry):
+            ProposedPlanCard(entry: entry)
+                .padding(.bottom, ChatTimelineStyle.entrySpacing)
+
         case let .dayDivider(_, date):
             TimelineDayDivider(date: date)
         }
@@ -2352,6 +2402,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
     var mcpApps: ThreadMcpApps? = nil
+    var planSaver: ProposedPlanWorkspaceSaver? = nil
     /// Resolves `t3-thread://` links in messages against this thread's environment.
     var threadLinks: ThreadLinkResolver? = nil
     /// Settled or snoozed, said once after the last message, with its way out.
@@ -2434,6 +2485,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate,
                 mcpApps: mcpApps,
+                planSaver: planSaver,
                 threadLinks: threadLinks,
                 onStatusLineAction: onStatusLineAction
             ),
@@ -2508,6 +2560,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
             var mcpApps: ThreadMcpApps?
+            var planSaver: ProposedPlanWorkspaceSaver?
             var threadLinks: ThreadLinkResolver?
             var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
         }
@@ -2711,6 +2764,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.threadWorkLogHistory, toolHistory)
                     .environment(\.threadTurnItemDetails, toolDetails)
                     .environment(\.threadMcpApps, context.mcpApps)
+                    .environment(\.proposedPlanWorkspaceSaver, context.planSaver)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.threadLinkResolver, context.threadLinks)

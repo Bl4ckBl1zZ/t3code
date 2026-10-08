@@ -134,6 +134,12 @@ public protocol FeatureClient: AnyObject {
         attachments: [FeatureUploadAttachment],
         identity: FeatureSubmissionIdentity
     ) async throws
+    /// Implement on a proposed plan: Build mode, then a turn carrying the plan
+    /// that names it as its source.
+    func implementProposedPlan(_ implementation: FeatureProposedPlanImplementation) async throws
+    /// Implement in New Thread: a Build-mode thread on the same branch and
+    /// worktree whose first turn carries the plan. Answers with that thread.
+    func implementProposedPlanInNewThread(_ implementation: FeatureProposedPlanImplementation) async throws -> FeatureThread
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws
@@ -198,6 +204,9 @@ public protocol FeatureClient: AnyObject {
         limit: Int
     ) async throws -> [FeatureFileEntry]
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent
+    /// Writes a file relative to the thread's workspace, answering with the
+    /// path the server wrote.
+    func writeThreadFile(threadID: String, path: String, contents: String) async throws -> String
     /// Hands the thread to the provider as feedback, answering with the id it
     /// filed the report under. Only providers that advertise a feedback
     /// command support it, and only while a session is live.
@@ -544,6 +553,15 @@ public extension FeatureClient {
         )
     }
 
+    func implementProposedPlan(_ implementation: FeatureProposedPlanImplementation) async throws {
+        try await setInteractionMode(id: implementation.threadID, mode: .standard)
+        try await sendMessage(threadID: implementation.threadID, text: implementation.prompt, selection: implementation.selection)
+    }
+
+    func implementProposedPlanInNewThread(_ implementation: FeatureProposedPlanImplementation) async throws -> FeatureThread {
+        throw FeatureCapabilityUnavailable("Implementing in a new thread")
+    }
+
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
         throw FeatureCapabilityUnavailable("Files")
     }
@@ -566,6 +584,10 @@ public extension FeatureClient {
 
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent {
         throw FeatureCapabilityUnavailable("File preview")
+    }
+
+    func writeThreadFile(threadID _: String, path _: String, contents _: String) async throws -> String {
+        throw FeatureCapabilityUnavailable("Saving to the workspace")
     }
 
     func uploadThreadFeedback(threadID _: String, reason _: String?) async throws -> String {

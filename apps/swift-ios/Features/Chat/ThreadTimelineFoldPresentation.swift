@@ -32,6 +32,9 @@ enum ThreadTimelineFoldPresentation {
             case let .mcpApp(app):
                 // Grouped with its run so the fold counts around it, never hidden.
                 return ThreadTurnFoldItem(id: entry.id, runID: app.runID, kind: .persistent, date: entry.date)
+            case let .proposedPlan(plan):
+                // Like an app: counted with its run, never folded away.
+                return ThreadTurnFoldItem(id: entry.id, runID: plan.plan.runID, kind: .persistent, date: entry.date)
             case .lifecycle, .dayDivider, .turnFold:
                 return ThreadTurnFoldItem(id: entry.id, runID: nil, kind: .persistent, date: entry.date)
             }
