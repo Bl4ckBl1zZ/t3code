@@ -56,6 +56,9 @@ sheets use the system glass material.
   and its project, branch or folder when they differ from the thread's, with up to three lines of
   its latest progress or result. Tap it to open the agent's thread; Back returns to the thread that
   started it.
+- **MCP apps.** A tool call that returns an [MCP app](mcp-apps.md) shows the app in the thread.
+  It asks before running a tool that changes something, sending a message, opening a link or
+  saving a file. An app can open full screen; close it to return to the thread.
 - **Hardware keyboard shortcuts:**
 
   | Shortcut                            | Action                                  |

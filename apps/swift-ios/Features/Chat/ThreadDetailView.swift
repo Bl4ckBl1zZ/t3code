@@ -18,6 +18,8 @@ public struct ThreadDetailView: View {
     /// Opens a new task in this thread's project, for Cmd+Option+Return.
     let onStartNewThread: ((_ projectID: String) -> Void)?
     @State private var nativeToolIcons = NativeAppToolIconStore()
+    /// Shared by this screen's MCP App rows; nil when the client cannot host apps.
+    @State private var mcpApps: ThreadMcpApps?
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
 
@@ -87,6 +89,9 @@ public struct ThreadDetailView: View {
         self.onStartNewThread = onStartNewThread
         self.onOpenRelatedThread = onOpenRelatedThread
         self.draftStore = draftStore
+        _mcpApps = State(initialValue: (model.client as? any FeatureMcpAppHosting).map {
+            ThreadMcpApps(client: $0, threadID: thread.id)
+        })
     }
 
     private var nativeToolIconContext: NativeAppToolIconContext? {
@@ -97,6 +102,11 @@ public struct ThreadDetailView: View {
 
     public var body: some View {
         threadContent
+        .modifier(ThreadMcpAppsModifier(
+            apps: mcpApps,
+            threadID: thread.id,
+            awaitingUser: detail.map { !$0.approvals.isEmpty || !$0.userInputs.isEmpty } ?? false
+        ))
         .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
         .alert("Pull request checkout", isPresented: Binding(get: { pullRequestCheckoutWarning != nil }, set: { if !$0 { pullRequestCheckoutWarning = nil } })) {
             Button("OK") { pullRequestCheckoutWarning = nil }
@@ -775,6 +785,7 @@ public struct ThreadDetailView: View {
                     }
                     composerFocused = true
                 },
+                mcpApps: mcpApps,
                 navigationRequest: turnNavigationRequest,
                 scrollToLatestRequest: scrollToLatestRequest,
                 onReadingHistoryChanged: { reading in
@@ -1817,6 +1828,8 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     case turnFold(ThreadTurnFold)
     case lifecycle(Lifecycle)
     case workLog(WorkLog)
+    /// An MCP App a completed tool call captured, hosted where the call happened.
+    case mcpApp(McpApp)
     case dayDivider(id: String, date: Date)
 
     struct Lifecycle: Equatable {
@@ -1833,6 +1846,17 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         /// Projected-item id to what that subagent runs on and where.
         var subagentMetadata: [String: SubagentRowMetadata] = [:]
         let date: Date?
+    }
+
+    struct McpApp: Equatable {
+        let presentation: McpAppPresentation
+        /// Folds group by run; an app is never folded away.
+        let runID: String?
+        /// The plain tool row, shown when the app cannot be hosted.
+        let fallbackRow: ThreadWorkLogRow
+        let date: Date?
+
+        var id: String { presentation.id }
     }
 
     struct WorkLog: Equatable {
@@ -1854,6 +1878,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .turnFold(fold): fold.id
         case let .lifecycle(lifecycle): lifecycle.id
         case let .workLog(workLog): workLog.id
+        case let .mcpApp(app): app.id
         case let .dayDivider(id, _): id
         }
     }
@@ -1866,6 +1891,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .turnFold(fold): fold.date
         case let .lifecycle(lifecycle): lifecycle.date
         case let .workLog(workLog): workLog.date
+        case let .mcpApp(app): app.date
         case let .dayDivider(_, date): date
         }
     }
@@ -1999,6 +2025,23 @@ enum ThreadTimelineFeed {
                 closeWork()
                 closeLifecycle()
                 entries.append(.message(message, caption: ThreadMessageCaption.origin(of: item)))
+                continue
+            }
+            if let app = McpAppReference.from(item) {
+                closeWork()
+                closeLifecycle()
+                entries.append(.mcpApp(ThreadTimelineEntry.McpApp(
+                    presentation: McpAppPresentation(
+                        id: "mcp-app:\(projected.id)",
+                        app: app,
+                        sourceThreadID: projected.sourceThreadId,
+                        itemID: projected.sourceItemId,
+                        revision: ThreadTurnItemDetail.revision(item)
+                    ),
+                    runID: item.base.runId,
+                    fallbackRow: ThreadWorkLogRow.make(projected, liveRun: liveRun),
+                    date: itemDate(item)
+                )))
                 continue
             }
             if ThreadLifecycle.isLifecycleTimelineItem(item) {
@@ -2169,6 +2212,25 @@ private struct ThreadTimelineEntryView: View {
             // The log already ends on 12pt of its own.
             .padding(.bottom, ChatTimelineStyle.entrySpacing - 12)
 
+        case let .mcpApp(app):
+            ThreadMcpAppRow(presentation: app.presentation) {
+                ThreadWorkLog(
+                    rows: [app.fallbackRow],
+                    currentThreadID: currentThreadID,
+                    currentWireThreadID: currentWireThreadID,
+                    workspaceRoot: workspaceRoot,
+                    onOpenThread: onOpenThread,
+                    onOpenFile: onOpenFile,
+                    onOpenURL: onOpenURL,
+                    onOpenDiff: onOpenDiff,
+                    onRollback: onRollback,
+                    alwaysExpandActivity: alwaysExpandActivity
+                )
+                .padding(.bottom, -12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, ChatTimelineStyle.entrySpacing)
+
         case let .dayDivider(_, date):
             TimelineDayDivider(date: date)
         }
@@ -2230,6 +2292,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var onOpenCitation: (AssistantCitation) -> Void = { _ in }
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+    var mcpApps: ThreadMcpApps? = nil
     var navigationRequest: Int = 0
     var scrollToLatestRequest: Int = 0
     var onReadingHistoryChanged: (Bool) -> Void = { _ in }
@@ -2304,7 +2367,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onRetrySetup: onRetrySetup,
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
-                onUseTemplate: onUseTemplate
+                onUseTemplate: onUseTemplate,
+                mcpApps: mcpApps
             ),
             onLoadEarlier: onLoadEarlier,
             in: collectionView
@@ -2376,6 +2440,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenCitation: (AssistantCitation) -> Void = { _ in }
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+            var mcpApps: ThreadMcpApps?
         }
 
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
@@ -2561,6 +2626,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.threadWorkLogHistory, toolHistory)
                     .environment(\.threadTurnItemDetails, toolDetails)
+                    .environment(\.threadMcpApps, context.mcpApps)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.openURL, OpenURLAction { url in
@@ -3708,5 +3774,31 @@ private struct FeatureMessageAttachmentsView: View {
             countStyle: .file
         )
         return "\(attachment.name), \(size)"
+    }
+}
+
+/// Keeps the screen's MCP App state on the thread shown, and presents the app
+/// that asked for full screen over it.
+private struct ThreadMcpAppsModifier: ViewModifier {
+    let apps: ThreadMcpApps?
+    let threadID: String
+    let awaitingUser: Bool
+
+    func body(content: Content) -> some View {
+        if let apps {
+            content
+                .onChange(of: threadID, initial: true) {
+                    guard apps.threadID != threadID else { return }
+                    apps.threadID = threadID
+                    apps.fullscreen = nil
+                    apps.unsupported = false
+                }
+                .onChange(of: awaitingUser, initial: true) { apps.awaitingUser = awaitingUser }
+                .fullScreenCover(item: Binding(get: { apps.fullscreen }, set: { apps.fullscreen = $0 })) { presentation in
+                    McpAppFullscreenView(presentation: presentation, apps: apps)
+                }
+        } else {
+            content
+        }
     }
 }

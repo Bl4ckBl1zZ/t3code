@@ -1819,6 +1819,16 @@ public actor T3Client {
         ).item
     }
 
+    /// A unary request for protocol mirrors kept in their own files
+    /// (`McpApps.swift`), which cannot reach the private socket client.
+    func rpcRequest<Result: Decodable & Sendable>(
+        _ tag: String,
+        payload: JSONValue,
+        as type: Result.Type
+    ) async throws -> Result {
+        try await rpc.request(tag, payload: payload, as: type)
+    }
+
     // MARK: Terminal
 
     public func openTerminal(
@@ -2678,6 +2688,10 @@ public enum RPCMethod: String, Sendable {
     case getFullThreadDiff = "orchestration.getFullThreadDiff"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
     case getTurnItem = "orchestration.getTurnItem"
+    case mcpAppsCallTool = "mcpApps.callTool"
+    case mcpAppsToolInfo = "mcpApps.toolInfo"
+    case mcpAppsReadResource = "mcpApps.readResource"
+    case mcpAppsUpdateModelContext = "mcpApps.updateModelContext"
     case searchThreads = "orchestration.searchThreads"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"

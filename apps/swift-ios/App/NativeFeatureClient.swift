@@ -17,7 +17,7 @@ extension FeatureInputAnswer {
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
-    T3ConnectCapable
+    FeatureMcpAppHosting, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -782,6 +782,43 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    // MARK: MCP apps
+
+    func mcpAppDocumentURL(threadID: String, app: McpAppReference) async throws -> URL {
+        let route = try threadRoute(for: threadID)
+        return try await route.client.resolvedAssetURL(
+            resource: .documentAttachment(id: app.attachmentID, name: app.documentFileName, mimeType: "text/html")
+        )
+    }
+
+    func mcpAppToolInfo(threadID: String, sourceThreadID: String, itemID: String, name: String) async throws -> McpAppToolInfo {
+        try await threadRoute(for: threadID).client.mcpAppToolInfo(threadID: sourceThreadID, itemID: itemID, name: name)
+    }
+
+    func mcpAppCallTool(
+        threadID: String, sourceThreadID: String, itemID: String,
+        name: String, arguments: [String: JSONValue]
+    ) async throws -> JSONValue {
+        try await threadRoute(for: threadID).client.mcpAppCallTool(
+            threadID: sourceThreadID, itemID: itemID, name: name, arguments: arguments
+        )
+    }
+
+    func mcpAppReadResource(threadID: String, sourceThreadID: String, itemID: String, uri: String) async throws -> JSONValue {
+        try await threadRoute(for: threadID).client.mcpAppReadResource(threadID: sourceThreadID, itemID: itemID, uri: uri)
+    }
+
+    func mcpAppUpdateModelContext(
+        threadID: String, sourceThreadID: String, itemID: String,
+        content: [JSONValue]?, structuredContent: [String: JSONValue]?
+    ) async throws {
+        let route = try threadRoute(for: threadID)
+        try await route.client.mcpAppUpdateModelContext(
+            threadID: sourceThreadID, itemID: itemID, conversationThreadID: route.wireID,
+            content: content, structuredContent: structuredContent
+        )
+    }
+
     func nativeAppIconURL(environmentID: String, app: ToolActivityNativeAppReference) async throws -> URL? {
         let client = try await environmentClient(id: environmentID)
         return try await client.resolvedAssetURL(resource: .nativeAppIcon(app))
@@ -851,7 +888,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     )
                 }
                 throw error
-            case .remote, .protocolViolation:
+            case .remote, .protocolViolation, .unsupportedMethod:
                 throw error
             }
         }

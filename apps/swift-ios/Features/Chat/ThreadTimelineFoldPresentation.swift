@@ -29,6 +29,9 @@ enum ThreadTimelineFoldPresentation {
                 let runIDs = Set(work.rows.compactMap(\.runID))
                 return ThreadTurnFoldItem(id: entry.id, runID: runIDs.count == 1 ? runIDs.first : nil,
                     kind: .work, isLive: work.rows.contains(where: \.isRunning), date: entry.date)
+            case let .mcpApp(app):
+                // Grouped with its run so the fold counts around it, never hidden.
+                return ThreadTurnFoldItem(id: entry.id, runID: app.runID, kind: .persistent, date: entry.date)
             case .lifecycle, .dayDivider, .turnFold:
                 return ThreadTurnFoldItem(id: entry.id, runID: nil, kind: .persistent, date: entry.date)
             }
