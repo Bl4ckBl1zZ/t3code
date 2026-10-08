@@ -111,8 +111,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var detailStreamGeneration = 0
     private var environmentGeneration = 0
     private var lastShellEventAt: Date?
-    private var activeRawThread: OrchestrationV2ThreadProjection?
-    private var activeThreadSequence: Int?
+    /// The open thread's projection and stream cursor. See
+    /// ``NativeThreadDetailSync``.
+    private var activeDetail: NativeThreadDetailSync?
+    private var activeRawThread: OrchestrationV2ThreadProjection? { activeDetail?.projection }
+    private var activeThreadSequence: Int? { activeDetail?.sequence }
+    private var detailStreamRestartTask: Task<Void, Never>?
+    private var detailStreamBackoff = NativeDetailStreamBackoff()
+    /// Spaces repeated snapshot requests while folding is held on an event
+    /// this client cannot decode.
+    private var detailResyncBackoff = NativeDetailStreamBackoff(base: .milliseconds(500))
     private var activeThreadPage: FeatureThreadPage?
     private var threadHistoryEpoch = 0
 
@@ -172,6 +180,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         archivedRefreshTask?.cancel()
         detailRefreshTask?.cancel()
         detailStreamTask?.cancel()
+        detailStreamRestartTask?.cancel()
         detailPublishTask?.cancel()
         passiveDetailPollingTask?.cancel()
         attachmentHydrationTasks.values.forEach { $0.task.cancel() }
@@ -545,8 +554,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         latestSnapshot = nil
         activeThreadID = nil
         activeThreadEnvironmentID = nil
-        activeRawThread = nil
-        activeThreadSequence = nil
+        activeDetail = nil
         activeThreadPage = nil
         threadHistoryEpoch &+= 1
         latestDetails.removeAll()
@@ -1796,8 +1804,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environment: environment,
             page: activeThreadPage
         )
-        activeRawThread = snapshot.projection
-        activeThreadSequence = snapshot.snapshotSequence
+        activeDetail = NativeThreadDetailSync(snapshot: snapshot)
         latestDetails[route.uiID] = detail
         scheduleAttachmentHydration(
             in: detail,
@@ -1857,13 +1864,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 return latestDetails[route.uiID]
             }
 
-            activeThreadPage = featurePage(
-                truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
-            )
-            activeRawThread = snapshot.projection
-            activeThreadSequence = snapshot.snapshotSequence
+            adoptDetailSnapshot(snapshot, route: route)
             let detail = mapDetail(
-                snapshot.projection,
+                activeRawThread ?? snapshot.projection,
                 environment: environment,
                 page: activeThreadPage
             )
@@ -1886,8 +1889,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         passiveDetailPollingTask = nil
         activeThreadID = nil
         activeThreadEnvironmentID = nil
-        activeRawThread = nil
-        activeThreadSequence = nil
+        activeDetail = nil
         activeThreadPage = nil
         threadHistoryEpoch &+= 1
     }
@@ -3870,7 +3872,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         latestShell = merged
         await emitSnapshot(merged)
         if refreshActiveThread, let threadID = activeThreadID {
-            scheduleDetailRefresh(threadID: threadID, client: client)
+            scheduleDetailRefresh(threadID: threadID, client: client, reason: "shell-snapshot")
         }
     }
 
@@ -3902,7 +3904,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               let threadID = activeThreadID else {
             return
         }
-        scheduleDetailRefresh(threadID: threadID, client: client)
+        scheduleDetailRefresh(threadID: threadID, client: client, reason: "fallback-shell")
     }
 
     private func consume(delta: OrchestrationV2ShellStreamItem, client: T3Client) async {
@@ -3996,8 +3998,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 resetDetailStream()
                 activeThreadID = nil
                 activeThreadEnvironmentID = nil
-                activeRawThread = nil
-                activeThreadSequence = nil
+                activeDetail = nil
                 activeThreadPage = nil
                 threadHistoryEpoch &+= 1
             }
@@ -4015,7 +4016,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             scheduleArchivedRefresh(client: client, environment: environment)
         }
         if let changedThreadID, activeThreadID == changedThreadID {
-            scheduleDetailRefresh(threadID: changedThreadID, client: client)
+            scheduleDetailRefresh(
+                threadID: changedThreadID,
+                client: client,
+                reason: "shell-thread-updated"
+            )
         }
     }
 
@@ -4038,10 +4043,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
+    /// Refetches the open thread over HTTP. Unforced requests only run while
+    /// the detail stream is down; `force` is for a stream that is held waiting
+    /// for a snapshot. `reason` lands in the connection log so the refreshes
+    /// that remain are visible in Console.
     private func scheduleDetailRefresh(
         threadID: String,
         client: T3Client,
-        force: Bool = false
+        reason: String,
+        force: Bool = false,
+        delay: Duration = .milliseconds(250)
     ) {
         guard activeThreadID == threadID,
               activeThreadEnvironmentID == client.environment.id else { return }
@@ -4050,15 +4061,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             detailRefreshPending = true
             return
         }
+        ConnectionLog.logger.info(
+            "[conn] detail-refresh reason=\(reason, privacy: .public)"
+        )
         detailRefreshPending = false
         detailRefreshGeneration &+= 1
         let generation = detailRefreshGeneration
         let sessionGeneration = environmentGeneration
         detailRefreshTask = Task { [weak self] in
             do {
-                // Four updates per second keeps streaming text responsive while
-                // coalescing bursty shell events into one detail snapshot.
-                try await Task.sleep(for: .milliseconds(250))
+                // Coalesces bursty shell events into one detail snapshot.
+                try await Task.sleep(for: delay)
             } catch {
                 self?.finishDetailRefresh(generation: generation, client: client)
                 return
@@ -4077,90 +4090,137 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
+    /// Takes a snapshot for the open thread. Events that arrived while it was
+    /// in flight replay on top, so nothing streamed during a refresh is lost.
+    /// False when it is older than what the thread already shows, in which
+    /// case the projection in hand stays.
+    @discardableResult
+    private func adoptDetailSnapshot(
+        _ snapshot: OrchestrationV2ThreadDetailSnapshot,
+        route: NativeThreadRoute
+    ) -> Bool {
+        if activeDetail == nil {
+            activeDetail = NativeThreadDetailSync(snapshot: snapshot)
+        } else if activeDetail!.adopt(snapshot) == nil {
+            return false
+        }
+        activeThreadPage = featurePage(
+            truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
+        )
+        requestSnapshotIfHeld(route: route, retry: true)
+        return true
+    }
+
+    /// Asks for a snapshot while folding is held on an event this client could
+    /// not decode. Retries back off so a payload that never decodes costs one
+    /// request per half minute at most, not a loop.
+    private func requestSnapshotIfHeld(route: NativeThreadRoute, retry: Bool) {
+        guard let detail = activeDetail, detail.awaitingSnapshot else {
+            detailResyncBackoff.reset()
+            return
+        }
+        scheduleDetailRefresh(
+            threadID: route.uiID,
+            client: route.client,
+            reason: detail.holdReason ?? "awaiting-snapshot",
+            force: true,
+            delay: retry ? detailResyncBackoff.nextDelay() : .milliseconds(250)
+        )
+    }
+
     private func startDetailStream(
         _ route: NativeThreadRoute,
         after sequence: Int,
         snapshotMaxVisibleItems: Int?
     ) {
+        detailStreamRestartTask?.cancel()
+        detailStreamRestartTask = nil
         detailStreamGeneration &+= 1
         let streamGeneration = detailStreamGeneration
         let sessionGeneration = environmentGeneration
+        let inbox = NativeThreadDetailInbox(after: sequence)
         detailStreamTask = Task { [weak self] in
-            do {
-                for try await item in await route.client.threadEvents(
-                    threadID: route.wireID,
-                    after: sequence,
-                    snapshotMaxVisibleItems: snapshotMaxVisibleItems
-                ) {
-                    guard !Task.isCancelled,
-                          let self,
-                          self.detailStreamGeneration == streamGeneration,
-                          self.activeThreadID == route.uiID,
-                          self.isKnownClient(
-                              route.client,
-                              environmentID: route.environmentID,
-                              generation: sessionGeneration
-                          ) else {
-                        break
-                    }
-                    self.consumeDetailStreamItem(item, route: route)
+            let source = await route.client.threadEvents(
+                threadID: route.wireID,
+                after: sequence,
+                snapshotMaxVisibleItems: snapshotMaxVisibleItems
+            )
+            // The pump runs off the main actor; leaving this scope cancels it,
+            // which ends the subscription.
+            async let pumped: Void = inbox.pump(source)
+            for await _ in inbox.signals {
+                guard !Task.isCancelled,
+                      let self,
+                      self.detailStreamGeneration == streamGeneration,
+                      self.activeThreadID == route.uiID else {
+                    return
                 }
-            } catch is CancellationError {
-                return
-            } catch {
-                // Shell-driven HTTP refresh remains the compatibility fallback.
+                guard self.isKnownClient(
+                    route.client,
+                    environmentID: route.environmentID,
+                    generation: sessionGeneration
+                ) else {
+                    // The environment's client was replaced (its descriptor or
+                    // endpoint changed). Returning drops this subscription;
+                    // the restart resubscribes on the current client.
+                    self.finishDetailStream(
+                        generation: streamGeneration,
+                        route: route,
+                        sessionGeneration: sessionGeneration,
+                        ending: .failed("client-replaced"),
+                        snapshotMaxVisibleItems: snapshotMaxVisibleItems
+                    )
+                    return
+                }
+                self.consumeDetailStreamBatch(inbox.drain(), route: route)
             }
-            guard let self else { return }
+            await pumped
+            guard !Task.isCancelled, let self else { return }
+            // Items that landed with the final signal.
+            let remaining = inbox.drain()
+            if !remaining.isEmpty,
+               self.detailStreamGeneration == streamGeneration,
+               self.activeThreadID == route.uiID {
+                self.consumeDetailStreamBatch(remaining, route: route)
+            }
             self.finishDetailStream(
                 generation: streamGeneration,
                 route: route,
-                sessionGeneration: sessionGeneration
+                sessionGeneration: sessionGeneration,
+                ending: inbox.ending ?? .finished,
+                snapshotMaxVisibleItems: snapshotMaxVisibleItems
             )
         }
     }
 
-    private func consumeDetailStreamItem(
-        _ item: OrchestrationV2ThreadStreamItem,
+    private func consumeDetailStreamBatch(
+        _ items: [OrchestrationV2ThreadStreamItem],
         route: NativeThreadRoute
     ) {
-        switch item {
-        case .synchronized:
-            return
-        case let .snapshot(snapshot):
-            guard snapshot.snapshotSequence > (activeThreadSequence ?? 0) else { return }
+        guard !items.isEmpty else { return }
+        if activeDetail == nil {
+            activeDetail = NativeThreadDetailSync(awaitingSnapshotAfter: 0)
+        }
+        let result = activeDetail!.receive(items)
+        if result.adoptedSnapshot {
             threadHistoryEpoch &+= 1
-            activeThreadSequence = snapshot.snapshotSequence
-            activeRawThread = snapshot.projection
-            activeThreadPage = featurePage(
-                truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
-            )
-            scheduleRawDetailPublish(route: route)
-        case let .event(sequence, event):
-            guard let current = activeRawThread else {
-                scheduleDetailRefresh(threadID: route.uiID, client: route.client, force: true)
-                return
-            }
-            let reduction = NativeThreadDetailReducer.apply(event, to: current)
-            // A negative sequence marks an event the reducer refuses to fold.
-            // Fall back to the frame's own sequence for ordering.
-            let effective = reduction.sequence < 0 ? sequence : reduction.sequence
-            switch reduction.result {
-            case let .updated(projection):
-                guard effective > (activeThreadSequence ?? 0) else { return }
-                activeThreadSequence = effective
-                activeRawThread = projection
-                scheduleRawDetailPublish(route: route)
-            case .unchanged:
-                guard effective > (activeThreadSequence ?? 0) else { return }
-                activeThreadSequence = effective
-            case .refresh:
-                threadHistoryEpoch &+= 1
-                activeThreadSequence = effective
-                activeRawThread = nil
-                discardPendingDetailPublish()
-                scheduleDetailRefresh(threadID: route.uiID, client: route.client, force: true)
+            if let projection = activeRawThread {
+                activeThreadPage = featurePage(
+                    truncatedVisibleItemCount: projection.truncatedVisibleItemCount
+                )
             }
         }
+        if result.synchronized {
+            // Caught up: the stream is healthy again, so the next failure
+            // starts the restart ladder from the bottom.
+            detailStreamBackoff.reset()
+            passiveDetailPollingTask?.cancel()
+            passiveDetailPollingTask = nil
+        }
+        if result.changed {
+            scheduleRawDetailPublish(route: route)
+        }
+        requestSnapshotIfHeld(route: route, retry: false)
     }
 
     private func scheduleRawDetailPublish(route: NativeThreadRoute) {
@@ -4201,20 +4261,80 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func finishDetailStream(
         generation: Int,
         route: NativeThreadRoute,
-        sessionGeneration: Int
+        sessionGeneration: Int,
+        ending: NativeThreadDetailInbox.Ending,
+        snapshotMaxVisibleItems: Int?
     ) {
+        // Not tied to `route.client`: a stream that ended because its client was
+        // replaced still restarts, on the replacement.
         guard detailStreamGeneration == generation,
               activeThreadID == route.uiID,
-              isKnownClient(
-                  route.client,
-                  environmentID: route.environmentID,
-                  generation: sessionGeneration
-              ) else {
+              environmentGeneration == sessionGeneration else {
             return
         }
         detailStreamTask = nil
-        scheduleDetailRefresh(threadID: route.uiID, client: route.client)
+        switch ending {
+        case .finished:
+            ConnectionLog.logger.info(
+                """
+                [conn] detail-stream-ended reason=finished \
+                after=\(self.activeThreadSequence ?? 0, privacy: .public)
+                """
+            )
+        case let .failed(error):
+            ConnectionLog.logger.info(
+                """
+                [conn] detail-stream-ended reason=failed \
+                after=\(self.activeThreadSequence ?? 0, privacy: .public) \
+                error=\(error, privacy: .public)
+                """
+            )
+        }
         startPassiveDetailPolling(route)
+        scheduleDetailStreamRestart(route, snapshotMaxVisibleItems: snapshotMaxVisibleItems)
+    }
+
+    /// Resubscribes a detail stream that ended, from the newest sequence the
+    /// projection holds, after a jittered exponential delay. Switching or
+    /// releasing the thread cancels it through the stream generation.
+    private func scheduleDetailStreamRestart(
+        _ route: NativeThreadRoute,
+        snapshotMaxVisibleItems: Int?
+    ) {
+        detailStreamRestartTask?.cancel()
+        let delay = detailStreamBackoff.nextDelay()
+        let attempt = detailStreamBackoff.attempt
+        let streamGeneration = detailStreamGeneration
+        let sessionGeneration = environmentGeneration
+        detailStreamRestartTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard let self,
+                  self.detailStreamGeneration == streamGeneration,
+                  self.detailStreamTask == nil,
+                  self.activeThreadID == route.uiID,
+                  self.environmentGeneration == sessionGeneration,
+                  let current = try? self.threadRoute(for: route.uiID),
+                  current.environmentID == route.environmentID else {
+                return
+            }
+            self.detailStreamRestartTask = nil
+            let after = self.activeThreadSequence ?? 0
+            ConnectionLog.logger.info(
+                """
+                [conn] detail-stream-restarted attempt=\(attempt, privacy: .public) \
+                after=\(after, privacy: .public)
+                """
+            )
+            self.startDetailStream(
+                current,
+                after: after,
+                snapshotMaxVisibleItems: snapshotMaxVisibleItems
+            )
+        }
     }
 
     /// Passive environments intentionally avoid full shell WebSocket streams.
@@ -4250,8 +4370,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         detailRefreshTask = nil
         let needsTrailingRefresh = detailRefreshPending
         detailRefreshPending = false
-        if needsTrailingRefresh, let threadID = activeThreadID {
-            scheduleDetailRefresh(threadID: threadID, client: client)
+        guard let threadID = activeThreadID else { return }
+        // A stream still held on an undecodable event needs its snapshot even
+        // while the stream is alive, so that trailing request is forced.
+        if activeDetail?.awaitingSnapshot == true,
+           let route = try? threadRoute(for: threadID),
+           route.client === client {
+            requestSnapshotIfHeld(route: route, retry: true)
+        } else if needsTrailingRefresh {
+            scheduleDetailRefresh(threadID: threadID, client: client, reason: "trailing")
         }
     }
 
@@ -4266,6 +4393,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         detailStreamGeneration &+= 1
         detailStreamTask?.cancel()
         detailStreamTask = nil
+        detailStreamRestartTask?.cancel()
+        detailStreamRestartTask = nil
+        detailStreamBackoff.reset()
+        detailResyncBackoff.reset()
         discardPendingDetailPublish()
     }
 
@@ -4549,16 +4680,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             throw CancellationError()
         }
         if activeThreadID == route.uiID {
-            guard snapshot.snapshotSequence >= (activeThreadSequence ?? 0) else { return }
+            // An older snapshot than the thread already shows is dropped; the
+            // projection in hand stays, so there is never a blank detail.
+            guard adoptDetailSnapshot(snapshot, route: route) else { return }
             threadHistoryEpoch &+= 1
-            activeRawThread = snapshot.projection
-            activeThreadSequence = snapshot.snapshotSequence
-            activeThreadPage = featurePage(
-                truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
-            )
         }
         let detail = mapDetail(
-            snapshot.projection,
+            activeThreadID == route.uiID
+                ? activeRawThread ?? snapshot.projection
+                : snapshot.projection,
             environment: environment,
             page: activeThreadID == route.uiID
                 ? activeThreadPage
@@ -6593,99 +6723,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
 
 
-/// Outcome of folding one live event into the cached projection.
-enum NativeThreadDetailReductionResult: Equatable {
-    case updated(OrchestrationV2ThreadProjection)
-    case unchanged
-    /// The event changed structure this reducer does not model. Ask the server
-    /// for an authoritative projection rather than guessing.
-    case refresh
-}
-
-struct NativeThreadDetailReduction: Equatable {
-    let sequence: Int
-    let result: NativeThreadDetailReductionResult
-}
-
-/// Folds `subscribeThread` events into the cached V2 projection.
-///
-/// Only the high-frequency events are reduced in place: an assistant message
-/// streaming a long answer emits many `turn-item.updated` events per second, and
-/// refetching the projection for each would make the transcript stutter.
-/// Everything else — structural changes, rollbacks, anything unrecognized —
-/// takes the authoritative-refresh path, which is cheap because it is rare and
-/// always correct.
-enum NativeThreadDetailReducer {
-    static func apply(
-        _ event: JSONValue,
-        to projection: OrchestrationV2ThreadProjection
-    ) -> NativeThreadDetailReduction {
-        guard case let .object(object) = event,
-              let type = object["type"]?.stringValue,
-              let sequence = intValue(object["sequence"]),
-              let payload = object["payload"] else {
-            return NativeThreadDetailReduction(sequence: -1, result: .refresh)
-        }
-
-        switch type {
-        case "turn-item.updated":
-            guard let item = decode(OrchestrationV2TurnItem.self, from: payload),
-                  item.base.threadId == projection.thread.id else {
-                return NativeThreadDetailReduction(sequence: -1, result: .refresh)
-            }
-            return NativeThreadDetailReduction(
-                sequence: sequence,
-                result: .updated(projection.upserting(item))
-            )
-
-        case "run.created", "run.updated":
-            guard let run = decode(OrchestrationV2Run.self, from: payload) else {
-                return NativeThreadDetailReduction(sequence: -1, result: .refresh)
-            }
-            return NativeThreadDetailReduction(
-                sequence: sequence,
-                result: .updated(projection.upserting(run))
-            )
-
-        case "thread.created",
-             "thread.archived", "thread.unarchived", "thread.deleted",
-             "thread.settled", "thread.unsettled",
-             "thread.snoozed", "thread.unsnoozed",
-             "thread.visited", "thread.marked-unread",
-             "thread.metadata-updated", "thread.runtime-mode-updated",
-             "thread.interaction-mode-updated", "thread.model-selection-updated",
-             "thread.provider-switched":
-            guard let thread = decode(OrchestrationV2AppThread.self, from: payload),
-                  thread.id == projection.thread.id else {
-                return NativeThreadDetailReduction(sequence: -1, result: .refresh)
-            }
-            return NativeThreadDetailReduction(
-                sequence: sequence,
-                result: .updated(projection.replacingThread(thread))
-            )
-
-        default:
-            // Checkpoint rollbacks drop whole runs out of the projection, plan
-            // and handoff updates restructure it, and an unrecognized type is by
-            // definition unmodeled. All three need the server's version.
-            return NativeThreadDetailReduction(sequence: -1, result: .refresh)
-        }
-    }
-
-    private static func decode<T: Decodable>(_: T.Type, from value: JSONValue) -> T? {
-        guard let data = try? JSONEncoder.t3.encode(value) else { return nil }
-        return try? JSONDecoder.t3.decode(T.self, from: data)
-    }
-
-    private static func intValue(_ value: JSONValue?) -> Int? {
-        switch value {
-        case let .integer(integer): Int(exactly: integer)
-        case let .number(number): Int(exactly: number)
-        default: nil
-        }
-    }
-}
-
 extension OrchestrationV2ThreadProjection {
     /// The run `run.interrupt` should target: the newest run that has not
     /// finished. Mirrors the run statuses the server treats as active when it
@@ -6717,55 +6754,6 @@ extension OrchestrationV2ThreadProjection {
             $0.status == "pending" || $0.status == "running" || $0.status == "waiting"
         }
         return hasLiveBackgroundCommand || hasActiveAgent ? latest.id : nil
-    }
-
-    /// Replaces an item in place, preserving transcript order. An item that is
-    /// not in the visible window is still recorded so a later full projection
-    /// agrees with what was streamed.
-    func upserting(_ item: OrchestrationV2TurnItem) -> OrchestrationV2ThreadProjection {
-        var items = turnItems
-        if let index = items.firstIndex(where: { $0.id == item.id }) {
-            items[index] = item
-        } else {
-            items.append(item)
-        }
-
-        var visible = visibleTurnItems
-        if let index = visible.firstIndex(where: { $0.sourceItemId == item.id }) {
-            visible[index] = OrchestrationV2ProjectedTurnItem(
-                position: visible[index].position,
-                visibility: visible[index].visibility,
-                sourceThreadId: visible[index].sourceThreadId,
-                sourceItemId: visible[index].sourceItemId,
-                item: item
-            )
-        } else {
-            visible.append(
-                OrchestrationV2ProjectedTurnItem(
-                    position: (visible.map(\.position).max() ?? -1) + 1,
-                    visibility: .local,
-                    sourceThreadId: item.base.threadId,
-                    sourceItemId: item.id,
-                    item: item
-                )
-            )
-        }
-
-        return replacing(turnItems: items, visibleTurnItems: visible)
-    }
-
-    func upserting(_ run: OrchestrationV2Run) -> OrchestrationV2ThreadProjection {
-        var updated = runs
-        if let index = updated.firstIndex(where: { $0.id == run.id }) {
-            updated[index] = run
-        } else {
-            updated.append(run)
-        }
-        return replacing(runs: updated)
-    }
-
-    func replacingThread(_ thread: OrchestrationV2AppThread) -> OrchestrationV2ThreadProjection {
-        replacing(thread: thread)
     }
 }
 

@@ -120,6 +120,8 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { writeOrchestrationV2ReducerFixture } from "./swift-reducer-fixture.ts";
+
 const repoRoot = NodePath.join(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const outputPath = NodePath.join(
   repoRoot,
@@ -2534,3 +2536,6 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(threadShellPath, threadShellFixture);
+
+// Shared cases for the native live thread reducer; see swift-reducer-fixture.ts.
+writeOrchestrationV2ReducerFixture(NodePath.dirname(outputPath), process.argv.includes("--check"));

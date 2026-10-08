@@ -872,11 +872,11 @@ public struct OrchestrationV2GetTurnItemResult: Codable, Equatable, Sendable {
 }
 
 public struct OrchestrationV2ProjectedTurnItem: Codable, Equatable, Sendable, Identifiable {
-    public let position: Int
+    public var position: Int
     public let visibility: OrchestrationV2TurnItemVisibility
     public let sourceThreadId: String
     public let sourceItemId: String
-    public let item: OrchestrationV2TurnItem
+    public var item: OrchestrationV2TurnItem
 
     public init(
         position: Int,
@@ -917,9 +917,9 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     /// scheduler-fired thread from a hand-started one, so badges depend on it.
     public let createdBy: String
     public let creationSource: String
-    public let title: String
-    public let titleRevision: Int?
-    public let titleOrigin: String?
+    public var title: String
+    public var titleRevision: Int?
+    public var titleOrigin: String?
     public let providerInstanceId: String
     public let modelSelection: ModelSelection
     public let runtimeMode: RuntimeMode
@@ -974,6 +974,9 @@ public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifia
     public let attemptOrdinal: Int
     public let status: String
     public let reason: String?
+    /// The execution node the attempt runs under. A superseded attempt hides
+    /// the interrupt result recorded on this node, so live visibility needs it.
+    public var rootNodeId: String? = nil
 }
 
 public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {
@@ -1230,28 +1233,28 @@ public struct OrchestrationV2ConversationMessage: Codable, Equatable, Sendable, 
 }
 
 public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
-    public let thread: OrchestrationV2AppThread
-    public let runs: [OrchestrationV2Run]
-    public let attempts: [OrchestrationV2RunAttempt]
-    public let nodes: [OrchestrationV2ExecutionNode]
-    public let subagents: [OrchestrationV2Subagent]
-    public let providerSessions: [OrchestrationV2ProviderSession]
-    public let providerThreads: [OrchestrationV2ProviderThread]
-    public let providerTurns: [OrchestrationV2ProviderTurn]
-    public let runtimeRequests: [OrchestrationV2RuntimeRequest]
-    public let checkpoints: [OrchestrationV2Checkpoint]
-    public let contextHandoffs: [OrchestrationV2ContextHandoff]
-    public let contextTransfers: [OrchestrationV2ContextTransfer]
+    public var thread: OrchestrationV2AppThread
+    public var runs: [OrchestrationV2Run]
+    public var attempts: [OrchestrationV2RunAttempt]
+    public var nodes: [OrchestrationV2ExecutionNode]
+    public var subagents: [OrchestrationV2Subagent]
+    public var providerSessions: [OrchestrationV2ProviderSession]
+    public var providerThreads: [OrchestrationV2ProviderThread]
+    public var providerTurns: [OrchestrationV2ProviderTurn]
+    public var runtimeRequests: [OrchestrationV2RuntimeRequest]
+    public var checkpoints: [OrchestrationV2Checkpoint]
+    public var contextHandoffs: [OrchestrationV2ContextHandoff]
+    public var contextTransfers: [OrchestrationV2ContextTransfer]
     /// The thread's message table. Turn items carry the transcript; this is what
     /// a run's `userMessageId` resolves against.
-    public let messages: [OrchestrationV2ConversationMessage]
-    public let turnItems: [OrchestrationV2TurnItem]
-    public let visibleTurnItems: [OrchestrationV2ProjectedTurnItem]
+    public var messages: [OrchestrationV2ConversationMessage]
+    public var turnItems: [OrchestrationV2TurnItem]
+    public var visibleTurnItems: [OrchestrationV2ProjectedTurnItem]
     /// Number of older visible items omitted when the snapshot was windowed.
     /// Absent on complete projections — this is the fork's replacement for
     /// upstream's keyset `hasMore`.
-    public let truncatedVisibleItemCount: Int?
-    public let updatedAt: OrchestrationV2Timestamp
+    public var truncatedVisibleItemCount: Int?
+    public var updatedAt: OrchestrationV2Timestamp
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1661,7 +1664,7 @@ public enum OrchestrationV2ShellStreamItem: Decodable, Sendable {
 public enum OrchestrationV2ThreadStreamItem: Decodable, Sendable {
     case synchronized
     case snapshot(OrchestrationV2ThreadDetailSnapshot)
-    case event(sequence: Int, event: JSONValue)
+    case event(sequence: Int, event: OrchestrationV2ThreadEvent)
 
     private enum CodingKeys: String, CodingKey {
         case kind, snapshotSequence, projection, sequence, event
@@ -1685,7 +1688,7 @@ public enum OrchestrationV2ThreadStreamItem: Decodable, Sendable {
         case "event":
             self = .event(
                 sequence: try container.decode(Int.self, forKey: .sequence),
-                event: try container.decode(JSONValue.self, forKey: .event)
+                event: try container.decode(OrchestrationV2ThreadEvent.self, forKey: .event)
             )
         default:
             throw DecodingError.dataCorruptedError(
