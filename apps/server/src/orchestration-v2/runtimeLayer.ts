@@ -64,6 +64,8 @@ import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledT
 import { layer as attachmentMaterializationLayer } from "../attachments/AttachmentMaterialization.ts";
 import { layer as workspacePathsLayer } from "../workspace/WorkspacePaths.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
+import * as McpAppRequests from "../mcpApps/McpAppRequests.ts";
 
 export const ProjectServiceLayerLive = projectServiceLayer.pipe(
   Layer.provide(Layer.merge(ProjectionProjectRepositoryLive, OrchestrationLayerLive)),
@@ -140,6 +142,7 @@ const providerSessionManagerProvided = Layer.unwrap(
 const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      McpAppModelContext.layer,
       checkpointServiceProvided,
       eventSinkProvided,
       idAllocatorLayer,
@@ -299,9 +302,21 @@ const threadTitleRegenerationWorkerProvided = threadTitleRegenerationWorkerLive.
   Layer.provide(Layer.merge(threadManagementProvided, ProjectServiceLayerLive)),
 );
 
+const mcpAppRequestsProvided = McpAppRequests.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      McpAppModelContext.layer,
+      orchestratorProvided,
+      threadManagementProvided,
+      providerSessionManagerProvided,
+    ),
+  ),
+);
+
 export const OrchestrationV2LayerLive = Layer.mergeAll(
   providerAuthServiceProvided,
   orchestratorProvided,
+  mcpAppRequestsProvided,
   threadManagementProvided,
   effectWorkerProvided,
   providerSessionManagerProvided,

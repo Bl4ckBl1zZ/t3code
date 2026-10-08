@@ -1,13 +1,9 @@
 import {
+  authScopeRequiredResponse,
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthStandardClientScopes,
-  AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
-  AuthReviewWriteScope,
-  AuthTerminalOperateScope,
+  AuthGrantScope,
   EnvironmentAuthInvalidError,
   type EnvironmentAuthInvalidReason,
   EnvironmentHttpApi,
@@ -23,12 +19,13 @@ import {
   EnvironmentAuthenticatedPrincipal,
 } from "@t3tools/contracts";
 import type { AuthEnvironmentScope, DpopFailureReason } from "@t3tools/contracts";
-import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
+import { parseOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -121,13 +118,28 @@ export function failEnvironmentInvalidRequest(reason: EnvironmentRequestInvalidR
   );
 }
 
+const isGrantScope = Schema.is(AuthGrantScope);
+
+/**
+ * Parses a token-exchange `scope`. Unknown and retired names are dropped rather
+ * than rejected so older clients keep pairing; null means the request is
+ * malformed or names nothing a grant can contain.
+ */
+export function parseRequestedGrantScopes(
+  scope: string | undefined,
+): ReadonlyArray<AuthGrantScope> | undefined | null {
+  if (scope === undefined) return undefined;
+  const requested = parseOAuthScope(scope)?.filter(isGrantScope) ?? null;
+  return requested === null || requested.length === 0 ? null : requested;
+}
+
 export function failEnvironmentScopeRequired(requiredScope: AuthEnvironmentScope) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(
         new EnvironmentScopeRequiredError({
           code: "insufficient_scope",
-          requiredScope,
+          ...authScopeRequiredResponse(requiredScope),
           traceId,
         }),
       ),
@@ -279,22 +291,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
-            const requestedScopes =
-              args.payload.scope === undefined
-                ? undefined
-                : parseAllowedOAuthScope({
-                    value: args.payload.scope,
-                    allowedScopes: new Set<AuthEnvironmentScope>([
-                      AuthOrchestrationReadScope,
-                      AuthOrchestrationOperateScope,
-                      AuthTerminalOperateScope,
-                      AuthReviewWriteScope,
-                      AuthAccessReadScope,
-                      AuthAccessWriteScope,
-                      AuthRelayReadScope,
-                      AuthRelayWriteScope,
-                    ]),
-                  });
+            const requestedScopes = parseRequestedGrantScopes(args.payload.scope);
             if (requestedScopes === null) {
               return yield* failEnvironmentInvalidRequest("invalid_scope");
             }

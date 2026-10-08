@@ -12,7 +12,11 @@ import {
   type PlanId,
   type RunId,
   type ThreadId,
+  type TurnItemId,
 } from "@t3tools/contracts";
+import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
+import type { McpAppReference } from "@t3tools/shared/mcpApp";
+import { mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 import { resolveT3McpToolPresentation } from "@t3tools/shared/t3McpToolPresentation";
 import { resolveOrchestrationV2ItemAttempt } from "@t3tools/shared/orchestrationV2Timeline";
 import {
@@ -156,6 +160,18 @@ export type TimelineEntry = (
       readonly kind: "event";
       readonly createdAt: string;
       readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+    }
+  | {
+      /** An MCP App a completed tool call captured, hosted where the call happened. */
+      readonly id: string;
+      readonly kind: "mcp-app";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      /** The thread and item that own the app; a fork's inherited app is its source's. */
+      readonly sourceThreadId: ThreadId;
+      readonly itemId: TurnItemId;
+      readonly revision: string;
+      readonly mcpApp: McpAppReference;
     }
 ) & {
   /** V2 identity resolved from the item's execution node, when locally available. */
@@ -374,6 +390,8 @@ const PERSISTENT_RESOURCE_V2_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"
 ]);
 
 export function timelineEntryIsPersistentResourceCard(entry: TimelineEntry): boolean {
+  // An app stays visible, and keeps its live frame, when its turn folds.
+  if (entry.kind === "mcp-app") return true;
   if (entry.kind === "event") {
     return PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type);
   }
@@ -682,6 +700,25 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
         kind: "proposed-plan",
         createdAt,
         proposedPlan,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const mcpApp =
+      item.type === "dynamic_tool" && item.status === "completed"
+        ? mcpAppFromToolItem(item)
+        : undefined;
+    if (mcpApp !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "mcp-app",
+        createdAt,
+        runId: item.runId,
+        sourceThreadId: row.sourceThreadId,
+        itemId: row.sourceItemId,
+        revision: turnItemDetailRevision(item),
+        mcpApp,
         ...attemptMetadata,
       });
       continue;

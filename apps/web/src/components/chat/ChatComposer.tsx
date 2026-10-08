@@ -32,9 +32,6 @@ import {
 import type {
   EnvironmentId,
   ModelSelection,
-  OrchestrationV2ProjectedTurnItem,
-  OrchestrationV2ProviderThread,
-  OrchestrationV2ProviderTurnTokenUsage,
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -52,6 +49,7 @@ import {
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { ATTACHMENT_COPY } from "@t3tools/shared/composerAttachments";
@@ -302,12 +300,13 @@ import {
   type ComposerSubmitOptions,
 } from "./composerDispatch";
 import { resolveRuntimeModePicker } from "./composerRuntimeModes";
-import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
+import type { ContextWindowSnapshot } from "../../lib/contextWindow";
 import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
   hasCompleteProviderWorkspaceSnapshot,
+  hasCurrentProviderWorkspaceSnapshot,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
@@ -493,7 +492,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
-  activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
+  activeContextWindow: ContextWindowSnapshot | null;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
@@ -519,6 +518,11 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  onCompactContext?: (() => void) | undefined;
+  compactDisabled: boolean;
+  compactDisabledReason: string | null;
+  compactBeforeSendTokens: number | null;
+  onSendWithFullHistory: () => void;
 }) {
   return (
     <>
@@ -526,6 +530,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         <ContextWindowMeter
           usage={props.activeContextWindow}
           modelDisplayName={props.activeThreadModelDisplayName}
+          onCompact={props.onCompactContext}
+          compactDisabled={props.compactDisabled}
+          compactDisabledReason={props.compactDisabledReason}
         />
       ) : props.reserveContextWindowMeter ? (
         <ContextWindowMeterPlaceholder />
@@ -553,6 +560,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
+        compactBeforeSendTokens={props.compactBeforeSendTokens}
+        onSendWithFullHistory={props.onSendWithFullHistory}
       />
     </>
   );
@@ -709,9 +718,15 @@ export interface ChatComposerProps {
 
   // Context window
   threadDetailLoading?: boolean;
-  activeThreadVisibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
-  activeThreadLiveTokenUsage: OrchestrationV2ProviderTurnTokenUsage | null;
-  activeThreadProviderThread: OrchestrationV2ProviderThread | null;
+  activeContextWindow: ContextWindowSnapshot | null;
+  /** Runs `/compact` from the context meter; omitted for providers that cannot compact. */
+  onCompactContext?: (() => void) | undefined;
+  compactDisabled: boolean;
+  compactDisabledReason: string | null;
+  /** Tokens Enter compacts before sending; null when the next send keeps full history. */
+  resumeCompactionTokens: number | null;
+  /** Runs `send` as a one-off send that keeps full history instead of compacting first. */
+  onSendWithFullHistory: (send: () => void) => void;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -825,9 +840,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     onThreadModelOptionsChange,
-    activeThreadVisibleTurnItems,
-    activeThreadLiveTokenUsage,
-    activeThreadProviderThread,
+    activeContextWindow,
+    onCompactContext,
+    compactDisabled,
+    compactDisabledReason,
+    resumeCompactionTokens,
+    onSendWithFullHistory,
     resolvedTheme,
     settings,
     keybindings,
@@ -1130,7 +1148,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   // One scan per instance and cwd. A failed scan retries after a cooldown on
   // next use; a scan whose commands are pending retries when the cooldown ends.
-  const workspaceRefreshKeyRef = useRef<string | null>(null);
+  // The last scan this composer asked for. A request inside the TTL is not
+  // repeated, so a client clock ahead of the server's cannot loop rescans.
+  const workspaceRefreshKeyRef = useRef<{ key: string; requestedAt: number } | null>(null);
   const [workspaceRefreshRetry, setWorkspaceRefreshRetry] = useState<{
     key: string;
     notBefore: number;
@@ -1175,17 +1195,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!gitCwd || !selectedProviderEntry?.snapshot.enabled) return;
     const instanceId = selectedProviderEntry.instanceId;
     const key = `${environmentId}:${instanceId}:${gitCwd}`;
-    if (workspaceRefreshKeyRef.current === key) return;
-    if (hasCompleteProviderWorkspaceSnapshot(selectedProviderEntry.snapshot, gitCwd)) {
-      workspaceRefreshKeyRef.current = key;
+    const now = Date.now();
+    const lastRequest = workspaceRefreshKeyRef.current;
+    if (
+      lastRequest?.key === key &&
+      now - lastRequest.requestedAt < PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS
+    )
+      return;
+    if (hasCurrentProviderWorkspaceSnapshot(selectedProviderEntry.snapshot, gitCwd, now)) {
       setWorkspaceRefreshRetry(null);
       return;
     }
     const retry = workspaceRefreshRetry;
-    if (retry?.key === key && Date.now() < retry.notBefore) return;
-    workspaceRefreshKeyRef.current = key;
+    if (retry?.key === key && now < retry.notBefore) return;
+    const request = { key, requestedAt: now };
+    workspaceRefreshKeyRef.current = request;
     const retryLater = () => {
-      if (workspaceRefreshKeyRef.current !== key) return;
+      if (workspaceRefreshKeyRef.current !== request) return;
       workspaceRefreshKeyRef.current = null;
       setWorkspaceRefreshRetry({
         key,
@@ -1199,7 +1225,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           result.value.providers.find((provider) => provider.instanceId === instanceId),
           gitCwd,
         );
-      if (!scanned && workspaceRefreshKeyRef.current === key) retryLater();
+      if (!scanned) retryLater();
     }, retryLater);
   }, [
     environmentId,
@@ -1284,15 +1310,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Context window
   // ------------------------------------------------------------------
-  const activeContextWindow = useMemo(
-    () =>
-      deriveLatestContextWindowSnapshot(
-        activeThreadVisibleTurnItems ?? [],
-        activeThreadLiveTokenUsage,
-        activeThreadProviderThread,
-      ),
-    [activeThreadVisibleTurnItems, activeThreadLiveTokenUsage, activeThreadProviderThread],
-  );
   const activeThreadModelDisplayName = useMemo(
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
     [activeThreadModelSelection, modelOptionsByInstance],
@@ -1653,7 +1670,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectSelectionRequired ||
     environmentUnavailable !== null ||
     !composerSendState.hasSendableContent;
-  const collapsedComposerPrimaryActionLabel = "Send message";
+  const collapsedComposerPrimaryActionLabel =
+    resumeCompactionTokens !== null ? "Open composer to compact and send" : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
 
@@ -2482,6 +2500,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       promptRef,
       shouldBlurMobileComposerOnSubmit,
     ],
+  );
+  const sendWithFullHistory = useCallback(
+    () => onSendWithFullHistory(() => submitComposer()),
+    [onSendWithFullHistory, submitComposer],
+  );
+  const compactThreadContext = useMemo(
+    () =>
+      onCompactContext === undefined
+        ? undefined
+        : () => {
+            if (compactDisabled || noProviderAvailable || isSendBusy || isConnecting) return;
+            onCompactContext();
+          },
+    [compactDisabled, isConnecting, isSendBusy, noProviderAvailable, onCompactContext],
   );
   const expandMobileComposer = useCallback(() => {
     if (composerBlurFrameRef.current !== null) {
@@ -3398,6 +3430,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           value: previousValue + source,
           citationStart: previousValue.length + separator.length,
           sourceAnchor,
+          // The citation is appended with its own trailing space, plus a leading one when needed.
+          insertedSpaces: { before: separator.length > 0, after: true },
         });
         return applyPromptReplacement(previousValue.length, previousValue.length, source, {
           focusEditorAfterReplace: false,
@@ -3896,7 +3930,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  submitComposer();
+                  // Compacting first is only sent from the labeled button, so expand to show it.
+                  if (resumeCompactionTokens !== null) expandMobileComposer();
+                  else submitComposer();
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -4387,6 +4423,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}
                   onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                  onCompactContext={compactThreadContext}
+                  compactDisabled={
+                    compactDisabled || noProviderAvailable || isSendBusy || isConnecting
+                  }
+                  compactDisabledReason={
+                    compactDisabledReason ??
+                    (noProviderAvailable ? "Compacting is unavailable right now" : null)
+                  }
+                  compactBeforeSendTokens={resumeCompactionTokens}
+                  onSendWithFullHistory={sendWithFullHistory}
                 />
               </div>
             </div>

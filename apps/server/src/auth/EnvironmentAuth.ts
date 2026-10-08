@@ -7,6 +7,7 @@ import {
   AuthStandardClientScopes,
   type AuthAccessTokenResult,
   type AuthBrowserSessionResult,
+  authScopeResponse,
   type AuthClientMetadata,
   type AuthClientSession,
   type AuthCreatePairingCredentialInput,
@@ -724,7 +725,7 @@ export const make = Effect.gen(function* () {
           ({
             authenticated: true,
             auth: descriptor,
-            scopes: session.scopes,
+            ...authScopeResponse(session.scopes),
             sessionMethod: session.method,
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
           }) satisfies AuthSessionState,
@@ -768,7 +769,7 @@ export const make = Effect.gen(function* () {
     return {
       response: {
         authenticated: true,
-        scopes: session.scopes,
+        ...authScopeResponse(session.scopes),
         sessionMethod: session.method,
         expiresAt: DateTime.toUtc(session.expiresAt),
       } satisfies AuthBrowserSessionResult,
@@ -797,15 +798,22 @@ export const make = Effect.gen(function* () {
       );
 
   const exchangeBootstrapCredentialForAccessToken: EnvironmentAuth["Service"]["exchangeBootstrapCredentialForAccessToken"] =
-    (credential, requestedScopesInput, requestMetadata, input) => {
-      const requestedScopes = requestedScopesInput?.length ? requestedScopesInput : undefined;
+    (credential, requestedScopes, requestMetadata, input) => {
       return resolveBootstrapGrant(credential, {
         ...input,
         ...(requestedScopes !== undefined ? { requestedScopes } : {}),
       }).pipe(
         Effect.flatMap((grant) =>
           Effect.gen(function* () {
-            const grantedScopes = requestedScopes ?? grant.scopes;
+            // Requested scopes narrow the grant; names it lacks are dropped so
+            // clients that still ask for retired or newer scopes keep working.
+            const grantedScopes =
+              requestedScopes === undefined
+                ? grant.scopes
+                : [...new Set(requestedScopes)].filter((scope) => grant.scopes.includes(scope));
+            if (grantedScopes.length === 0) {
+              return yield* new ServerAuthScopeNotGrantedError({});
+            }
             return yield* sessions
               .issue({
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
@@ -912,6 +920,7 @@ export const make = Effect.gen(function* () {
         ];
         return pairingLinks
           .filter((pairingLink) => !excludedSubjects.includes(pairingLink.subject))
+          .map((link) => ({ ...link, ...authScopeResponse(link.scopes) }))
           .toSorted(
             (left, right) => right.createdAt.epochMilliseconds - left.createdAt.epochMilliseconds,
           );
@@ -997,6 +1006,7 @@ export const make = Effect.gen(function* () {
         clientSessions.map(
           (clientSession): AuthClientSession => ({
             ...clientSession,
+            ...authScopeResponse(clientSession.scopes),
             current: clientSession.sessionId === currentSessionId,
           }),
         ),

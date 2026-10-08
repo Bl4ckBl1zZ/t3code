@@ -9,7 +9,9 @@ import {
   $getNodeByKey,
   $getRoot,
   $isElementNode,
+  $isTextNode,
   DecoratorNode,
+  type LexicalNode,
   HISTORY_PUSH_TAG,
   SKIP_DOM_SELECTION_TAG,
   type NodeKey,
@@ -42,12 +44,16 @@ export type ComposerCitationCommentRequest = {
   value: string;
   citationStart: number;
   sourceAnchor: AssistantCitationSourceAnchor;
+  insertedSpaces: CitationInsertedSpaces;
 };
+
+/** Spaces added around a freshly inserted citation, removed with it if its comment is cancelled. */
+export type CitationInsertedSpaces = { before: boolean; after: boolean };
 
 export type ComposerCitationCommentTarget = {
   nodeKey: NodeKey;
   sourceAnchor?: AssistantCitationSourceAnchor;
-  removeOnCancel?: boolean;
+  removeOnCancel?: CitationInsertedSpaces;
 };
 
 export const ComposerCitationCommentContext = createContext<{
@@ -77,12 +83,32 @@ export function $consumeComposerCitationCommentRequest(requestRef: {
       return {
         nodeKey: node.getKey(),
         sourceAnchor: request.sourceAnchor,
-        removeOnCancel: true,
+        removeOnCancel: request.insertedSpaces,
       };
     }
     offset += node.getTextContentSize();
   }
   return null;
+}
+
+/** Drops one space from the `edge` of a text neighbor, and the neighbor if that empties it. */
+function $trimInsertedSpace(node: LexicalNode | null, edge: "start" | "end") {
+  if (!$isTextNode(node)) return;
+  const text = node.getTextContent();
+  if (edge === "end" ? !text.endsWith(" ") : !text.startsWith(" ")) return;
+  if (text.length === 1) node.remove();
+  else node.setTextContent(edge === "end" ? text.slice(0, -1) : text.slice(1));
+}
+
+/** Undo a fresh citation insertion: drop the chip and the spaces inserted with it. */
+export function $removeInsertedCitation(
+  node: ComposerCitationNode,
+  insertedSpaces: CitationInsertedSpaces,
+) {
+  if (insertedSpaces.before) $trimInsertedSpace(node.getPreviousSibling(), "end");
+  if (insertedSpaces.after) $trimInsertedSpace(node.getNextSibling(), "start");
+  node.selectPrevious();
+  node.remove();
 }
 
 function ComposerCitationDecorator(props: { citation: AssistantCitation; nodeKey: NodeKey }) {
@@ -114,6 +140,18 @@ function ComposerCitationDecorator(props: { citation: AssistantCitation; nodeKey
           node.selectPrevious();
           node.remove();
         }
+      },
+      { tag: HISTORY_PUSH_TAG },
+    );
+    editor.getRootElement()?.focus({ preventScroll: true });
+  };
+  const removeOnCancel = commentTarget?.removeOnCancel;
+  const onCancelInsertion = () => {
+    if (!editor.isEditable() || !removeOnCancel) return;
+    editor.update(
+      () => {
+        const node = $getNodeByKey(props.nodeKey);
+        if (node instanceof ComposerCitationNode) $removeInsertedCitation(node, removeOnCancel);
       },
       { tag: HISTORY_PUSH_TAG },
     );
@@ -165,7 +203,7 @@ function ComposerCitationDecorator(props: { citation: AssistantCitation; nodeKey
             if (open && !editor.isEditable()) return;
             commentContext.onOpenChange(props.nodeKey, open);
           },
-          ...(commentTarget?.removeOnCancel ? { onCancel: onRemove } : {}),
+          ...(removeOnCancel ? { onCancel: onCancelInsertion } : {}),
           onSave: onSaveComment,
           onSaveAndSend: (comment) => {
             if (!onSaveComment(comment)) return false;

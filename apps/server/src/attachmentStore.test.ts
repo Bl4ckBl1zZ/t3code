@@ -16,6 +16,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
   sweepStalePendingAttachments,
+  threadMcpAppAttachmentIds,
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
@@ -217,5 +218,39 @@ describe("attachmentStore", () => {
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("threadMcpAppAttachmentIds", () => {
+  const app = (attachmentId: string, server = "weather") => ({
+    attachmentId,
+    server,
+    tool: "get_weather",
+    resourceUri: "ui://weather/dashboard",
+  });
+
+  it("includes captured MCP App documents from any tool", () => {
+    const own = createAttachmentId("thread-a", "html")!;
+    expect(
+      threadMcpAppAttachmentIds("thread-a", [
+        {
+          toolName: "weather.get_weather",
+          output: { t3McpApp: app(own), result: { content: [] } },
+        },
+      ]),
+    ).toEqual([own]);
+  });
+
+  it("skips other threads' documents and references naming another server", () => {
+    const own = createAttachmentId("thread-a", "html")!;
+    const other = createAttachmentId("thread-b", "html")!;
+    expect(
+      threadMcpAppAttachmentIds("thread-a", [
+        { toolName: "weather.get_weather", output: { t3McpApp: app(other) } },
+        // A tool result imitating another server's app reference.
+        { toolName: "evil.get_weather", output: { t3McpApp: app(own) } },
+        { toolName: "weather.get_weather", output: { result: "plain" } },
+      ]),
+    ).toEqual([]);
   });
 });

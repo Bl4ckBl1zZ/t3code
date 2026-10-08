@@ -11,7 +11,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitHubApi from "./GitHubApi.ts";
-import * as GitHubCli from "./GitHubCli.ts";
+import * as GitHubRepositoryApi from "./GitHubRepositoryApi.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -51,13 +51,15 @@ const node = (number: number, headRefName: string, owner = "acme") => ({
 });
 
 /**
- * A GitHubCli over a mocked GitHubApi, git driver and process. `remotes` is what
+ * A GitHubRepositoryApi over a mocked GitHubApi, git driver and process. `remotes` is what
  * `git remote -v` prints; `git` records every driver call.
  */
 function harness(input: {
   readonly remotes: string;
   readonly api: Partial<GitHubApi.GitHubApi["Service"]>;
   readonly localBranches?: ReadonlyArray<string>;
+  /** Fails every git fetch and command a checkout runs. */
+  readonly gitFailure?: Error;
 }) {
   const git: Array<readonly [string, unknown]> = [];
   const record =
@@ -69,10 +71,12 @@ function harness(input: {
       });
   const driver = Layer.mock(GitVcsDriver.GitVcsDriver)({
     execute: (args) =>
-      Effect.sync(() => {
-        git.push(["execute", args.args]);
-        return processOutput("");
-      }),
+      input.gitFailure === undefined
+        ? Effect.sync(() => {
+            git.push(["execute", args.args]);
+            return processOutput("");
+          })
+        : Effect.fail(input.gitFailure as never),
     resolvePrimaryRemoteName: () => Effect.succeed("origin"),
     readConfigValue: () => Effect.succeed("git@github.com:acme/web.git"),
     ensureRemote: (args) =>
@@ -80,7 +84,10 @@ function harness(input: {
         git.push(["ensureRemote", args]);
         return args.preferredName;
       }),
-    fetchRemoteTrackingBranch: (args) => record("fetchRemoteTrackingBranch", undefined)(args),
+    fetchRemoteTrackingBranch: (args) =>
+      input.gitFailure === undefined
+        ? record("fetchRemoteTrackingBranch", undefined)(args)
+        : Effect.fail(input.gitFailure as never),
     setBranchUpstream: (args) => record("setBranchUpstream", undefined)(args),
     switchRef: (args) => record("switchRef", { refName: args.refName })(args) as never,
     listLocalBranchNames: () => Effect.succeed([...(input.localBranches ?? [])]),
@@ -92,7 +99,10 @@ function harness(input: {
         args.args[0] === "remote" ? processOutput(input.remotes) : processOutput("", 1),
       ),
   });
-  const layer = Layer.effect(GitHubCli.GitHubCli, GitHubCli.make).pipe(
+  const layer = Layer.effect(
+    GitHubRepositoryApi.GitHubRepositoryApi,
+    GitHubRepositoryApi.make,
+  ).pipe(
     Layer.provide(
       Layer.mergeAll(
         driver,
@@ -111,7 +121,7 @@ describe("selectGitHubBaseRepository", () => {
       .flatMap(([name, url]) => [`${name}\t${url} (fetch)`, `${name}\t${url} (push)`])
       .join("\n");
   const select = (input: { remotes: string; resolved?: string }) =>
-    GitHubCli.selectGitHubBaseRepository({ resolved: "", host: "github.com", ...input });
+    GitHubRepositoryApi.selectGitHubBaseRepository({ resolved: "", host: "github.com", ...input });
 
   it("picks the repository gh reads without a prompt", () => {
     assert.deepStrictEqual(select({ remotes: remotes(["fork", "git@github.com:me/web.git"]) }), {
@@ -175,7 +185,7 @@ describe("selectGitHubBaseRepository", () => {
   });
 });
 
-describe("GitHubCli repository resolution", () => {
+describe("GitHubRepositoryApi repository resolution", () => {
   it.effect("reads the repository gh would pick from the remotes", () => {
     const paths: string[] = [];
     const { layer } = harness({
@@ -197,7 +207,7 @@ describe("GitHubCli repository resolution", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       assert.strictEqual(yield* gh.getDefaultBranch({ cwd: "/repo" }), "trunk");
       assert.deepStrictEqual(paths, ["github.com repos/acme/web"]);
     }).pipe(Effect.provide(layer));
@@ -221,14 +231,35 @@ describe("GitHubCli repository resolution", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       yield* gh.getDefaultBranch({ cwd: "/repo" });
       assert.deepStrictEqual(hosts, ["github.com repos/acme/web"]);
       assert.strictEqual(
-        GitHubCli.gitHubApiHostForRemote("git@github.example.com:a/b.git"),
+        GitHubRepositoryApi.gitHubApiHostForRemote("git@github.example.com:a/b.git"),
         "github.example.com",
       );
-      assert.strictEqual(GitHubCli.gitHubApiHostForRemote("git@gitlab.com:a/b.git"), null);
+      assert.strictEqual(
+        GitHubRepositoryApi.gitHubApiHostForRemote("git@gitlab.com:a/b.git"),
+        null,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("names a missing repository rather than a pull request", () => {
+    const { layer } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/gone.git"]),
+      api: {
+        rest: (input) =>
+          Effect.fail(
+            new GitHubApi.GitHubApiNotFoundError({ host: input.host, operation: input.operation }),
+          ),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
+      const error = yield* gh.getDefaultBranch({ cwd: "/repo" }).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "GitHubRepositoryNotFoundError");
+      assert.include(error.detail, "Repository not found");
     }).pipe(Effect.provide(layer));
   });
 
@@ -238,18 +269,18 @@ describe("GitHubCli repository resolution", () => {
       api: {},
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       const error = yield* gh.getDefaultBranch({ cwd: "/repo" }).pipe(Effect.flip);
-      assert.strictEqual(error._tag, "GitHubCliCommandError");
+      assert.strictEqual(error._tag, "GitHubRepositoryCommandError");
       assert.include(String((error.cause as Error).message), "No GitHub repository");
     }).pipe(Effect.provide(layer));
   });
 });
 
-describe("GitHubCli.listPullRequestsByHead", () => {
+describe("GitHubRepositoryApi.listPullRequestsByHead", () => {
   const remotes = remotesOutput(["origin", "git@github.com:acme/web.git"]);
 
-  it.effect("reads heads on one repository in one GraphQL document", () => {
+  it.effect("reads a background sweep's staggered heads in one GraphQL document", () => {
     const documents: Array<GitHubApi.GitHubGraphQlInput> = [];
     const { layer } = harness({
       remotes,
@@ -264,21 +295,24 @@ describe("GitHubCli.listPullRequestsByHead", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
-      const lookups = yield* Effect.all(
-        ["feature/a", "feature/b"].map((headSelector) =>
-          gh.listPullRequestsByHead({
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
+      const lookup = (headSelector: string) =>
+        gh
+          .listPullRequestsByHead({
             cwd: "/repo",
             headSelector,
             state: "all",
             limit: 100,
             host: "github.com",
-          }),
-        ),
-        { concurrency: "unbounded" },
-      ).pipe(Effect.forkChild);
-      yield* TestClock.adjust("50 millis");
-      const [first, second] = yield* Fiber.join(lookups);
+          })
+          .pipe(Effect.forkChild);
+      // Each branch's own git reads come first, so a sweep's lookups arrive spread out.
+      const firstLookup = yield* lookup("feature/a");
+      yield* TestClock.adjust("200 millis");
+      const secondLookup = yield* lookup("feature/b");
+      yield* TestClock.adjust("300 millis");
+      const first = yield* Fiber.join(firstLookup);
+      const second = yield* Fiber.join(secondLookup);
       assert.deepStrictEqual(
         first?.map((pr) => pr.number),
         [7],
@@ -293,6 +327,44 @@ describe("GitHubCli.listPullRequestsByHead", () => {
         h1: "feature/b",
         s1: ["OPEN", "CLOSED", "MERGED"],
       });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("caps a background document at twenty-five heads", () => {
+    const headCounts: Array<number> = [];
+    const { layer } = harness({
+      remotes,
+      api: {
+        graphql: (input) =>
+          Effect.sync(() => {
+            const heads = Object.keys(input.variables ?? {}).filter((key) => /^h\d+$/.test(key));
+            headCounts.push(heads.length);
+            return encodeJson({
+              data: { repository: Object.fromEntries(heads.map((key) => [key, { nodes: [] }])) },
+            });
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
+      const lookups = yield* Effect.all(
+        Array.from({ length: 26 }, (_, index) =>
+          gh.listPullRequestsByHead({
+            cwd: "/repo",
+            headSelector: `feature/${index}`,
+            state: "all",
+            limit: 100,
+            host: "github.com",
+          }),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("500 millis");
+      yield* Fiber.join(lookups);
+      assert.deepStrictEqual(
+        headCounts.toSorted((a, b) => a - b),
+        [1, 25],
+      );
     }).pipe(Effect.provide(layer));
   });
 
@@ -318,7 +390,7 @@ describe("GitHubCli.listPullRequestsByHead", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       const open = yield* gh
         .listOpenPullRequests({ cwd: "/repo", headSelector: "me:main", limit: 1 })
         .pipe(Effect.forkChild);
@@ -347,24 +419,24 @@ describe("GitHubCli.listPullRequestsByHead", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       const read = (headSelector: string) =>
         gh
           .listPullRequestsByHead({ cwd: "/repo", headSelector, state: "open", limit: 1 })
           .pipe(Effect.flip, Effect.forkChild);
       const missing = yield* read("missing");
-      yield* TestClock.adjust("50 millis");
-      assert.strictEqual((yield* Fiber.join(missing))._tag, "GitHubCliUnavailableError");
+      yield* TestClock.adjust("500 millis");
+      assert.strictEqual((yield* Fiber.join(missing))._tag, "GitHubRepositoryUnavailableError");
       const limited = yield* read("limited");
-      yield* TestClock.adjust("50 millis");
+      yield* TestClock.adjust("500 millis");
       const error = yield* Fiber.join(limited);
-      assert.strictEqual(error._tag, "GitHubCliRateLimitError");
+      assert.strictEqual(error._tag, "GitHubRepositoryRateLimitError");
       assert.propertyVal(error, "retryAt", 123);
     }).pipe(Effect.provide(layer));
   });
 });
 
-describe("GitHubCli.getPullRequest", () => {
+describe("GitHubRepositoryApi.getPullRequest", () => {
   it.effect("reads a pull request by number, and by URL on its own repository", () => {
     const variables: Array<unknown> = [];
     const { layer } = harness({
@@ -378,7 +450,7 @@ describe("GitHubCli.getPullRequest", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       assert.strictEqual((yield* gh.getPullRequest({ cwd: "/repo", reference: "#42" })).number, 42);
       yield* gh.getPullRequest({
         cwd: "/repo",
@@ -399,14 +471,14 @@ describe("GitHubCli.getPullRequest", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       const error = yield* gh.getPullRequest({ cwd: "/repo", reference: "7" }).pipe(Effect.flip);
       assert.strictEqual(error._tag, "GitHubPullRequestNotFoundError");
     }).pipe(Effect.provide(layer));
   });
 });
 
-describe("GitHubCli writes", () => {
+describe("GitHubRepositoryApi writes", () => {
   it.effect("creates a cross-repository pull request with an owner:branch head", () => {
     const requests: Array<GitHubApi.GitHubRestInput> = [];
     const { layer } = harness({
@@ -426,7 +498,7 @@ describe("GitHubCli writes", () => {
       const fs = yield* FileSystem.FileSystem;
       const bodyFile = yield* fs.makeTempFileScoped({ suffix: ".md" });
       yield* fs.writeFileString(bodyFile, "Body");
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       yield* gh.createPullRequest({
         cwd: "/repo",
         baseBranch: "main",
@@ -436,6 +508,8 @@ describe("GitHubCli writes", () => {
       });
       assert.strictEqual(requests[0]!.method, "POST");
       assert.strictEqual(requests[0]!.path, "repos/acme/web/pulls");
+      // A user's own write, so the background's reserve is not held against it.
+      assert.strictEqual(requests[0]!.allowReserve, true);
       assert.deepStrictEqual(requests[0]!.body, {
         base: "main",
         head: "me:feature",
@@ -465,7 +539,7 @@ describe("GitHubCli writes", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       const urls = yield* gh.createRepository({
         cwd: "/repo",
         repository: "acme/new",
@@ -481,7 +555,7 @@ describe("GitHubCli writes", () => {
   });
 });
 
-describe("GitHubCli.checkoutPullRequest", () => {
+describe("GitHubRepositoryApi.checkoutPullRequest", () => {
   const repository = (fullName: string, defaultBranch = "main") =>
     restResponse({
       full_name: fullName,
@@ -501,7 +575,7 @@ describe("GitHubCli.checkoutPullRequest", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       yield* gh.checkoutPullRequest({ cwd: "/repo", reference: "5" });
       assert.deepStrictEqual(git, [
         [
@@ -538,7 +612,7 @@ describe("GitHubCli.checkoutPullRequest", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       yield* Effect.flip(gh.checkoutPullRequest({ cwd: "/repo", reference: "6", force: true }));
       // Nothing touched the local branches: `main` must not be reset to the fork's commit.
       assert.deepStrictEqual(git, []);
@@ -559,7 +633,7 @@ describe("GitHubCli.checkoutPullRequest", () => {
       },
     });
     return Effect.gen(function* () {
-      const gh = yield* GitHubCli.GitHubCli;
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
       yield* gh.checkoutPullRequest({ cwd: "/repo", reference: "6", force: true });
       assert.deepStrictEqual(git, [
         [
@@ -580,9 +654,31 @@ describe("GitHubCli.checkoutPullRequest", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("keeps git's own output out of what a failed checkout reports", () => {
+    const { layer } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
+      gitFailure: new Error("fatal: /home/me/secret-path: permission denied"),
+      api: {
+        graphql: () =>
+          Effect.succeed(
+            encodeJson({ data: { repository: { pullRequest: node(5, "feature/x") } } }),
+          ),
+        rest: () => Effect.succeed(repository("acme/web")),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
+      const error = yield* gh
+        .checkoutPullRequest({ cwd: "/repo", reference: "5" })
+        .pipe(Effect.flip);
+      assert.strictEqual(error.detail, "The pull request could not be checked out with git.");
+      assert.notInclude(error.message, "secret-path");
+    }).pipe(Effect.provide(layer));
+  });
+
   it("names the local branch the way gh pr checkout does", () => {
     const name = (headRefName: string, isCrossRepository: boolean) =>
-      GitHubCli.pullRequestCheckoutBranchName({
+      GitHubRepositoryApi.pullRequestCheckoutBranchName({
         headRefName,
         headOwner: "someone",
         isCrossRepository,

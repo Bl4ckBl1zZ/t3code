@@ -1,4 +1,4 @@
-import { ComposerCitationNode } from "./ComposerCitationNode";
+import { $removeInsertedCitation, ComposerCitationNode } from "./ComposerCitationNode";
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $copyNode, $getRoot, $isElementNode, PASTE_COMMAND, type LexicalEditor } from "lexical";
@@ -209,5 +209,30 @@ describe("composer citation serialization", () => {
     await renderPrompt("");
     await act(() => lexicalEditor.setEditorState(lexicalEditor.parseEditorState(exported)));
     expect(editorRef.current?.readSnapshot().value).toBe(text);
+  });
+
+  it.each([
+    ["explain", "explain"],
+    ["explain ", "explain "],
+    ["", ""],
+  ])("cancelling a fresh citation after %j removes the spaces it added", async (before, after) => {
+    const href = "t3-citation://v1/e/t/m?text=Selected+answer&start=0&end=15&prefix=&suffix=";
+    const separator = before.length > 0 && !before.endsWith(" ") ? " " : "";
+    await renderPrompt(`${before}${separator}[Assistant quote](${href}) `);
+    await act(() => {
+      lexicalEditor.update(
+        () => {
+          const paragraph = $getRoot().getFirstChild();
+          if (!$isElementNode(paragraph)) throw new Error("Missing paragraph");
+          const citation = paragraph
+            .getChildren()
+            .find((node) => node instanceof ComposerCitationNode);
+          if (!(citation instanceof ComposerCitationNode)) throw new Error("Missing citation");
+          $removeInsertedCitation(citation, { before: separator.length > 0, after: true });
+        },
+        { discrete: true },
+      );
+    });
+    expect(editorRef.current?.readSnapshot().value).toBe(after);
   });
 });

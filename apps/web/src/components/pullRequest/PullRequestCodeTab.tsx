@@ -612,6 +612,20 @@ export function PullRequestCodeTab({
     [],
   );
 
+  // Find can ask again before the unfolded file arrives, so this unfolds and never folds.
+  const unfoldFile = useCallback(
+    (fileKey: string) =>
+      setToggledFiles((current) => {
+        const mode = foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded");
+        if (!isFileDiffCollapsed(fileKey, mode, current)) return current;
+        const next = new Set(current);
+        if (next.has(fileKey)) next.delete(fileKey);
+        else next.add(fileKey);
+        return next;
+      }),
+    [foldOverride, settings.diffFilesCollapsed],
+  );
+
   const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);
   const revealFile = useCallback(
     (path: string) => {
@@ -1430,6 +1444,7 @@ export function PullRequestCodeTab({
             renderHeaderPrefix={renderHeaderPrefix}
             renderHeaderMetadata={renderHeaderMetadata}
             renderAnnotation={renderAnnotation}
+            onRevealSearchMatch={(item) => unfoldFile(item.id)}
             unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
           />
           {reviewOverlay}

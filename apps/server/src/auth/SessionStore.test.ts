@@ -1,3 +1,4 @@
+import { AuthStandardClientScopes } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -15,6 +16,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as AuthSessions from "../persistence/AuthSessions.ts";
 import * as SessionStore from "./SessionStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import { base64UrlDecodeUtf8, base64UrlEncode, signPayload } from "./utils.ts";
 
 const makeServerConfigLayer = (
   overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken">>,
@@ -112,6 +114,32 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
       expect((yield* sessions.verify(uncapped.token)).runtimeModeCeiling).toBeUndefined();
     }).pipe(Effect.provide(makeSessionStoreLayer())),
   );
+  it.effect("keeps recorded scopes unchanged for both token versions", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const legacyScopes = ["orchestration:read", "terminal:operate", "review:write"] as const;
+      const issued = yield* sessions.issue({ subject: "one-time-token", scopes: legacyScopes });
+      // Accept prerelease v2 credentials without widening their recorded grant.
+      const [encodedPayload] = issued.token.split(".");
+      const currentClaims = base64UrlDecodeUtf8(encodedPayload!);
+      expect(currentClaims).toContain('"v":1');
+      const legacyPayload = base64UrlEncode(currentClaims.replace('"v":1', '"v":2'));
+      const secret = yield* secrets.getOrCreateRandom("server-signing-key", 32);
+      const legacyToken = `${legacyPayload}.${signPayload(legacyPayload, secret)}`;
+
+      expect((yield* sessions.verify(issued.token)).scopes).toEqual(legacyScopes);
+      expect((yield* sessions.verify(legacyToken)).scopes).toEqual(legacyScopes);
+    }).pipe(
+      Effect.provide(
+        SessionStore.layer.pipe(
+          Layer.provideMerge(ServerSecretStore.layer),
+          Layer.provide(SqlitePersistenceMemory),
+          Layer.provide(makeServerConfigLayer()),
+        ),
+      ),
+    ),
+  );
   it.effect("rejects malformed session tokens", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStore.SessionStore;
@@ -168,13 +196,7 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
 
       expect(verified.method).toBe("bearer-access-token");
       expect(verified.subject).toBe("test-clock");
-      expect(verified.scopes).toEqual([
-        "orchestration:read",
-        "orchestration:operate",
-        "terminal:operate",
-        "review:write",
-        "relay:read",
-      ]);
+      expect(verified.scopes).toEqual(AuthStandardClientScopes);
     }).pipe(Effect.provide(Layer.merge(makeSessionStoreLayer(), TestClock.layer()))),
   );
 

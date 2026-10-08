@@ -376,6 +376,11 @@ const makeEventStore = Effect.gen(function* () {
         causation_event_id,
         correlation_id
       FROM orchestration_events
+      ${
+        // The sequence range otherwise wins and a command lookup scans every
+        // V2 event, which blocks the server for seconds on large histories.
+        input.commandId === undefined ? sql`` : sql`INDEXED BY idx_orch_events_command_id`
+      }
       WHERE sequence > ${input.afterSequence}
         AND sequence <= ${input.throughSequence ?? Number.MAX_SAFE_INTEGER}
         AND (
@@ -383,7 +388,7 @@ const makeEventStore = Effect.gen(function* () {
           OR (application_event_version = 2 AND aggregate_kind = 'thread')
         )
         AND (${input.threadId ?? null} IS NULL OR stream_id = ${input.threadId ?? null})
-        AND (${input.commandId ?? null} IS NULL OR command_id = ${input.commandId ?? null})
+        ${input.commandId === undefined ? sql`` : sql`AND command_id = ${input.commandId}`}
       ORDER BY sequence ASC
       LIMIT ${input.limit}
     `;

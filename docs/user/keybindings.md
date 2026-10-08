@@ -38,6 +38,14 @@ background, and opens a fresh new-thread composer.
 To step a new thread to the next machine instead of opening the machine menu, bind **Composer:
 Cycle Host** (`composer.cycleHost`) in Keybindings. It has no default shortcut.
 
+## Find in a diff
+
+Click into a diff in the Diff panel or a pull request's Code tab, then press `mod+f` to search
+every file in it, including folded files and unchanged lines hidden between changes. Enter and
+`Shift+Enter` move between matches, and a match in a folded file opens it. Escape closes the
+search. This shortcut is not configurable. A pull request diff that loads in slices only searches
+the files loaded so far.
+
 ## Rule Shape
 
 - `key` (required): shortcut string, like `mod+j`, `ctrl+k`, `cmd+shift+d`

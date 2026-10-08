@@ -59,3 +59,17 @@ export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectSc
 export function teardownProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
   return scripts.find((script) => script.runOnWorktreeDelete === true) ?? null;
 }
+
+export function settleProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
+  return scripts.find((script) => script.runOnSettle === true) ?? null;
+}
+
+/** Menu label naming the lifecycle roles a script runs in, e.g. "Clean (on settle)". */
+export function projectScriptMenuLabel(script: ProjectScript): string {
+  const roles = [
+    ...(script.runOnWorktreeCreate ? ["setup"] : []),
+    ...(script.runOnWorktreeDelete ? ["teardown"] : []),
+    ...(script.runOnSettle ? ["on settle"] : []),
+  ];
+  return roles.length === 0 ? script.name : `${script.name} (${roles.join(", ")})`;
+}

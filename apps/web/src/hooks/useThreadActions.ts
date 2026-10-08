@@ -9,7 +9,12 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
-import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import {
+  AuthSourceControlWriteScope,
+  EnvironmentId,
+  type ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -21,6 +26,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { terminalEnvironment } from "../state/terminal";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
+import { readEnvironmentScope } from "../state/session";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -513,6 +519,9 @@ export function useThreadActions() {
               ? (readProject({ environmentId, projectId: owner.projectId })?.workspaceRoot ?? null)
               : null;
             if (projectCwd === null) return [];
+            // Removing a worktree is a source-control write; without that
+            // grant the thread is deleted and its worktree is kept.
+            if (!readEnvironmentScope(environmentId, AuthSourceControlWriteScope)) return [];
             // A Scratch thread's folder is not a git worktree, and deleting the
             // thread keeps its files.
             const scratchWorkspaceRoot = appAtomRegistry

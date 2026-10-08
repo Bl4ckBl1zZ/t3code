@@ -49,6 +49,7 @@ import { newProjectId } from "../../lib/utils";
 import { agentSessionImport } from "../../state/agentSessions";
 import { readProjects, useProjects } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
+import { resolveOnboardingSetup } from "../../onboarding/targetEnvironment.logic";
 import { useProjectScans } from "../../onboarding/useProjectScans";
 import { projectEnvironment } from "../../state/projects";
 import { serverEnvironment } from "../../state/server";
@@ -57,6 +58,7 @@ import { connectPairing } from "../../connection/onboarding";
 import { getProviderSummary } from "../settings/providerStatus";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
+import { presentSavedCloudEnvironmentConnection } from "../cloud/cloudEnvironmentConnectionPresentation";
 import { HermesSetup } from "../HermesSetup";
 import { ClaudeAI, HermesIcon, OpenAI } from "../Icons";
 import { T3Wordmark } from "../T3Wordmark";
@@ -115,11 +117,14 @@ export function WelcomeWizard({
     for (const environment of newComputers) {
       autoSelectedComputers.current.add(environment.environmentId);
     }
+    // A computer the user switched off stays unselected until they pick it.
+    const enabledComputers = newComputers.filter((environment) => environment.entry.enabled);
+    if (enabledComputers.length === 0) return;
     setSelection(
       (current) =>
         new Set([
           ...(current ?? []),
-          ...newComputers.map((environment) => environment.environmentId),
+          ...enabledComputers.map((environment) => environment.environmentId),
         ]),
     );
   }, [environments]);
@@ -226,11 +231,7 @@ export function WelcomeWizard({
               selectedIds={selectedIds}
               onSelectionChange={setSelection}
               onContinue={() =>
-                startSetup(
-                  environments
-                    .filter((environment) => selectedIds.has(environment.environmentId))
-                    .map((environment) => environment.environmentId),
-                )
+                startSetup(resolveOnboardingSetup(environments, selectedIds).environmentIds)
               }
               onPaired={(environmentId) => {
                 setSelection(new Set([...selectedIds, environmentId]));
@@ -272,14 +273,10 @@ function ConnectionStep({
   const directEnvironments = environments;
   const [pairingOpen, setPairingOpen] = useState(expandPairingInitially);
   const [isPairing, setIsPairing] = useState(false);
-  const ready =
-    selectedIds.size > 0 &&
-    [...selectedIds].every((id) =>
-      environments.some(
-        (environment) =>
-          environment.environmentId === id && environment.connection.phase === "connected",
-      ),
-    );
+  const { ready, skippedIds } = resolveOnboardingSetup(environments, selectedIds);
+  const skippedLabels = environments
+    .filter((environment) => skippedIds.includes(environment.environmentId))
+    .map((environment) => environment.label);
   const continueRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (
@@ -322,7 +319,7 @@ function ConnectionStep({
                     {environment.label}
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {environment.connection.phase === "connected" ? "Connected" : "Connecting…"}
+                    {presentSavedCloudEnvironmentConnection(environment.connection).buttonLabel}
                   </span>
                 </span>
                 {environment.displayUrl ? (
@@ -370,6 +367,12 @@ function ConnectionStep({
           </Collapsible>
         </div>
       </div>
+      {skippedLabels.length > 0 ? (
+        <p className="mt-4 text-xs text-muted-foreground">
+          Not connected, so setup skips {skippedLabels.join(", ")}. You can set{" "}
+          {skippedLabels.length === 1 ? "it" : "them"} up later from Settings.
+        </p>
+      ) : null}
       <div className="mt-6 flex flex-col-reverse gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
         <p className="min-w-0 text-xs leading-relaxed text-muted-foreground">
           T3 Code collects anonymous usage data to help us improve it. To read more about how your

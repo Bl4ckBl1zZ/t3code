@@ -18,6 +18,8 @@ export type AssetUrlState =
   | {
       readonly _tag: "Success";
       readonly url: string;
+      /** When the signed URL stops working, in epoch milliseconds. */
+      readonly expiresAt: number;
       readonly sourcePath?: string;
       readonly imageDimensions?: AssetImageDimensions;
     };
@@ -45,6 +47,7 @@ export function useAssetUrlState(
     : {
         _tag: "Success",
         url,
+        expiresAt: result.value.expiresAt,
         ...(result.value.imageDimensions ? { imageDimensions: result.value.imageDimensions } : {}),
         ...(result.value.sourcePath !== undefined ? { sourcePath: result.value.sourcePath } : {}),
       };

@@ -11,6 +11,7 @@ import {
   type PullRequestRef,
   type PullRequestSummary,
   type PullRequestStack,
+  type ThreadPullRequestKey,
 } from "@t3tools/contracts";
 import { updateLinkedPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as Clock from "effect/Clock";
@@ -85,6 +86,7 @@ function harness(
       input: PullRequestRef,
     ) => Effect.Effect<PullRequestSummary, PullRequestOperationError>;
     readonly stack?: () => Effect.Effect<PullRequestStack | null, PullRequestOperationError>;
+    readonly stateChanges?: Stream.Stream<ThreadPullRequestKey>;
   } = {},
 ) {
   let shells = initial;
@@ -123,6 +125,7 @@ function harness(
       stack: stackRead,
       invalidate: extra.invalidate ?? (() => Effect.void),
       subscribeMerges: Effect.succeed(merges),
+      subscribeStateChanges: Effect.succeed(extra.stateChanges ?? Stream.empty),
     }),
     NodeServices.layer,
   );
@@ -132,6 +135,9 @@ function harness(
     stackRead,
     dispatch,
     shells: () => shells,
+    setShells: (next: OrchestrationV2ThreadShell[]) => {
+      shells = next;
+    },
     remove: (id: string) => {
       shells = shells.map((thread) =>
         thread.id === id
@@ -253,6 +259,51 @@ it.effect("a merge notification refreshes an otherwise idle merged link", () =>
     yield* reactor.drain;
     expect(h.shells()[0]?.pullRequests?.[0]?.snapshot?.title).toBe("Confirmed merge");
     expect(h.summary).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("syncs a pull request a reader saw merge without waiting for the sweep", () =>
+  Effect.gen(function* () {
+    const stateChanges = yield* Queue.unbounded<ThreadPullRequestKey>();
+    const invalidated: Array<number> = [];
+    const requested = yield* Deferred.make<void>();
+    let state: PullRequestSummary["state"] = "open";
+    const thread = shell("agent");
+    const h = harness(
+      [
+        {
+          ...thread,
+          pullRequests:
+            thread.pullRequests?.map((link) => ({
+              ...link,
+              snapshot: { ...overview, isDraft: false, closedAt: null, syncedAt: at },
+            })) ?? [],
+        },
+      ],
+      Effect.succeed(overview),
+      null,
+      Stream.empty,
+      {
+        stateChanges: Stream.fromQueue(stateChanges),
+        invalidate: ({ reference }) =>
+          Effect.sync(() => invalidated.push(reference?.number ?? -1)).pipe(
+            Effect.andThen(Deferred.succeed(requested, undefined)),
+          ),
+        summary: () =>
+          Effect.sync(() => (state === "merged" ? { ...overview, state, mergedAt: at } : overview)),
+      },
+    );
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.start();
+    yield* reactor.drain;
+    state = "merged";
+
+    // The clock stays put: the next sweep is still a minute away.
+    yield* Queue.offer(stateChanges, key);
+    yield* Deferred.await(requested);
+    yield* reactor.drain;
+    expect(invalidated).toEqual([1]);
+    expect(h.shells()[0]?.pullRequests?.[0]?.snapshot?.state).toBe("merged");
   }).pipe(Effect.scoped),
 );
 
@@ -437,5 +488,96 @@ it.effect("pauses the host when only its stack read is rate limited", () =>
     yield* reactor.drain;
     expect(reads()).toEqual([2, 2]);
     expect(h.dispatch).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped),
+);
+
+const withSnapshot = (
+  thread: OrchestrationV2ThreadShell,
+  states: Record<number, PullRequestSummary["state"]>,
+): OrchestrationV2ThreadShell => {
+  const linked = { ...thread, pullRequests: [] } as OrchestrationV2ThreadShell;
+  for (const number of Object.keys(states).map(Number)) {
+    Object.assign(
+      linked,
+      updateLinkedPullRequests(
+        linked,
+        { linkPullRequest: { ...ref, number, url: `https://github.com/org/repo/pull/${number}` } },
+        at,
+      ),
+    );
+  }
+  return {
+    ...linked,
+    pullRequests:
+      linked.pullRequests?.map((link) => ({
+        ...link,
+        snapshot: {
+          ...overview,
+          number: link.number,
+          state: states[link.number]!,
+          isDraft: false,
+          closedAt: null,
+          syncedAt: at,
+        },
+      })) ?? [],
+  } as OrchestrationV2ThreadShell;
+};
+
+it.effect("leaves a settled thread's links unread until the thread is unsettled", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(at));
+    const settled = {
+      ...withSnapshot(shell("settled"), { 5: "open", 6: "closed" }),
+      settledOverride: "settled",
+      settledAt: at,
+    } as unknown as OrchestrationV2ThreadShell;
+    const h = harness([settled]);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    // A request for a pull request no thread links runs a sweep and reads nothing else.
+    const sweep = Effect.gen(function* () {
+      yield* TestClock.adjust("1 minute");
+      yield* reactor.requestSync({ ...key, number: 999 });
+      yield* reactor.drain;
+    });
+
+    for (let index = 0; index < 16; index += 1) yield* sweep;
+    expect(h.summary).not.toHaveBeenCalled();
+
+    h.setShells(
+      h.shells().map((thread) => ({ ...thread, settledOverride: null, settledAt: null })),
+    );
+    yield* sweep;
+    expect(h.summary.mock.calls.map(([input]) => input.number).toSorted()).toEqual([5, 6]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("auto-links missing native stack layers on active threads only", () =>
+  Effect.gen(function* () {
+    const settled = {
+      ...shell("settled"),
+      settledOverride: "settled",
+      settledAt: at,
+    } as unknown as OrchestrationV2ThreadShell;
+    const h = harness([shell("one"), settled], Effect.succeed(overview), stack);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.requestSync(key);
+    yield* reactor.drain;
+
+    const commands = h.dispatch.mock.calls.flatMap(([command]) =>
+      command.type === "thread.metadata.update" ? [command] : [],
+    );
+    expect(
+      commands
+        .filter((command) => command.syncPullRequest !== undefined)
+        .map((command) => [command.threadId, command.syncPullRequest?.stack?.kind]),
+    ).toEqual([
+      [ThreadId.make("one"), "native"],
+      [ThreadId.make("settled"), "native"],
+    ]);
+    expect(
+      commands
+        .filter((command) => command.linkPullRequest !== undefined)
+        .map((command) => [command.threadId, command.linkPullRequest?.number]),
+    ).toEqual([[ThreadId.make("one"), 2]]);
   }).pipe(Effect.scoped),
 );

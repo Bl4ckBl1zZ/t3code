@@ -2,6 +2,10 @@ import type { ToolActivitySource } from "@t3tools/contracts";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import * as Equal from "effect/Equal";
 import {
+  assistantCitationLabel,
+  collectAssistantCitations,
+} from "@t3tools/shared/assistantCitations";
+import {
   formatDuration,
   workLogEntryIsVisible,
   workEntryIndicatesToolSuccess,
@@ -10,13 +14,20 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
-import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import {
+  type ChatMessage,
+  type ProposedPlan,
+  type ThreadShell,
+  type TurnDiffSummary,
+} from "../../types";
 import {
   type MessageId,
   orchestrationV2CommandExecutionIsLiveInBackground,
   type OrchestrationV2ProjectedTurnItem,
   type RunAttemptId,
   RunId,
+  type ThreadId,
+  type TurnItemId,
 } from "@t3tools/contracts";
 import type { ThreadRunSummary } from "@t3tools/client-runtime/state/shell";
 import {
@@ -25,6 +36,7 @@ import {
   type T3McpToolPresentation,
 } from "@t3tools/shared/t3McpToolPresentation";
 import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
+import { mcpAppReferencesEqual, type McpAppReference } from "@t3tools/shared/mcpApp";
 import { orchestrationV2TimelineDayKey } from "@t3tools/shared/orchestrationV2Timeline";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -408,6 +420,8 @@ export type MessagesTimelineRow =
       groupedEntries: WorkLogEntry[];
       liveEntry?: WorkLogEntry;
       liveStartedAt?: string | null;
+      /** Latest reasoning in the live group, shown above the live status line. */
+      liveThought?: WorkLogEntry;
     }
   | {
       kind: "turn-fold";
@@ -463,6 +477,15 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
+  | {
+      kind: "mcp-app";
+      id: string;
+      createdAt: string;
+      sourceThreadId: ThreadId;
+      itemId: TurnItemId;
+      revision: string;
+      mcpApp: McpAppReference;
+    }
   | { kind: "working"; id: string; createdAt: string | null };
 
 export interface StableMessagesTimelineRowsState {
@@ -510,6 +533,37 @@ export function normalizeCompactToolLabel(value: string): string {
 
 export type TimelineToolPresentation = T3McpToolPresentation;
 export const resolveTimelineToolPresentation = resolveT3McpToolPresentation;
+
+/** The trimmed thread id a `t3_thread_read` call targets, or null for any other entry. */
+export function threadReadTargetId(entry: Pick<WorkLogEntry, "structuredPayload">) {
+  const item = entry.structuredPayload;
+  if (item?.type !== "dynamic_tool") return null;
+  if (resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "thread-read") return null;
+  const input = item.input;
+  const threadId =
+    input !== null && typeof input === "object" && "threadId" in input ? input.threadId : null;
+  return typeof threadId === "string" && threadId.trim().length > 0 ? threadId.trim() : null;
+}
+
+const THREAD_READ_OBJECT = " a T3 thread";
+
+/** The live title of a read thread; archived, deleted, or untitled threads keep the generic label. */
+export function threadReadTargetTitle(
+  shell: Pick<ThreadShell, "title" | "archivedAt" | "deletedAt"> | null,
+) {
+  if (!shell || shell.archivedAt !== null || shell.deletedAt !== null) return null;
+  return shell.title.trim() || null;
+}
+
+/**
+ * Names the read thread in place of the generic object ("Read a T3 thread" becomes
+ * `Read thread “Title”`), keeping the label's tense. Null keeps the generic label.
+ */
+export function threadReadLabelPrefix(label: string) {
+  return label.endsWith(THREAD_READ_OBJECT)
+    ? `${label.slice(0, -THREAD_READ_OBJECT.length)} thread`
+    : null;
+}
 
 export function resolveAssistantMessageCopyState({
   text,
@@ -664,6 +718,9 @@ function timelineEntryFoldRunId(entry: TimelineEntry, runlessKey: RunId | null):
   }
   if (entry.kind === "event" && timelineEntryIsPersistentResourceCard(entry)) {
     return entry.projectedItem.item.runId ?? runlessKey;
+  }
+  if (entry.kind === "mcp-app") {
+    return entry.runId ?? runlessKey;
   }
   return null;
 }
@@ -1025,6 +1082,19 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "mcp-app") {
+      nextRows.push({
+        kind: "mcp-app",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        sourceThreadId: timelineEntry.sourceThreadId,
+        itemId: timelineEntry.itemId,
+        revision: timelineEntry.revision,
+        mcpApp: timelineEntry.mcpApp,
+      });
+      continue;
+    }
+
     const assistantTurnStillInProgress =
       timelineEntry.message.role === "assistant" &&
       (timelineEntry.message.runId == null
@@ -1076,6 +1146,14 @@ export function deriveMessagesTimelineRows(input: {
   if (lastRow?.kind === "work" && liveEntry) {
     lastRow.liveEntry = liveEntry;
     lastRow.liveStartedAt = input.activeTurnStartedAt;
+    // A finding stays readable while the next tool call runs.
+    const liveThought = lastRow.groupedEntries.findLast(
+      (entry) =>
+        entry.itemType === "reasoning" &&
+        workLogEntryIsVisible(entry) &&
+        (entry.detail?.trim() ?? "") !== "",
+    );
+    if (liveThought) lastRow.liveThought = liveThought;
   }
   const mergedRows = insertDayDividers(mergeRelatedThreadRuns(mergeAgentUpdateRuns(nextRows)));
 
@@ -1246,6 +1324,17 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;
+
+    case "mcp-app": {
+      // An equal app keeps its live frame and its state.
+      const bm = b as typeof a;
+      return (
+        a.createdAt === bm.createdAt &&
+        a.revision === bm.revision &&
+        mcpAppReferencesEqual(a.mcpApp, bm.mcpApp)
+      );
+    }
+
     case "work": {
       const other = b as typeof a;
       return (
@@ -1291,4 +1380,32 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
   }
+}
+
+const MAX_COLLAPSED_USER_MESSAGE_LINES = 8;
+const MAX_COLLAPSED_USER_MESSAGE_LENGTH = 600;
+const MARKDOWN_LINK = /!?\[([^\]\n]*)\]\((?:<[^>\n]*>|[^\s)]*)\)/g;
+
+/** Approximates what a user message renders as: quote chips and links count by their label. */
+function visibleUserMessageText(text: string): string {
+  const linkLabels = (segment: string) => segment.replace(MARKDOWN_LINK, "$1");
+  let visible = "";
+  let cursor = 0;
+  for (const match of collectAssistantCitations(text)) {
+    visible += linkLabels(text.slice(cursor, match.start)) + assistantCitationLabel(match.citation);
+    cursor = match.end;
+  }
+  return visible + linkLabels(text.slice(cursor));
+}
+
+export function shouldCollapseUserMessage(text: string): boolean {
+  const visible = visibleUserMessageText(text);
+  if (visible.trim().length === 0) {
+    return false;
+  }
+
+  return (
+    visible.length > MAX_COLLAPSED_USER_MESSAGE_LENGTH ||
+    visible.split("\n").length > MAX_COLLAPSED_USER_MESSAGE_LINES
+  );
 }

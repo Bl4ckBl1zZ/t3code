@@ -3,6 +3,7 @@ import { RunId, RuntimeRequestId, type ThreadPullRequestLink } from "@t3tools/co
 import * as DateTime from "effect/DateTime";
 import {
   isAutoSettlementCandidate,
+  isSnoozed,
   resolveAutoSettlementAt,
   type SettlementThread,
   type SettlementPullRequest,
@@ -183,5 +184,63 @@ describe("V2 automatic settlement policy", () => {
       decide(optedOut, { state: "merged", mergedAt: "2026-09-10T12:00:00Z" }, null),
     ).toBeNull();
     expect(decide({ autoSettleDisabledAt: null })).toEqual(before);
+  });
+});
+
+describe("isSnoozed", () => {
+  const snoozed = { snoozedAt: before, snoozedUntil: date("2026-09-12T12:00:00Z") };
+  it("wakes for completed work after the snooze, but not an interrupted run", () => {
+    expect(isSnoozed(thread(snoozed), now)).toBe(true);
+    expect(
+      isSnoozed(
+        thread({
+          ...snoozed,
+          status: "interrupted",
+          latestRunCompletedAt: date("2026-09-10T12:00:00Z"),
+        }),
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      isSnoozed(
+        thread({
+          ...snoozed,
+          status: "completed",
+          latestRunCompletedAt: date("2026-09-10T12:00:00Z"),
+        }),
+        now,
+      ),
+    ).toBe(false);
+    expect(isSnoozed(thread({ ...snoozed, snoozedUntil: date("2026-09-11T11:59:59Z") }), now)).toBe(
+      false,
+    );
+  });
+
+  it("wakes for a failure after the snooze or a pending request, and never without a wake time", () => {
+    expect(
+      isSnoozed(
+        thread({
+          ...snoozed,
+          status: "failed",
+          latestRunCompletedAt: date("2026-09-10T12:00:00Z"),
+        }),
+        now,
+      ),
+    ).toBe(false);
+    expect(isSnoozed(thread({ ...snoozed, status: "failed" }), now)).toBe(true);
+    expect(
+      isSnoozed(
+        thread({
+          ...snoozed,
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("request:snoozed"),
+            kind: "user_input",
+            createdAt: before,
+          },
+        }),
+        now,
+      ),
+    ).toBe(false);
+    expect(isSnoozed(thread(), now)).toBe(false);
   });
 });

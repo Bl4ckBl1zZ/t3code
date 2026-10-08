@@ -18,6 +18,8 @@ import {
 } from "./proactivePanels";
 import { ComposerBanner } from "./chat/ComposerBanner";
 import { ComposerSurface } from "./chat/ComposerSurface";
+import { ThreadStatusLine } from "./chat/ThreadStatusLine";
+import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../timestampFormat";
 import {
   isSameSidebarThreadRef,
   useSidebarPendingFileDropStore,
@@ -142,6 +144,7 @@ import {
   selectRunningProjectScriptTerminal,
 } from "@t3tools/client-runtime/state/terminal";
 import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { useDiffPanelStore } from "../diffPanelStore";
@@ -272,16 +275,24 @@ import {
   commandForProjectScript,
   nextProjectScriptId,
   projectScriptIdFromCommand,
+  releaseClaimedRoles,
 } from "~/projectScripts";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import {
+  applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   NO_PROVIDER_MODEL_SELECTION,
   shouldShowInstanceBadge,
 } from "../providerInstances";
+import {
+  hasAvailableClaudeCompactionProvider,
+  hasDismissedResumeCompaction,
+  shouldOfferResumeCompaction,
+} from "./chat/ContextWindowMeter.logic";
+import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
 import {
   useClientSettings,
   useClientSettingsHydrated,
@@ -1521,6 +1532,15 @@ function ChatViewContent(props: ChatViewProps) {
     [serverProjection],
   );
   const serverVisibleTurnItems = useThreadVisibleTurnItems(routeThreadDetailRef);
+  const activeContextWindow = useMemo(
+    () =>
+      deriveLatestContextWindowSnapshot(
+        serverVisibleTurnItems,
+        activeThreadLiveTokenUsage,
+        activeThreadProviderThread,
+      ),
+    [serverVisibleTurnItems, activeThreadLiveTokenUsage, activeThreadProviderThread],
+  );
   const committedServerMessageIds = useMemo(
     () => deriveCommittedServerUserMessageIds(serverVisibleTurnItems),
     [serverVisibleTurnItems],
@@ -2663,11 +2683,6 @@ function ChatViewContent(props: ChatViewProps) {
   const openConnectionSettings = useCallback(() => {
     void navigate({ to: "/settings/connections" });
   }, [navigate]);
-  const handleDismissVersionMismatch = useCallback(() => {
-    if (!versionMismatchDismissKey) return;
-    dismissVersionMismatch(versionMismatchDismissKey);
-    setDismissedVersionMismatchKey(versionMismatchDismissKey);
-  }, [setDismissedVersionMismatchKey, versionMismatchDismissKey]);
   const versionMismatchEnvironmentId =
     versionMismatch && activeThread ? activeThread.environmentId : null;
   const serverUpdateEnvironmentId = activeThread?.environmentId ?? null;
@@ -3409,6 +3424,48 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const compactionProviderAvailable = useMemo(
+    () =>
+      hasAvailableClaudeCompactionProvider({
+        providers: applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(providerStatuses),
+          settings,
+        ),
+        instanceId: activeProviderInstanceId,
+        lockedInstanceId: lockedProvider
+          ? (activeRuntime?.providerInstanceId ?? activeThread?.modelSelection.instanceId ?? null)
+          : null,
+      }),
+    [
+      activeProviderInstanceId,
+      activeRuntime?.providerInstanceId,
+      activeThread?.modelSelection.instanceId,
+      lockedProvider,
+      providerStatuses,
+      settings,
+    ],
+  );
+  // Answering Claude's own resume prompt with "Don't ask again" also stops
+  // Compact and send for this provider instance.
+  const [resumeCompactionPermanentlyDismissed, setResumeCompactionPermanentlyDismissed] =
+    useLocalStorage(
+      `t3code:resume-compaction-dismissed:${environmentId}:${activeProviderInstanceId ?? "claudeAgent"}`,
+      false,
+      Schema.Boolean,
+    );
+  const nativeResumeCompactionDismissed = useMemo(
+    () => hasDismissedResumeCompaction(serverProjection?.runtimeRequests ?? []),
+    [serverProjection?.runtimeRequests],
+  );
+  useEffect(() => {
+    if (nativeResumeCompactionDismissed && !resumeCompactionPermanentlyDismissed) {
+      setResumeCompactionPermanentlyDismissed(true);
+    }
+  }, [
+    nativeResumeCompactionDismissed,
+    resumeCompactionPermanentlyDismissed,
+    setResumeCompactionPermanentlyDismissed,
+  ]);
   const providerStatusBannerKey = getProviderStatusBannerKey(activeProviderStatus);
   const [dismissedProviderStatusBannerKey, setDismissedProviderStatusBannerKey] = useState<
     string | null
@@ -4411,18 +4468,8 @@ function ChatViewContent(props: ChatViewProps) {
         activeProject.scripts.map((script) => script.id),
       );
       const nextScript = buildProjectScript(nextId, input);
-      // Only one setup and one teardown script are honored per project, so
-      // claiming either flag clears it on every other script.
       const nextScripts = [
-        ...activeProject.scripts.map((script) => ({
-          ...script,
-          ...(input.runOnWorktreeCreate && script.runOnWorktreeCreate
-            ? { runOnWorktreeCreate: false }
-            : {}),
-          ...(input.runOnWorktreeDelete && script.runOnWorktreeDelete
-            ? { runOnWorktreeDelete: false }
-            : {}),
-        })),
+        ...activeProject.scripts.map((script) => releaseClaimedRoles(script, input)),
         nextScript,
       ];
 
@@ -4452,17 +4499,7 @@ function ChatViewContent(props: ChatViewProps) {
 
       const updatedScript = buildProjectScript(existingScript.id, input);
       const nextScripts = activeProject.scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : {
-              ...script,
-              ...(input.runOnWorktreeCreate && script.runOnWorktreeCreate
-                ? { runOnWorktreeCreate: false }
-                : {}),
-              ...(input.runOnWorktreeDelete && script.runOnWorktreeDelete
-                ? { runOnWorktreeDelete: false }
-                : {}),
-            },
+        script.id === scriptId ? updatedScript : releaseClaimedRoles(script, input),
       );
 
       return persistProjectScripts({
@@ -5865,6 +5902,8 @@ function ChatViewContent(props: ChatViewProps) {
       frame = window.requestAnimationFrame(() => {
         frame = window.requestAnimationFrame(() => {
           frame = null;
+          // A full-screen app owns the page; refocusing the composer would close it.
+          if (document.querySelector("[data-mcp-app-fullscreen]") !== null) return;
           if (shouldRefocusComposerOnWindowFocus(document.activeElement)) focusComposer();
         });
       });
@@ -6230,49 +6269,47 @@ function ChatViewContent(props: ChatViewProps) {
     switchGitRef,
     updateThreadMetadata,
   ]);
-  // The stack renders items[0] front-most and tucks the rest behind hover, so
-  // ordering is priority: system banners, then the branch-mismatch notice,
-  // and the informational parked-thread banner last — it must never cover another.
-  const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
-    if (!activeThreadSnoozed && !activeThreadSettled) {
-      return null;
-    }
-    const isSnoozed = activeThreadSnoozed;
-    return {
-      id: `thread-${isSnoozed ? "snoozed" : "settled"}:${activeThread?.id ?? "unknown"}`,
-      variant: "info",
-      icon: isSnoozed ? <AlarmClockIcon /> : <CheckCircle2Icon />,
-      title: `This thread is ${isSnoozed ? "snoozed" : "settled"}`,
-      description: isSnoozed
-        ? "Sending a message wakes it and moves it back to Active in the sidebar."
-        : "Sending a message moves it back to Active in the sidebar.",
-      actions: (
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={isSnoozed ? isUnsnoozing : isUnsettling}
-          onClick={() =>
-            void (isSnoozed ? handleUnsnoozeActiveThread() : handleUnsettleActiveThread())
-          }
-        >
-          {isSnoozed
-            ? isUnsnoozing
-              ? "Waking..."
-              : "Wake now"
-            : isUnsettling
-              ? "Un-settling..."
-              : "Un-settle"}
-        </Button>
-      ),
-    };
+  // Settled and snoozed are thread state, not composer actions: each gets one
+  // quiet line after the last message instead of a banner. Memoized: it is the
+  // timeline's list footer, and a new element re-renders that footer. nowMinute
+  // keeps the relative time fresh.
+  const threadStatusLine = useMemo(() => {
+    void nowMinute;
+    return activeThreadSnoozed ? (
+      <ThreadStatusLine
+        icon={<AlarmClockIcon />}
+        label={
+          activeThreadShell?.snoozedUntil
+            ? `Snoozed, ${formatRelativeTimeUntilLabel(activeThreadShell.snoozedUntil)}`
+            : "Snoozed"
+        }
+        actionLabel={isUnsnoozing ? "Waking..." : "Wake now"}
+        actionDisabled={isUnsnoozing}
+        onAction={() => void handleUnsnoozeActiveThread()}
+      />
+    ) : activeThreadSettled ? (
+      <ThreadStatusLine
+        icon={<CheckCircle2Icon />}
+        label={
+          activeThreadShell?.settledAt
+            ? `Settled ${formatRelativeTimeLabel(activeThreadShell.settledAt)}`
+            : "Settled"
+        }
+        actionLabel={isUnsettling ? "Un-settling..." : "Un-settle"}
+        actionDisabled={isUnsettling}
+        onAction={() => void handleUnsettleActiveThread()}
+      />
+    ) : null;
   }, [
-    activeThread?.id,
     activeThreadSettled,
+    activeThreadShell?.settledAt,
+    activeThreadShell?.snoozedUntil,
     activeThreadSnoozed,
-    handleUnsnoozeActiveThread,
     handleUnsettleActiveThread,
-    isUnsnoozing,
+    handleUnsnoozeActiveThread,
     isUnsettling,
+    isUnsnoozing,
+    nowMinute,
   ]);
   const handleRestoreThreadBranch = useCallback(() => {
     if (gitStatusQuery.data?.hasWorkingTreeChanges) {
@@ -6303,6 +6340,30 @@ function ChatViewContent(props: ChatViewProps) {
           })
         : null,
     [activeThreadShell, environmentId, serverRuntime, updateThreadMetadata],
+  );
+  // An MCP App's approved `ui/message`: queued like a typed message, so it
+  // never steers or interrupts a running turn.
+  const sendAppMessage = useCallback(
+    async (text: string) => {
+      if (!isServerThread || !activeThread) {
+        throw new Error("Messages from apps need a started thread.");
+      }
+      const result = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          message: { messageId: newMessageId(), role: "user", text, attachments: [] },
+          runtimeMode,
+          interactionMode,
+          dispatchMode: "queue",
+        },
+      });
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        throw error instanceof Error ? error : new Error("Could not send the app's message.");
+      }
+    },
+    [activeThread, environmentId, interactionMode, isServerThread, runtimeMode, startThreadTurn],
   );
   // Commands such as /goal clear run as their own turn. The draft and its
   // attachments stay local.
@@ -6384,6 +6445,68 @@ function ChatViewContent(props: ChatViewProps) {
       startThreadTurn,
     ],
   );
+  // Compaction runs Claude's native `/compact` as its own turn. It needs a
+  // started conversation that is not already just a compaction, and an idle,
+  // reachable Claude session.
+  const activeThreadHasCompactableConversation = serverVisibleTurnItems.some(
+    ({ item }) =>
+      item.type === "user_message" &&
+      (item.text.trim().toLowerCase() !== "/compact" || item.attachments.length > 0),
+  );
+  const compactDisabled =
+    !activeThread ||
+    !activeThreadHasCompactableConversation ||
+    !activeProject ||
+    !isServerThread ||
+    selectedProvider !== "claudeAgent" ||
+    !compactionProviderAvailable ||
+    isWorking ||
+    isRevertingCheckpoint ||
+    serverProjection === null ||
+    isPreparingWorktree ||
+    activeEnvironmentUnavailable ||
+    feedbackUploading ||
+    pendingApprovals.length > 0 ||
+    pendingUserInputs.length > 0 ||
+    showPlanFollowUpPrompt;
+  const compactDisabledReason = compactDisabled
+    ? !activeProject
+      ? "Choose a project before compacting"
+      : !compactionProviderAvailable
+        ? "Enable a Claude provider before compacting"
+        : "Compacting is unavailable right now"
+    : null;
+  const onCompactContext = useCallback(() => {
+    if (compactDisabled) return;
+    void sendStandaloneCommand("/compact", "Could not compact the conversation.");
+  }, [compactDisabled, sendStandaloneCommand]);
+  // Tokens a stale Claude session would re-read on its next turn. While set,
+  // Enter compacts first and the composer's send button says so; "Send with
+  // full history" in its menu skips that once.
+  const resumeCompactionTokens =
+    activeContextWindow &&
+    !resumeCompactionPermanentlyDismissed &&
+    !nativeResumeCompactionDismissed &&
+    !compactDisabled &&
+    shouldOfferResumeCompaction({
+      provider: selectedProvider,
+      usedTokens: activeContextWindow.usedTokens,
+      updatedAt: activeContextWindow.updatedAt,
+      now: `${nowMinute}:00.000Z`,
+    })
+      ? activeContextWindow.usedTokens
+      : null;
+  // Set only for the synchronous span of a "Send with full history" submit;
+  // onSend reads it before its first await.
+  const keepFullHistoryOnceRef = useRef(false);
+  const sendWithFullHistory = useCallback((send: () => void) => {
+    keepFullHistoryOnceRef.current = true;
+    try {
+      send();
+    } finally {
+      keepFullHistoryOnceRef.current = false;
+    }
+  }, []);
   // A native /goal keeps the agent working across turns. Stop pauses a Codex
   // goal; once the thread is idle the row offers the native follow-ups.
   const activeGoal = activeThreadShell?.goal ?? null;
@@ -6426,14 +6549,8 @@ function ChatViewContent(props: ChatViewProps) {
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const goalItems = goalBannerItem === null ? [] : [goalBannerItem];
-    const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [
-        ...limitRecoveryItems,
-        ...systemComposerBannerItems,
-        ...goalItems,
-        ...parkedThreadItems,
-      ];
+      return [...limitRecoveryItems, ...systemComposerBannerItems, ...goalItems];
     }
     return [
       ...limitRecoveryItems,
@@ -6478,7 +6595,6 @@ function ChatViewContent(props: ChatViewProps) {
           setBranchMismatchDismissTick((tick) => tick + 1);
         },
       },
-      ...parkedThreadItems,
     ];
   }, [
     activeBranchMismatchKey,
@@ -6487,7 +6603,6 @@ function ChatViewContent(props: ChatViewProps) {
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
-    parkedThreadBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
   ]);
@@ -7111,6 +7226,7 @@ function ChatViewContent(props: ChatViewProps) {
       image: ComposerImageAttachment | null;
     },
   ) => {
+    const keepFullHistory = keepFullHistoryOnceRef.current;
     if (needsLoadBalancing) {
       e?.preventDefault();
       toastManager.add({
@@ -7444,7 +7560,17 @@ function ChatViewContent(props: ChatViewProps) {
       messageTextWithPreviewAnnotations,
       composerReviewCommentsSnapshot,
     );
-    const shouldQueueBehindActiveRun = phase === "running" && dispatchMode === "queue";
+    // A stale Claude session compacts before this message so the turn does not
+    // re-read the old history. The message queues behind the /compact run,
+    // since steering into it is rejected.
+    const compactBeforeSend =
+      resumeCompactionTokens !== null &&
+      !keepFullHistory &&
+      ctxSelectedProvider === "claudeAgent" &&
+      messageTextForSend.trim().toLowerCase() !== "/compact";
+    const turnDispatchMode = compactBeforeSend ? "queue" : dispatchMode;
+    const shouldQueueBehindActiveRun =
+      compactBeforeSend || (phase === "running" && dispatchMode === "queue");
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -7711,6 +7837,22 @@ function ChatViewContent(props: ChatViewProps) {
       failure = turnAttachmentsResult;
     }
 
+    if (failure === null && compactBeforeSend) {
+      const compactResult = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          message: { messageId: newMessageId(), role: "user", text: "/compact", attachments: [] },
+          modelSelection: ctxSelectedModelSelection,
+          runtimeMode,
+          interactionMode,
+        },
+      });
+      if (compactResult._tag === "Failure") {
+        failure = compactResult;
+      }
+    }
+
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
@@ -7764,7 +7906,7 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: title,
           runtimeMode,
           interactionMode,
-          dispatchMode,
+          dispatchMode: turnDispatchMode,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -8791,15 +8933,6 @@ function ChatViewContent(props: ChatViewProps) {
     ...(isServerThread && isGitRepo ? { onOpenChanges: openChangesFromThreadPanel } : {}),
     onReconnectEnvironment: reconnectActiveEnvironment,
     onOpenConnectionSettings: openConnectionSettings,
-    versionMismatch:
-      showVersionMismatchBanner && versionMismatch
-        ? {
-            clientVersion: versionMismatch.clientVersion,
-            serverVersion: versionMismatch.serverVersion,
-            serverLabel: versionMismatchServerLabel,
-          }
-        : null,
-    onDismissVersionMismatch: handleDismissVersionMismatch,
     onRunProjectScript: runProjectScript,
     onAddProjectScript: saveProjectScript,
     onUpdateProjectScript: updateProjectScript,
@@ -8814,8 +8947,7 @@ function ChatViewContent(props: ChatViewProps) {
     threadPanelPresentation,
     threadPanelPopoverHandle,
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
-    threadPanelHasAttention:
-      activeEnvironmentUnavailableState !== null || showVersionMismatchBanner,
+    threadPanelHasAttention: activeEnvironmentUnavailableState !== null,
     rightPanelAvailable: activeProject !== null && !isHermesConversation,
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),
@@ -8991,12 +9123,20 @@ function ChatViewContent(props: ChatViewProps) {
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 isPreparingWorktree={isPreparingWorktree}
+                footer={threadStatusLine}
                 citationRequest={citationRequest}
                 citationHistoryLoading={serverProjection === null}
                 {...(serverConfig?.environment.capabilities.assistantCitations === true
                   ? { onCiteAssistantText: citeAssistantText }
                   : {})}
                 onUseArtifactTemplate={useArtifactTemplate}
+                onSendAppMessage={sendAppMessage}
+                awaitingUser={
+                  activePendingApproval !== null ||
+                  activePendingUserInput !== null ||
+                  // A secret request has no runtime request; the shell carries it.
+                  activeThreadShell?.hasPendingUserInput === true
+                }
                 {...(activeProject ? { onRunShellCommand: runShellCommand } : {})}
                 key={activeThread.id}
                 isWorking={isWorking}
@@ -9247,9 +9387,12 @@ function ChatViewContent(props: ChatViewProps) {
                               activeThreadModelSelection={activeThread?.modelSelection}
                               onThreadModelOptionsChange={onThreadModelOptionsChange}
                               threadDetailLoading={isServerThread && serverProjection === null}
-                              activeThreadVisibleTurnItems={serverVisibleTurnItems}
-                              activeThreadLiveTokenUsage={activeThreadLiveTokenUsage}
-                              activeThreadProviderThread={activeThreadProviderThread}
+                              activeContextWindow={activeContextWindow}
+                              {...(selectedProvider === "claudeAgent" ? { onCompactContext } : {})}
+                              compactDisabled={compactDisabled}
+                              compactDisabledReason={compactDisabledReason}
+                              resumeCompactionTokens={resumeCompactionTokens}
+                              onSendWithFullHistory={sendWithFullHistory}
                               resolvedTheme={resolvedTheme}
                               settings={settings}
                               keybindings={keybindings}

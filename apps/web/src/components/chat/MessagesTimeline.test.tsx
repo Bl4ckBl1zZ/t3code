@@ -680,6 +680,16 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Send a message to start the conversation");
   });
 
+  it("keeps a thread status line on an otherwise empty timeline", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[]} footer={<p>Settled 2d ago</p>} />,
+    );
+
+    expect(markup).toContain("Settled 2d ago");
+    expect(markup).not.toContain("Send a message to start the conversation");
+  });
+
   it("keeps steer intent visible on committed user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const entry = buildUserTimelineEntry("Adjust the current turn");

@@ -1,9 +1,4 @@
-import {
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-  ThreadId,
-  ToolActivityNativeAppReference,
-  TurnItemId,
-} from "@t3tools/contracts";
+import { ThreadId, ToolActivityNativeAppReference, TurnItemId } from "@t3tools/contracts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import {
   IMAGE_DIMENSIONS_HEADER_BYTES,
@@ -37,7 +32,7 @@ import {
   WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
-import { toolOutputImages } from "@t3tools/shared/toolOutput";
+import { MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH, toolOutputImages } from "@t3tools/shared/toolOutput";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - O_NOFOLLOW open and fd-backed streaming have no Effect FileSystem equivalent.
 import * as NodeFS from "node:fs";
 import * as NodeStream from "node:stream";
@@ -208,9 +203,6 @@ export type ResolvedAsset =
     }
   | { readonly kind: "open-file"; readonly file: OpenedAssetFile }
   | { readonly kind: "bytes"; readonly bytes: Uint8Array; readonly mimeType: string };
-
-// The largest image a provider turn accepts, as base64 (4 characters per 3 bytes).
-const MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH = Math.ceil(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / 3) * 4;
 
 /**
  * Decodes one image a tool returned inline; null when the stored item has no

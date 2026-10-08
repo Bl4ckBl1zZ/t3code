@@ -509,7 +509,12 @@ export const make = Effect.gen(function* () {
             ];
           }
 
-          if (input?.requestedScopes?.some((scope) => !grant.scopes.includes(scope))) {
+          // A request is honored when it names at least one granted scope;
+          // the exchange then narrows to the overlap.
+          if (
+            input?.requestedScopes !== undefined &&
+            !input.requestedScopes.some((scope) => grant.scopes.includes(scope))
+          ) {
             return [
               {
                 _tag: "error",
@@ -613,7 +618,10 @@ export const make = Effect.gen(function* () {
         return yield* new BootstrapCredentialProofKeyMismatchError({});
       }
 
-      if (input?.requestedScopes?.some((scope) => !matching.value.scopes.includes(scope))) {
+      if (
+        input?.requestedScopes !== undefined &&
+        !input.requestedScopes.some((scope) => matching.value.scopes.includes(scope))
+      ) {
         return yield* new BootstrapCredentialScopeNotGrantedError({});
       }
 

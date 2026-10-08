@@ -28,6 +28,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  AuthProvidersManageScope,
   defaultInstanceIdForDriver,
   type BackgroundActivityProfile,
   type BackgroundActivitySettings,
@@ -86,6 +87,7 @@ import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -684,6 +686,7 @@ function AboutVersionSection() {
           }
         />
       ) : null}
+      {hasDesktopBridge ? <CliCommandSettingsRow /> : null}
     </>
   );
 }
@@ -3629,7 +3632,7 @@ function EnvironmentProviderSettings(
 ) {
   const settings = useEnvironmentSettings(props.environmentId);
   const persistSettings = useUpdateEnvironmentSettings(props.environmentId);
-  const operateAccess = useEnvironmentOperateAccess(props.environmentId);
+  const operateAccess = useEnvironmentOperateAccess(props.environmentId, AuthProvidersManageScope);
   const readOnly = operateAccess !== "granted";
   const updateSettings: typeof persistSettings = (patch) => {
     if (!readOnly) persistSettings(patch);

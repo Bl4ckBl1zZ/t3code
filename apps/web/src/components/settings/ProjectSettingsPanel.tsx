@@ -620,6 +620,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         icon: fileScript.icon ?? "play",
         runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
         runOnWorktreeDelete: fileScript.runOnWorktreeDelete ?? false,
+        runOnSettle: fileScript.runOnSettle ?? false,
         keybinding: null,
         previewUrl: fileScript.previewUrl ?? null,
         autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,

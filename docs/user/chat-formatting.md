@@ -18,6 +18,13 @@ the client and connection to the environment that owns the file.
 For example, “Create an A4 pickup sign, show me a preview, and link the HTML
 file” asks for both an inline preview and the saved deliverable.
 
+## Links to other threads
+
+When an agent mentions another thread, it can link it. On web and desktop the
+link shows that thread's project icon and its current title, so a renamed
+thread never shows a stale name, and clicking it opens the thread in the app.
+A link to a thread this device cannot see shows the name the agent wrote.
+
 ## Choosing a format
 
 - Ask for a table when comparing options, or a checklist for a sequence of tasks.

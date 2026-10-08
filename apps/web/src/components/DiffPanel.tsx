@@ -526,6 +526,18 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
       return { scopeKey: collapseScopeKey, fileKeys: next };
     });
   }, []);
+  // Find can ask again before the unfolded file reaches the viewer, so this must never fold.
+  const unfoldDiffFile = useCallback((fileKey: string) => {
+    const { collapseScopeKey, defaultCollapsedDiffFileKeys } = collapseDefaultsRef.current;
+    setCollapsedDiffFiles((current) => {
+      const fileKeys =
+        current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys;
+      if (!fileKeys.has(fileKey)) return current;
+      const next = new Set(fileKeys);
+      next.delete(fileKey);
+      return { scopeKey: collapseScopeKey, fileKeys: next };
+    });
+  }, []);
 
   const fileTreeEntries = useMemo(() => diffFileTreeEntries(renderableFiles), [renderableFiles]);
   const requestFileReveal = useCodeViewFileReveal(codeView, collapseScopeKey);
@@ -1018,6 +1030,7 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
                     sectionId={reviewSectionId}
                     sectionTitle={reviewSectionTitle}
                     composerDraftTarget={composerDraftTarget}
+                    onRevealSearchMatch={unfoldDiffFile}
                     renderHeaderPrefix={(fileDiff, fileKey, collapsed) => (
                       <DiffFileCollapseToggle
                         filePath={resolveFileDiffPath(fileDiff)}

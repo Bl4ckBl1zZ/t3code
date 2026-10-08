@@ -80,6 +80,7 @@ import Migration0062 from "./Migrations/062_HermesWorkRunResultAttempts.ts";
 import Migration0063 from "./Migrations/063_ProjectionTurnItemsLiveCommandIndex.ts";
 import Migration0064 from "./Migrations/064_ScheduledTaskWebhooks.ts";
 import Migration0065 from "./Migrations/065_WebhookRelayDeliveries.ts";
+import Migration0066 from "./Migrations/066_McpAppModelContext.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -157,6 +158,7 @@ export const migrationEntries = [
   [63, "ProjectionTurnItemsLiveCommandIndex", Migration0063],
   [64, "ScheduledTaskWebhooks", Migration0064],
   [65, "WebhookRelayDeliveries", Migration0065],
+  [66, "McpAppModelContext", Migration0066],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -251,6 +253,7 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [63, { kind: "index", index: "orchestration_v2_projection_turn_items_live_command_idx" }],
   [64, { kind: "table", table: "scheduled_task_webhook_deliveries" }],
   [65, { kind: "table", table: "scheduled_task_webhook_relay_deliveries" }],
+  [66, { kind: "table", table: "mcp_app_model_context" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {

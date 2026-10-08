@@ -11,22 +11,70 @@ checks and token exchange behavior can be audited against established concepts.
 Environment authorization is capability-based. A session carries zero or more
 OAuth-style scope strings:
 
-| Scope                   | Permission                                                               |
-| ----------------------- | ------------------------------------------------------------------------ |
-| `orchestration:read`    | Read snapshots, status, events, configuration, and filesystem/VCS state. |
-| `orchestration:operate` | Dispatch user operations and mutate environment-side workspace state.    |
-| `terminal:operate`      | Create, attach, input, resize, clear, restart, and terminate terminals.  |
-| `review:write`          | Read review diff previews used to compose review feedback.               |
-| `access:read`           | Inspect pairing links and client sessions.                               |
-| `access:write`          | Create or revoke pairing links and client sessions.                      |
-| `relay:read`            | Inspect managed relay connectivity.                                      |
-| `relay:write`           | Link, configure, or unlink managed relay connectivity.                   |
+| Scope                   | Permission                                                                 |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `orchestration:read`    | Read snapshots, status, events, configuration, and filesystem/VCS state.   |
+| `orchestration:operate` | Dispatch user operations and mutate environment-side workspace state.      |
+| `source-control:write`  | Commit, push, manage branches, worktrees, repositories, and PR changes.    |
+| `settings:write`        | Change environment settings and keybindings.                               |
+| `providers:manage`      | Configure, install, sign in to, and update providers and usage sources.    |
+| `environment:maintain`  | Update the server and control environment processes.                       |
+| `preview:operate`       | Open and control browser previews and host browser automation.             |
+| `diagnostics:read`      | Read process diagnostics, resource history, and usage totals.              |
+| `terminal:read`         | Observe existing terminals and list terminal status without changing them. |
+| `terminal:operate`      | Create, attach, input, resize, clear, restart, and terminate terminals.    |
+| `filesystem:read`       | Browse host files, read and search workspaces, and view review diffs.      |
+| `filesystem:write`      | Write workspace files.                                                     |
+| `access:read`           | Inspect pairing links and client sessions.                                 |
+| `access:write`          | Create or revoke pairing links and client sessions.                        |
+| `relay:read`            | Inspect managed relay connectivity.                                        |
+| `relay:write`           | Link, configure, or unlink managed relay connectivity.                     |
 
-Ordinary pairing links grant the four client-operation scopes and read access to
-managed relay connectivity:
-`orchestration:read orchestration:operate terminal:operate review:write relay:read`.
+Ordinary pairing links grant every client-operation scope (`AuthStandardClientScopes`)
+and read access to managed relay connectivity.
 The desktop bootstrap credential and command-line administrative bootstrap
 credentials additionally grant `access:read access:write relay:write`.
+
+A settings update is authorized by what its patch changes: provider
+configuration (`providers`, `providerInstances`, `usageLimitSources`) needs
+`providers:manage`, anything else `settings:write`, and a mixed patch both
+(`requiredScopesForServerSettingsPatch`).
+
+Direct source-control writes need `source-control:write`; reading repository
+state stays on `orchestration:read`. Preparing a pull request into a worktree for
+an existing thread also changes that thread, so it needs both
+`source-control:write` and `orchestration:operate`.
+
+`review:write` is retired. Existing credentials that carry it still decode, but
+it grants no RPC and new grants cannot include it (`AuthGrantScope`); review
+diffs need `filesystem:read`. Asset URLs for workspace and host media files need
+`filesystem:read` when they are minted, not when they are served: a URL issued
+before the grant was revoked keeps working until it expires. Attachment,
+tool-output, favicon, and browser-artifact URLs stay on `orchestration:read`.
+
+Restarting the resource monitor (`server.retryResourceTelemetry`) needs both
+`environment:maintain` and `diagnostics:read`. Host load used to place new
+threads stays on `orchestration:read`.
+
+Scope changes must not prevent older clients from connecting. Token exchange
+intersects recognized requests with the pairing grant; retired and unknown names
+are dropped. A request with no granted scopes fails before consuming the link.
+Stored credentials are never expanded when scopes split.
+
+Auth responses keep `scopes` within the original wire vocabulary and include
+`permissions` for the exact grant (`authScopeResponse`). New clients use
+`permissions` when present, even if empty. Older servers omit it, so clients use
+legacy parent checks (`sessionGrantsScope`) for features those servers already
+support; a server that advertises `auth.serverUpdateScope` never gets the
+fallback. These client checks never change server authorization. Permission
+errors likewise retain a legacy `requiredScope` and add the exact
+`requiredPermission` (`authScopeRequiredResponse`), so a denied RPC stays
+decodable by old clients. Unknown response permissions are ignored; grant inputs
+stay strict. Clients whose exact grant holds only pre-split scopes
+(`sessionHasLegacyPermissions`) show a one-time notice to pair again.
+
+Self-update follows the same rule: a server that predates `environment:maintain`
+still updates under `orchestration:operate`.
 
 ## Authentication Flows
 
@@ -47,7 +95,7 @@ grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 subject_token=<bootstrap credential>
 subject_token_type=urn:t3:params:oauth:token-type:environment-bootstrap
 requested_token_type=urn:ietf:params:oauth:token-type:access_token
-scope=orchestration:read orchestration:operate terminal:operate review:write relay:read
+scope=orchestration:read orchestration:operate terminal:operate filesystem:read relay:read
 ```
 
 Clients may additionally submit `client_label`, `client_device_type`, and
@@ -64,7 +112,7 @@ The response has the token-exchange shape:
   "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
   "token_type": "Bearer",
   "expires_in": 2592000,
-  "scope": "orchestration:read orchestration:operate terminal:operate review:write relay:read"
+  "scope": "orchestration:read orchestration:operate terminal:operate filesystem:read relay:read"
 }
 ```
 
@@ -125,7 +173,7 @@ authenticate.
 
 The ticket carries its session's scopes; each RPC method then enforces
 `orchestration:read`, `orchestration:operate`, `terminal:operate`,
-`review:write`, `relay:write`, or `access:read` as appropriate, through
+`filesystem:read`, `relay:write`, or `access:read` as appropriate, through
 `RPC_REQUIRED_SCOPES` in `apps/server/src/auth/RpcAuthorization.ts`. The WebSocket RPC
 group's `RpcScopeAuthorization` middleware checks that scope before any handler runs. Review
 feedback submission currently dispatches
@@ -155,10 +203,14 @@ Agents T3 Code did not launch sign in to `/mcp` through a narrow OAuth
 authorization-code server ([McpOAuth](../../apps/server/src/auth/McpOAuth.ts)):
 protected-resource and authorization-server metadata (RFC 9728, RFC 8414),
 dynamic client registration (RFC 7591) at `/oauth/mcp/register`, and PKCE S256
-codes at `/oauth/mcp/authorize` and `/oauth/mcp/token`. It accepts only loopback
-redirect URIs: an HTTPS redirect would let anyone send the owner an approval
-link that delivers the code to their own server. Client registration is
-stateless (the client id is signed), so an unauthenticated caller cannot grow
+codes at `/oauth/mcp/authorize` and `/oauth/mcp/token`. It accepts loopback
+redirect URIs for agents on the user's machine and any HTTPS redirect for hosted
+agents (ChatGPT, bots). An HTTPS redirect means a link someone else sends the
+owner can deliver access to that someone, so the approval page names the host
+access goes to and approving stays the owner's call. Loopback redirects match on
+everything but the port; HTTPS redirects match exactly. Every client is public
+and proves itself with PKCE; a client that asks for a secret is registered
+without one. Client registration is stateless (the client id is signed), so an unauthenticated caller cannot grow
 server state. Authorization codes are single-use and live for 60 seconds.
 
 Approval spends a one-time pairing code that holds the scopes being granted, or

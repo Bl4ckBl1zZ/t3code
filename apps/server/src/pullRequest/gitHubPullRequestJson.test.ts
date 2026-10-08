@@ -1685,16 +1685,22 @@ describe("label candidate decoding", () => {
 
 describe("pull request watch fingerprints", () => {
   it("asks for every pull request in one aliased read, and refuses an unsafe selector", () => {
-    const query = buildPullRequestWatchFingerprintsGraphQlQuery([
+    const document = buildPullRequestWatchFingerprintsGraphQlQuery([
       { repository: "pingdotgg/t3code", number: 7 },
       { repository: "pingdotgg/lakebed", number: 8 },
     ]);
-    expect(query).toContain(
-      'w0: repository(owner: "pingdotgg", name: "t3code") { pullRequest(number: 7)',
+    expect(document?.query).toContain(
+      "w0: repository(owner: $w0_owner, name: $w0_name) { pullRequest(number: $w0_number)",
     );
-    expect(query).toContain(
-      'w1: repository(owner: "pingdotgg", name: "lakebed") { pullRequest(number: 8)',
-    );
+    expect(document?.query).toContain("w1: repository(owner: $w1_owner, name: $w1_name)");
+    expect(document?.variables).toEqual({
+      w0_owner: "pingdotgg",
+      w0_name: "t3code",
+      w0_number: 7,
+      w1_owner: "pingdotgg",
+      w1_name: "lakebed",
+      w1_number: 8,
+    });
     expect(
       buildPullRequestWatchFingerprintsGraphQlQuery([{ repository: 'evil") { x', number: 1 }]),
     ).toBeNull();

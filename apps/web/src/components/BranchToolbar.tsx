@@ -11,9 +11,20 @@ import {
   MonitorIcon,
   ScaleIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { readLocalApi } from "../localApi";
 import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
@@ -31,6 +42,16 @@ import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSele
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import { ComposerControl } from "./chat/ComposerControl";
+import {
+  THREAD_DETAILS_PANEL_CHEVRON_CLASS,
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
+  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+  THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
+} from "./chat/threadDetailsPanelStyles";
+import { Button } from "./ui/button";
+import { stackedThreadToast, toastManager } from "./ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   Menu,
   MenuGroup,
@@ -70,7 +91,45 @@ interface BranchToolbarProps {
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
 }
 
-interface MobileRunContextSelectorProps {
+function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string) {
+  const api = readLocalApi();
+  if (!api) return;
+  event.preventDefault();
+  event.stopPropagation();
+  void api.contextMenu
+    .show([{ id: "copy-path", label: "Copy full path", icon: "copy" }], {
+      x: event.clientX,
+      y: event.clientY,
+    })
+    .then((action) => {
+      if (action !== "copy-path") return;
+      void writeTextToClipboard(workspacePath, "workspace path").then(
+        (didCopy) => {
+          if (didCopy) {
+            toastManager.add({
+              type: "success",
+              title: "Path copied",
+              description: workspacePath,
+            });
+          }
+        },
+        (error: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to copy path",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        },
+      );
+    });
+}
+
+interface RunContextSelectorProps {
+  /** "panel" renders the workspace card's single machine-and-workspace row. */
+  displayMode?: "toolbar" | "panel";
+  workspaceRoot?: string;
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
   envLocked: boolean;
@@ -88,7 +147,13 @@ interface MobileRunContextSelectorProps {
   onUsePreviousWorktree: () => void;
 }
 
-const MobileRunContextSelector = memo(function MobileRunContextSelector({
+/**
+ * Machine and workspace in one control: the composer strip uses it on narrow
+ * screens, and the workspace card always does.
+ */
+const RunContextSelector = memo(function RunContextSelector({
+  displayMode = "toolbar",
+  workspaceRoot,
   autoEnvironmentLabel,
   onAutoEnvironment,
   envLocked,
@@ -104,7 +169,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   previousWorktreeLabel,
   previousWorktreeBranch,
   onUsePreviousWorktree,
-}: MobileRunContextSelectorProps) {
+}: RunContextSelectorProps) {
   const activeEnvironment = useMemo(
     () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
     [availableEnvironments, environmentId],
@@ -120,26 +185,49 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     : effectiveEnvMode === "worktree"
       ? resolveEnvModeLabel("worktree")
       : resolveCurrentWorkspaceLabel(activeWorktreePath);
-  const isLocked = envLocked || envModeLocked;
+  const isPanel = displayMode === "panel";
+  // The card's row still opens to switch machines when only the workspace is pinned.
+  const isLocked = envLocked || (envModeLocked && (!isPanel || !showEnvironmentPicker));
+  // A worktree that does not exist yet has no path to show or copy.
+  const workspacePath =
+    effectiveEnvMode === "worktree" && !activeWorktreePath
+      ? null
+      : (activeWorktreePath ?? workspaceRoot ?? null);
+  const handleContextMenu = (event: ReactMouseEvent) => {
+    if (isPanel && workspacePath) {
+      showWorkspaceContextMenu(event, workspacePath);
+    }
+  };
   const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
+  const iconClass = isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0 mx-0!";
+  const workspaceIcon = isPanel ? (
+    <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+        <WorkspaceIcon className={iconClass} />
+      </TooltipTrigger>
+      <TooltipPopup side="left">{workspacePath ?? workspaceLabel}</TooltipPopup>
+    </Tooltip>
+  ) : (
+    <WorkspaceIcon className={showEnvironmentIndicator ? iconClass : "size-3 shrink-0"} />
+  );
   const icon = showEnvironmentIndicator ? (
     // Button's base styles apply `-mx-0.5` to descendant SVGs, which eats 4px
     // out of whatever gap we set. mx-0! cancels that so gap-0.5 reads as 2px.
-    <span className="inline-flex shrink-0 items-center gap-0.5">
+    <span className={cn("inline-flex shrink-0 items-center", isPanel ? "gap-1" : "gap-0.5")}>
       {autoEnvironmentLabel ? (
-        <ScaleIcon className="size-3 shrink-0 mx-0!" />
+        <ScaleIcon className={iconClass} />
       ) : (
-        <EnvironmentIcon className="size-3 shrink-0 mx-0!" />
+        <EnvironmentIcon className={iconClass} />
       )}
-      <WorkspaceIcon className="size-3 shrink-0 mx-0!" />
+      {workspaceIcon}
     </span>
   ) : (
-    <WorkspaceIcon className="size-3 shrink-0" />
+    workspaceIcon
   );
   const triggerContent = (
     <>
       {icon}
-      <span className="min-w-0 truncate">
+      <span className={cn("min-w-0 truncate", isPanel && "flex-1 text-left")}>
         {autoEnvironmentLabel ??
           (showEnvironmentIndicator ? (activeEnvironment?.label ?? "Run on") : workspaceLabel)}
       </span>
@@ -148,7 +236,15 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
 
   if (isLocked) {
     return (
-      <span className="inline-flex h-7 min-w-0 max-w-[48%] flex-1 items-center justify-start gap-1 rounded-md border border-transparent px-1.75 text-sm font-medium text-muted-foreground/70 sm:h-6 md:hidden">
+      <span
+        className={
+          isPanel
+            ? cn("flex items-center", THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS)
+            : "inline-flex h-7 min-w-0 max-w-[48%] flex-1 items-center justify-start gap-1 rounded-md border border-transparent px-1.75 text-sm font-medium text-muted-foreground/70 sm:h-6 md:hidden"
+        }
+        onContextMenu={handleContextMenu}
+        aria-label={isPanel ? "Run context" : undefined}
+      >
         {triggerContent}
       </span>
     );
@@ -157,16 +253,44 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   return (
     <Menu>
       <MenuTrigger
-        render={<ComposerControl size="xs" />}
-        className="min-w-0 max-w-[48%] flex-1 justify-start md:hidden"
+        render={
+          isPanel ? (
+            <Button variant="ghost" className={THREAD_DETAILS_PANEL_SELECT_ROW_CLASS} />
+          ) : (
+            <ComposerControl size="xs" />
+          )
+        }
+        className={isPanel ? undefined : "min-w-0 max-w-[48%] flex-1 justify-start md:hidden"}
+        onContextMenu={handleContextMenu}
+        onMouseDownCapture={
+          isPanel
+            ? (event) => {
+                // Right and ctrl clicks open the copy-path menu, not this one.
+                if (event.button !== 0 || event.ctrlKey) event.stopPropagation();
+              }
+            : undefined
+        }
+        aria-label={isPanel ? "Run context" : undefined}
       >
         {triggerContent}
-        <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+        {isPanel ? (
+          <span data-slot="select-icon">
+            <ChevronDownIcon className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
+          </span>
+        ) : (
+          <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+        )}
       </MenuTrigger>
       <MenuPopup
         align="start"
-        side="top"
-        className={previousWorktreeLabel ? "w-[min(21rem,calc(100vw-2rem))]" : undefined}
+        side={isPanel ? "bottom" : "top"}
+        className={
+          isPanel
+            ? THREAD_DETAILS_PANEL_ROW_POPUP_CLASS
+            : previousWorktreeLabel
+              ? "w-[min(21rem,calc(100vw-2rem))]"
+              : undefined
+        }
       >
         {showEnvironmentPicker && availableEnvironments && onEnvironmentChange ? (
           <>
@@ -527,12 +651,20 @@ export const BranchToolbar = memo(function BranchToolbar({
     return (
       <div className="flex w-full flex-col" data-thread-panel-run-context>
         {panelSection !== "branch" ? (
-          <BranchToolbarEnvModeSelector
+          <RunContextSelector
             displayMode="panel"
-            envLocked={envModeLocked}
+            workspaceRoot={activeProject.workspaceRoot}
+            autoEnvironmentLabel={autoEnvironmentLabel}
+            onAutoEnvironment={onAutoEnvironment}
+            envLocked={envLocked}
+            envModeLocked={envModeLocked}
+            environmentId={environmentId}
+            availableEnvironments={availableEnvironments}
+            showEnvironmentPicker={showEnvironmentPicker}
+            showEnvironmentIndicator={showEnvironmentIndicator}
+            onEnvironmentChange={onEnvironmentChange}
             effectiveEnvMode={effectiveEnvMode}
             activeWorktreePath={activeWorktreePath}
-            workspaceRoot={activeProject.workspaceRoot}
             onEnvModeChange={onEnvModeChange}
             previousWorktreeLabel={previousWorktreeLabel}
             previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
@@ -566,7 +698,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       data-compact={labelsOverflow ? "" : undefined}
     >
       {isMobile && showGitControls ? (
-        <MobileRunContextSelector
+        <RunContextSelector
           autoEnvironmentLabel={autoEnvironmentLabel}
           onAutoEnvironment={onAutoEnvironment}
           envLocked={envLocked}

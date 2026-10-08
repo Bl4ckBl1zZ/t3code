@@ -422,6 +422,12 @@ export interface ProviderAdapterV2TurnInput {
   readonly message: ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+  /**
+   * What the thread's MCP Apps want the agent to know (`ui/update-model-context`),
+   * latest per app, keyed stably per app. Adapters that host apps deliver it as
+   * application context; others never receive any.
+   */
+  readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 }
 
 export interface ProviderAdapterV2SteerInput {
@@ -507,6 +513,39 @@ export interface ProviderAdapterV2EventSubscription {
   readonly close: Effect.Effect<void>;
 }
 
+/** An MCP tool as the provider's MCP client lists it. */
+export interface ProviderAdapterV2McpTool {
+  readonly name: string;
+  readonly _meta?: unknown;
+  readonly annotations?: unknown;
+}
+
+/** MCP `CallToolResult` / `ReadResourceResult` shapes, passed through unchanged. */
+export interface ProviderAdapterV2McpCallToolResult {
+  readonly content: ReadonlyArray<unknown>;
+  readonly structuredContent?: unknown;
+  readonly isError?: boolean;
+  readonly _meta?: unknown;
+}
+
+export interface ProviderAdapterV2McpApps {
+  readonly listTools: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly server: string;
+  }) => Effect.Effect<ReadonlyArray<ProviderAdapterV2McpTool>, ProviderAdapterV2Error>;
+  readonly callTool: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly server: string;
+    readonly tool: string;
+    readonly arguments: Record<string, unknown>;
+  }) => Effect.Effect<ProviderAdapterV2McpCallToolResult, ProviderAdapterV2Error>;
+  readonly readResource: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly server: string;
+    readonly uri: string;
+  }) => Effect.Effect<{ readonly contents: ReadonlyArray<unknown> }, ProviderAdapterV2Error>;
+}
+
 export interface ProviderAdapterV2SessionRuntime {
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
@@ -580,6 +619,12 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly uploadFeedback?: (
     input: ProviderAdapterV2UploadFeedbackInput,
   ) => Effect.Effect<ProviderAdapterV2UploadFeedbackResult, ProviderAdapterV2Error>;
+  /**
+   * MCP Apps host operations through the provider's own MCP client, for
+   * drivers whose protocol exposes them (Codex). Absent means apps from this
+   * provider are not interactive and their tool calls stay plain tool rows.
+   */
+  readonly mcpApps?: ProviderAdapterV2McpApps;
 }
 
 export interface ProviderAdapterV2Shape {

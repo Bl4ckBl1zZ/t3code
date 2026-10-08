@@ -57,7 +57,9 @@ import {
   type PullRequestUpdateInput,
   type SourceControlProviderInfo,
   type SourceControlProviderKind,
+  type ThreadPullRequestKey,
 } from "@t3tools/contracts";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import {
   canonicalRepositoryKey,
   detectSourceControlProviderFromRemoteUrl,
@@ -90,6 +92,15 @@ import { PullRequestProviderRegistry } from "./PullRequestProviderRegistry.ts";
  * one row (measured: `gh pr list --limit 100` makes 1 HTTP request, `--limit 101` makes 2).
  */
 const DEFAULT_REPOSITORY_LIST_LIMIT = 99;
+
+type PullRequestReading = Pick<PullRequestSummary, "state" | "updatedAt">;
+
+/** Whether `next` is a newer reading of a pull request than `current`. Merged is final. */
+function supersedesReading(current: PullRequestReading | undefined, next: PullRequestReading) {
+  if (current === undefined) return true;
+  if (current.state === "merged" && next.state !== "merged") return false;
+  return next.updatedAt >= current.updatedAt;
+}
 /**
  * Repositories read at once. Each one is a CLI process that spends nearly all its wall clock
  * waiting on the host, so the useful ceiling is far above the core count; measured over 12
@@ -200,6 +211,15 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<PullRequestStack | null, PullRequestError>;
     readonly subscribeMerges: Effect.Effect<
       Stream.Stream<PullRequestMergeEvent>,
+      never,
+      Scope.Scope
+    >;
+    /**
+     * Pull requests a detail read saw for the first time or in a new state (opened, closed,
+     * merged), so thread links can catch up before the next sync sweep. Best effort.
+     */
+    readonly subscribeStateChanges: Effect.Effect<
+      Stream.Stream<ThreadPullRequestKey>,
       never,
       Scope.Scope
     >;
@@ -589,6 +609,7 @@ export function repositoryIdentityOf(project: OrchestrationProjectShell): string
 
 export const make = Effect.gen(function* () {
   const mergedPullRequests = yield* PubSub.sliding<PullRequestMergeEvent>(64);
+  const stateChanges = yield* PubSub.sliding<ThreadPullRequestKey>(64);
   const registry = yield* PullRequestProviderRegistry;
   const readCache = yield* PullRequestReadCache.PullRequestReadCache;
   const projectService = yield* ProjectService.ProjectService;
@@ -2438,8 +2459,43 @@ export const make = Effect.gen(function* () {
       60_000,
     );
 
+  // The newest state a detail read found per pull request, whatever cache epoch it read under.
+  // Summary reads stay out: they would hide a change from the detail read after.
+  const detailStates = new Map<string, PullRequestReading>();
+  /**
+   * Announces a pull request a detail read sees first or in a new state, so a client showing a
+   * fresh merge brings the thread's link and its settlement along, rather than leaving them to
+   * the next sync sweep.
+   */
+  const noteDetailReading = (ref: PullRequestRef, next: PullRequestDetail) =>
+    Effect.suspend(() => {
+      const scope = refScope(ref);
+      const current = detailStates.get(scope);
+      if (!supersedesReading(current, next)) return Effect.void;
+      detailStates.delete(scope);
+      if (detailStates.size >= REF_EPOCH_CAPACITY) {
+        const oldest = detailStates.keys().next().value;
+        if (oldest !== undefined) detailStates.delete(oldest);
+      }
+      detailStates.set(scope, { state: next.state, updatedAt: next.updatedAt });
+      if (current?.state === next.state) return Effect.void;
+      const key =
+        parseChangeRequestUrl(next.url) ??
+        (ref.host === undefined
+          ? null
+          : { host: ref.host, repository: ref.repository, number: ref.number });
+      return key === null
+        ? Effect.void
+        : PubSub.publish(stateChanges, {
+            host: key.host,
+            repository: key.repository,
+            number: key.number,
+          });
+    });
   const detail: PullRequestService["Service"]["detail"] = (input) =>
-    persistedRead(input, "detail", detailCodec, detailUncached(input), detailTimeToLive);
+    persistedRead(input, "detail", detailCodec, detailUncached(input), detailTimeToLive).pipe(
+      Effect.tap((value) => noteDetailReading(input, value)),
+    );
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
@@ -2599,6 +2655,7 @@ export const make = Effect.gen(function* () {
 
   return PullRequestService.of({
     subscribeMerges: PubSub.subscribe(mergedPullRequests).pipe(Effect.map(Stream.fromSubscription)),
+    subscribeStateChanges: PubSub.subscribe(stateChanges).pipe(Effect.map(Stream.fromSubscription)),
     summary,
     list,
     listStats,

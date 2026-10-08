@@ -81,6 +81,7 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Appearance preferences](./docs/user/appearance.md)
 - [Customize a project icon](./docs/user/project-settings.md)
 - [Remote access from a phone or another machine](./docs/user/remote-access.md)
+- [Connect Claude Code, Codex, ChatGPT and other agents over MCP](./docs/user/outside-agents.md)
 - [Keeping app and server in sync](./docs/user/updating.md)
 - [Source control integrations](./docs/user/source-control.md)
 - [Hermes scheduled runs](./docs/user/hermes-scheduled-runs.md)

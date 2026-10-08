@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId } from "@t3tools/contracts";
 import { ChevronDownIcon, PlusIcon, RotateCcwIcon, XIcon } from "lucide-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -55,6 +55,7 @@ const priceTargetsAtom = Atom.make((get): readonly UsagePriceTarget[] =>
       session: Option.getOrNull(AsyncResult.value(session)),
       isPending: session.waiting,
       hasError: session._tag === "Failure",
+      scope: AuthSettingsWriteScope,
     };
     const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
     const access = isPrimary

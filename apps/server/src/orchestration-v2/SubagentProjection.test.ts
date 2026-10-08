@@ -242,6 +242,16 @@ it("ignores monitor wakes when deciding whether a delegated task has a result", 
   };
   assert.equal(progressOf({ runs: [delegatedRun, queued] }), "working");
 
+  // Stop or a restart holds queued wakes for the user; they are not work the task owes.
+  const cancelled = { ...delegatedRun, status: "cancelled" as const };
+  const held = delegatedTaskProgress({
+    runs: [cancelled, { ...queued, queueHeld: true }],
+    messages: [],
+    subagents: [],
+  });
+  assert.equal(held.state, "result_available");
+  assert.equal(held.resultRun?.id, cancelled.id);
+
   // A monitor wake is bookkeeping, not work: its run must not become the result.
   const monitorRun = { ...delegatedRun, id: RunId.make("run:monitor"), ordinal: 3 };
   assert.equal(

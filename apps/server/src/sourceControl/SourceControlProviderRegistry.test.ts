@@ -15,7 +15,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as BitbucketApi from "./BitbucketApi.ts";
 import * as GitHubApi from "./GitHubApi.ts";
-import * as GitHubCli from "./GitHubCli.ts";
+import * as GitHubRepositoryApi from "./GitHubRepositoryApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 
@@ -93,7 +93,7 @@ function makeRegistry(input: {
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
         Layer.mock(BitbucketApi.BitbucketApi)({}),
         ServerSettings.layerTest(),
-        Layer.mock(GitHubCli.GitHubCli)({}),
+        Layer.mock(GitHubRepositoryApi.GitHubRepositoryApi)({}),
         Layer.mock(GitHubApi.GitHubApi)({}),
         Layer.mock(GitLabCli.GitLabCli)({}),
         ServerConfig.layerTest(process.cwd(), {

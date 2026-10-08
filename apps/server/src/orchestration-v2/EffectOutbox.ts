@@ -90,7 +90,11 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("terminal.cleanup"),
   }),
-  /** Closes the thread's shells that wait at an idle prompt; see `TerminalManager.closeIdle`. */
+  /**
+   * Follows a settle: closes the thread's shells that wait at an idle prompt
+   * (see `TerminalManager.closeIdle`), then runs the project's settle action
+   * in the thread's own worktree (see `ThreadSettleActionRunner`).
+   */
   Schema.Struct({
     type: Schema.Literal("terminal.close-idle"),
   }),

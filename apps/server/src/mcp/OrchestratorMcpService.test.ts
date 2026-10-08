@@ -9,6 +9,7 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   type ScheduledTask,
@@ -1538,4 +1539,31 @@ describe("OrchestratorMcpService scheduled tasks at modes above the caller's", (
       assert.equal(updated.webhookUrl, undefined);
     }),
   );
+});
+
+describe("hasPendingChildRuns", () => {
+  const delegatedRun = {
+    id: RunId.make("run:pending-child:delegated"),
+    threadId: ThreadId.make("thread:pending-child"),
+    ordinal: 1,
+    status: "completed",
+  } as OrchestrationV2Run;
+  const followup = {
+    ...delegatedRun,
+    id: RunId.make("run:pending-child:followup"),
+    ordinal: 2,
+    status: "queued",
+  } as OrchestrationV2Run;
+
+  it("counts later queued turns but not ones a stopped queue holds for the user", () => {
+    assert.isTrue(
+      OrchestratorMcpService.hasPendingChildRuns({ runs: [delegatedRun, followup] }, delegatedRun),
+    );
+    assert.isFalse(
+      OrchestratorMcpService.hasPendingChildRuns(
+        { runs: [delegatedRun, { ...followup, queueHeld: true }] },
+        delegatedRun,
+      ),
+    );
+  });
 });

@@ -43,6 +43,7 @@ import {
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import { readGraphQlPages } from "../sourceControl/githubGraphQl.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
@@ -97,7 +98,6 @@ import {
   UPDATE_REVIEW_COMMENT_GRAPHQL_MUTATION,
   VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   decodeViewerPermissionsJson,
-  type GitHubCheckContext,
   type GitHubPullRequestCore,
   type GitHubPullRequestActivity,
   type GitHubPullRequestActivityPage,
@@ -332,7 +332,7 @@ export class GitHubWorkflowApprovalHeadChangedError extends Schema.TaggedErrorCl
   }
 }
 
-export type GitHubPullRequestCliError =
+export type GitHubPullRequestApiError =
   | GitHubStackActionError
   | GitHubApi.GitHubApiError
   | GitHubPullRequestReadError
@@ -423,14 +423,14 @@ export interface GitHubPullRequestDiffSlice {
   readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
 }
 
-export class GitHubPullRequestCli extends Context.Service<
-  GitHubPullRequestCli,
+export class GitHubPullRequestApi extends Context.Service<
+  GitHubPullRequestApi,
   {
     readonly getViewerLogin: (input: {
       readonly cwd: string;
       /** The host to ask; without one, the host `GH_HOST` names, else github.com. */
       readonly host?: string | undefined;
-    }) => Effect.Effect<string, GitHubPullRequestCliError>;
+    }) => Effect.Effect<string, GitHubPullRequestApiError>;
 
     readonly listPullRequests: (input: {
       readonly cwd: string;
@@ -446,7 +446,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly cursor?: ProviderListCursor | undefined;
       /** Further narrowings, as qualifiers on the search and as a local pass on the fallback. */
       readonly filters?: PullRequestListFilters | undefined;
-    }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestApiError>;
 
     /**
      * The same listing for a whole host in one search. `limit` is the size of the slice across
@@ -465,7 +465,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly query?: string | undefined;
       readonly cursor?: ProviderListCursor | undefined;
       readonly filters?: PullRequestListFilters | undefined;
-    }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestApiError>;
 
     /** The line counts the search leaves out, for rows already on the page. */
     readonly listPullRequestStats: (input: {
@@ -475,7 +475,7 @@ export class GitHubPullRequestCli extends Context.Service<
         readonly repository: string;
         readonly number: number;
       }>;
-    }) => Effect.Effect<ReadonlyArray<GitHubPullRequestStat>, GitHubPullRequestCliError>;
+    }) => Effect.Effect<ReadonlyArray<GitHubPullRequestStat>, GitHubPullRequestApiError>;
 
     /**
      * The core read: the detail with the viewer's standing, the merge settings and the base
@@ -486,7 +486,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<GitHubPullRequestCore, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubPullRequestCore, GitHubPullRequestApiError>;
 
     readonly listWorkflowRunsRequiringApproval: (input: {
       readonly cwd: string;
@@ -497,14 +497,14 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly headBranch: string;
       readonly headRepositoryOwner: string;
       readonly isCrossRepository: true;
-    }) => Effect.Effect<ReadonlyArray<GitHubWorkflowRunApproval>, GitHubPullRequestCliError>;
+    }) => Effect.Effect<ReadonlyArray<GitHubWorkflowRunApproval>, GitHubPullRequestApiError>;
 
     readonly getPullRequestActivity: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<GitHubPullRequestActivity, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubPullRequestActivity, GitHubPullRequestApiError>;
 
     readonly getPullRequestDiff: (input: {
       readonly cwd: string;
@@ -515,7 +515,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly cursor?: string | undefined;
       /** One commit's own changes, rather than everything the pull request carries. */
       readonly commit?: string | undefined;
-    }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError>;
 
     readonly getPullRequestDiffFileContents: (input: {
       readonly cwd: string;
@@ -528,7 +528,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly newPath: string;
     }) => Effect.Effect<
       { readonly oldContents: string; readonly newContents: string },
-      GitHubPullRequestCliError
+      GitHubPullRequestApiError
     >;
 
     readonly listReviewThreadComments: (input: {
@@ -536,7 +536,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<GitHubReviewThreadComments, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubReviewThreadComments, GitHubPullRequestApiError>;
 
     /** One request for a listing's authors, since no `gh` JSON field reports an avatar. */
     readonly listActorAvatars: (input: {
@@ -544,7 +544,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly ids: ReadonlyArray<string>;
-    }) => Effect.Effect<ReadonlyMap<string, string>, GitHubPullRequestCliError>;
+    }) => Effect.Effect<ReadonlyMap<string, string>, GitHubPullRequestApiError>;
 
     readonly getReviewThreadComments: (input: {
       readonly cwd: string;
@@ -553,7 +553,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       readonly threadId: string;
       readonly cursor: string;
-    }) => Effect.Effect<PullRequestThreadCommentsResult, GitHubPullRequestCliError>;
+    }) => Effect.Effect<PullRequestThreadCommentsResult, GitHubPullRequestApiError>;
 
     /** The viewer's standing on its own, for deciding a write without reading the whole detail. */
     readonly getViewerAccess: (input: {
@@ -563,7 +563,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       /** Manual action checks may use the quota held back from automatic reads. */
       readonly allowReserve?: boolean | undefined;
-    }) => Effect.Effect<GitHubViewerAccess, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubViewerAccess, GitHubPullRequestApiError>;
 
     /** Who this pull request may be sent to, and who it has already been sent to. */
     readonly listReviewerCandidates: (input: {
@@ -571,7 +571,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<PullRequestReviewerCandidateList, GitHubPullRequestCliError>;
+    }) => Effect.Effect<PullRequestReviewerCandidateList, GitHubPullRequestApiError>;
 
     readonly setReviewerRequest: (input: {
       readonly cwd: string;
@@ -584,7 +584,7 @@ export class GitHubPullRequestCli extends Context.Service<
       }>;
       /** False deletes the same collection a request posts to, which takes the request back. */
       readonly requested: boolean;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly getPullRequestStack: (input: {
       readonly cwd: string;
@@ -592,7 +592,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
       readonly number: number;
       readonly includeDetails?: boolean;
-    }) => Effect.Effect<GitHubPullRequestStack | null, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubPullRequestStack | null, GitHubPullRequestApiError>;
     /**
      * What a watch compares between passes, for one point. Null when GitHub gave no answer for
      * this pull request or its selector is unsafe, so the watch reads it in full instead.
@@ -602,14 +602,14 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<GitHubPullRequestWatchFingerprint | null, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubPullRequestWatchFingerprint | null, GitHubPullRequestApiError>;
     /** The repository's labels, and which of them this pull request already wears. */
     readonly listLabelCandidates: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<PullRequestLabelCandidateList, GitHubPullRequestCliError>;
+    }) => Effect.Effect<PullRequestLabelCandidateList, GitHubPullRequestApiError>;
 
     readonly setLabels: (input: {
       readonly cwd: string;
@@ -619,7 +619,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly labels: ReadonlyArray<string>;
       /** False takes each label off; true adds each to whatever is already there. */
       readonly applied: boolean;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
@@ -632,7 +632,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly removeAgentCreditsOnMerge?: boolean;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly commentOnPullRequest: (input: {
       readonly cwd: string;
@@ -640,7 +640,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
       readonly number: number;
       readonly body: string;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly submitReview: (input: {
       readonly cwd: string;
@@ -650,7 +650,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly replyToReviewThread: (input: {
       readonly cwd: string;
@@ -658,7 +658,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
       readonly threadId: string;
       readonly body: string;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly setReviewThreadResolution: (input: {
       readonly cwd: string;
@@ -666,7 +666,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
       readonly threadId: string;
       readonly resolved: boolean;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     /**
      * Adds a reaction to a remark, or takes it back. `subjectId` is any node GitHub calls
@@ -682,7 +682,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly subjectId?: string | undefined;
       readonly content: PullRequestReactionContent;
       readonly reacted: boolean;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     /** Rewrites the pull request's own words, leaving whichever of the two was not given. */
     readonly updatePullRequest: (input: {
@@ -692,7 +692,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       readonly title?: string | undefined;
       readonly body?: string | undefined;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     /**
      * Rewrites a remark. `commentId` is trusted to be whatever node it names, so it is confirmed
@@ -707,9 +707,9 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly commentId: string;
       readonly kind: "issue-comment" | "review-comment";
       readonly body: string;
-    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestApiError>;
   }
->()("t3/pullRequest/GitHubPullRequestCli") {}
+>()("t3/pullRequest/GitHubPullRequestApi") {}
 
 /**
  * The GraphQL API takes owner and name as separate arguments, so `owner/repo` is split here.
@@ -1111,7 +1111,7 @@ export const make = Effect.gen(function* () {
     readonly variables?: Readonly<Record<string, unknown>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
-  }): Effect.Effect<A, GitHubPullRequestCliError> =>
+  }): Effect.Effect<A, GitHubPullRequestApiError> =>
     api
       .graphql({
         host: input.host,
@@ -1129,7 +1129,7 @@ export const make = Effect.gen(function* () {
     readonly operation: string;
     readonly path: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
-  }): Effect.Effect<A, GitHubPullRequestCliError> =>
+  }): Effect.Effect<A, GitHubPullRequestApiError> =>
     api
       .rest({ host: input.host, operation: input.operation, path: input.path })
       .pipe(
@@ -1155,7 +1155,7 @@ export const make = Effect.gen(function* () {
     readonly number: number;
     readonly page: number;
     readonly commit?: string | undefined;
-  }): Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError> => {
+  }): Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError> => {
     const { owner, name } = parseRepositorySelector(input.repository);
     const paging = `per_page=${DIFF_FILES_PAGE_SIZE}&page=${input.page}`;
     return api
@@ -1207,7 +1207,7 @@ export const make = Effect.gen(function* () {
       );
   };
 
-  const getPullRequestDiffFileContents: GitHubPullRequestCli["Service"]["getPullRequestDiffFileContents"] =
+  const getPullRequestDiffFileContents: GitHubPullRequestApi["Service"]["getPullRequestDiffFileContents"] =
     (input) =>
       Effect.gen(function* () {
         if (input.commit !== undefined && !isCommitSha(input.commit)) {
@@ -1296,43 +1296,46 @@ export const make = Effect.gen(function* () {
    * its first hundred. Each page names the head it read, so a push mid-walk fails rather than
    * mixing two revisions' checks.
    */
+  type CheckContextsPage = Result.Result.Success<
+    ReturnType<typeof decodePullRequestCheckContextsJson>
+  >;
   const readAllCheckContexts = (
-    input: Parameters<GitHubPullRequestCli["Service"]["getPullRequestDetail"]>[0],
+    input: Parameters<GitHubPullRequestApi["Service"]["getPullRequestDetail"]>[0],
   ) =>
     Effect.gen(function* () {
       const { owner, name } = parseRepositorySelector(input.repository);
-      const contexts: GitHubCheckContext[] = [];
-      let headSha: string | null = null;
-      let after: string | null = null;
-      for (let page = 0; page < CHECK_CONTEXT_PAGES; page++) {
-        const read: {
-          readonly headSha: string;
-          readonly contexts: ReadonlyArray<GitHubCheckContext>;
-          readonly nextCursor: string | null;
-        } = yield* graphqlRead({
-          cwd: input.cwd,
-          host: input.host,
-          operation: "getPullRequestDetail",
-          variables: { owner, name, number: input.number, after },
-          query: PULL_REQUEST_CHECK_CONTEXTS_GRAPHQL_QUERY,
-          decode: decodePullRequestCheckContextsJson,
-        });
-        if (headSha !== null && read.headSha !== headSha) {
-          return yield* readError(
-            input.cwd,
-            "getPullRequestDetail",
-            new Error("Pull request head changed while reading checks."),
-          );
-        }
-        headSha = read.headSha;
-        contexts.push(...read.contexts);
-        after = read.nextCursor;
-        if (after === null) break;
-      }
-      return { headSha, contexts };
+      const { pages, truncated } = yield* readGraphQlPages(
+        (after, previous: ReadonlyArray<CheckContextsPage>) =>
+          graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "getPullRequestDetail",
+            variables: { owner, name, number: input.number, after },
+            query: PULL_REQUEST_CHECK_CONTEXTS_GRAPHQL_QUERY,
+            decode: decodePullRequestCheckContextsJson,
+          }).pipe(
+            // Each page names the head it read, so a push mid-walk fails rather than mixing
+            // two revisions' checks.
+            Effect.filterOrFail(
+              (page) => previous.length === 0 || page.headSha === previous[0]!.headSha,
+              () =>
+                readError(
+                  input.cwd,
+                  "getPullRequestDetail",
+                  new Error("Pull request head changed while reading checks."),
+                ),
+            ),
+          ),
+        { maxPages: CHECK_CONTEXT_PAGES, nextCursor: (page) => page.nextCursor },
+      );
+      return {
+        headSha: pages[0]?.headSha ?? null,
+        contexts: pages.flatMap((page) => page.contexts),
+        truncated,
+      };
     });
 
-  const getPullRequestDetail: GitHubPullRequestCli["Service"]["getPullRequestDetail"] = (input) => {
+  const getPullRequestDetail: GitHubPullRequestApi["Service"]["getPullRequestDetail"] = (input) => {
     const { owner, name } = parseRepositorySelector(input.repository);
     return graphqlRead({
       cwd: input.cwd,
@@ -1367,7 +1370,10 @@ export const make = Effect.gen(function* () {
   const workflowApprovalReadError = (cwd: string, cause: unknown) =>
     readError(cwd, "listWorkflowRunsRequiringApproval", cause);
 
-  /** Every open pull request whose head branch carries this name, up to one past the limit. */
+  /**
+   * Every open pull request whose head branch carries this name, up to one past the limit.
+   * `truncated` says some were never read, which is never enough to call a head unique.
+   */
   const listHeadsByBranch = (input: {
     readonly cwd: string;
     readonly repository: string;
@@ -1376,25 +1382,25 @@ export const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const { owner, name } = parseRepositorySelector(input.repository);
-      const heads: GitHubPullRequestHead[] = [];
-      let after: string | null = null;
-      do {
-        const page: {
-          readonly heads: ReadonlyArray<GitHubPullRequestHead>;
-          readonly nextCursor: string | null;
-        } = yield* graphqlRead({
-          cwd: input.cwd,
-          host: input.host,
-          operation: "listWorkflowRunsRequiringApproval",
-          allowReserve: true,
-          variables: { owner, name, head: input.headBranch, after },
-          query: PULL_REQUEST_HEADS_GRAPHQL_QUERY,
-          decode: decodePullRequestHeadsJson,
-        });
-        heads.push(...page.heads);
-        after = page.nextCursor;
-      } while (after !== null && heads.length <= workflowApprovalLimit);
-      return heads;
+      const countHeads = (pages: ReadonlyArray<{ readonly heads: ReadonlyArray<unknown> }>) =>
+        pages.reduce((total, page) => total + page.heads.length, 0);
+      const { pages, truncated } = yield* readGraphQlPages(
+        (after) =>
+          graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listWorkflowRunsRequiringApproval",
+            allowReserve: true,
+            variables: { owner, name, head: input.headBranch, after },
+            query: PULL_REQUEST_HEADS_GRAPHQL_QUERY,
+            decode: decodePullRequestHeadsJson,
+          }),
+        {
+          nextCursor: (page) => page.nextCursor,
+          until: (pages) => countHeads(pages) > workflowApprovalLimit,
+        },
+      );
+      return { heads: pages.flatMap((page) => page.heads), truncated };
     });
 
   /**
@@ -1425,15 +1431,16 @@ export const make = Effect.gen(function* () {
       return runs;
     });
 
-  const listWorkflowRunsRequiringApproval: GitHubPullRequestCli["Service"]["listWorkflowRunsRequiringApproval"] =
+  const listWorkflowRunsRequiringApproval: GitHubPullRequestApi["Service"]["listWorkflowRunsRequiringApproval"] =
     (input) =>
       Effect.all(
         [
           listHeadsByBranch(input).pipe(
             Effect.flatMap(
-              (
+              ({
                 heads,
-              ): Effect.Effect<
+                truncated,
+              }): Effect.Effect<
                 GitHubPullRequestHead,
                 GitHubPullRequestReadError | GitHubWorkflowApprovalRefusedError
               > => {
@@ -1444,7 +1451,7 @@ export const make = Effect.gen(function* () {
                     pullRequest.headRepositoryOwner?.toLowerCase() ===
                       input.headRepositoryOwner.toLowerCase(),
                 );
-                if (heads.length > workflowApprovalLimit) {
+                if (truncated || heads.length > workflowApprovalLimit) {
                   return Effect.fail(
                     new GitHubWorkflowApprovalRefusedError({
                       command: "gh",
@@ -1492,7 +1499,7 @@ export const make = Effect.gen(function* () {
         { concurrency: 2 },
       ).pipe(Effect.map(([, runs]) => runs));
 
-  return GitHubPullRequestCli.of({
+  return GitHubPullRequestApi.of({
     getViewerLogin: (input) =>
       api
         .rest({
@@ -1532,24 +1539,30 @@ export const make = Effect.gen(function* () {
         page: (
           after: string | null,
           rows: number,
-        ) => Effect.Effect<GitHubPullRequestListPage, GitHubPullRequestCliError>,
+        ) => Effect.Effect<GitHubPullRequestListPage, GitHubPullRequestApiError>,
       ) =>
         Effect.gen(function* () {
-          const items: GitHubPullRequestListItem[] = [];
-          let rawCount = 0;
-          let after: string | null = null;
-          do {
-            const read: GitHubPullRequestListPage = yield* page(after, rows - rawCount);
-            items.push(...read.items);
-            rawCount += read.rawCount;
-            after = read.endCursor;
-          } while (after !== null && rawCount < rows);
-          return { items, rawCount };
+          const countRows = (pages: ReadonlyArray<GitHubPullRequestListPage>) =>
+            pages.reduce((total, read) => total + read.rawCount, 0);
+          const { pages, truncated } = yield* readGraphQlPages(
+            (after, pages: ReadonlyArray<GitHubPullRequestListPage>) =>
+              page(after, rows - countRows(pages)),
+            {
+              nextCursor: (read) => read.endCursor,
+              until: (pages) => countRows(pages) >= rows,
+            },
+          );
+          // `truncated` also covers a cursor GitHub repeated before `rows` arrived.
+          return {
+            items: pages.flatMap((read) => read.items),
+            rawCount: countRows(pages),
+            truncated,
+          };
         });
       const read = (
         continues: boolean,
         requestedRows = input.limit + 1,
-      ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError> =>
+      ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestApiError> =>
         collect(requestedRows, (after, rows) =>
           continues
             ? graphqlRead({
@@ -1570,7 +1583,7 @@ export const make = Effect.gen(function* () {
                 decode: decodePullRequestListJson,
               }),
         ).pipe(
-          Effect.flatMap(({ items: rawItems, rawCount }) => {
+          Effect.flatMap(({ items: rawItems, rawCount, truncated: cutShort }) => {
             const items = continues
               ? rawItems
               : rawItems.filter((item) => matchesUnsortedListing(item, input));
@@ -1587,9 +1600,11 @@ export const make = Effect.gen(function* () {
               items: items.slice(0, input.limit),
               // One row over the page size is the probe for a next page, and it is
               // counted before decoding: a skipped malformed row must not end paging.
-              truncated: continues
-                ? rawCount > input.limit
-                : items.length > input.limit || rawCount >= requestedRows,
+              truncated:
+                cutShort ||
+                (continues
+                  ? rawCount > input.limit
+                  : items.length > input.limit || rawCount >= requestedRows),
               continues,
             });
           }),
@@ -1661,8 +1676,8 @@ export const make = Effect.gen(function* () {
       return Effect.forEach(
         chunks,
         (chunk) => {
-          const query = buildPullRequestStatsGraphQlQuery(chunk);
-          if (query === null) {
+          const document = buildPullRequestStatsGraphQlQuery(chunk);
+          if (document === null) {
             return Effect.fail(
               new GitHubRepositorySelectorError({
                 command: "gh",
@@ -1675,7 +1690,7 @@ export const make = Effect.gen(function* () {
             cwd: input.cwd,
             host: input.host,
             operation: "listPullRequestStats",
-            query,
+            ...document,
             decode: decodePullRequestStatsJson,
           }).pipe(
             Effect.map((stats) =>
@@ -1694,14 +1709,14 @@ export const make = Effect.gen(function* () {
     listWorkflowRunsRequiringApproval,
 
     getPullRequestWatchFingerprint: (input) => {
-      const query = buildPullRequestWatchFingerprintsGraphQlQuery([input]);
-      return query === null
+      const document = buildPullRequestWatchFingerprintsGraphQlQuery([input]);
+      return document === null
         ? Effect.succeed(null)
         : graphqlRead({
             cwd: input.cwd,
             host: input.host,
             operation: "getPullRequestWatchFingerprint",
-            query,
+            ...document,
             decode: decodePullRequestWatchFingerprintsJson,
           }).pipe(Effect.map((fingerprints) => fingerprints.get(0) ?? null));
     },
@@ -1848,7 +1863,7 @@ export const make = Effect.gen(function* () {
         const { owner, name } = parseRepositorySelector(input.repository);
         const threadPage = (
           cursor: string | null,
-        ): Effect.Effect<GitHubReviewThreadPage, GitHubPullRequestCliError> =>
+        ): Effect.Effect<GitHubReviewThreadPage, GitHubPullRequestApiError> =>
           graphqlRead({
             cwd: input.cwd,
             host: input.host,
@@ -1901,23 +1916,26 @@ export const make = Effect.gen(function* () {
         // Almost never entered: the embedded page already holds every dismissal a pull request
         // ordinarily accrues. Followed so a review whose event fell past that page still finds
         // its reason.
-        let dismissalPage = 0;
-        while (dismissalCursor !== null && dismissalPage < REVIEW_THREAD_PAGES) {
-          const read: {
-            readonly dismissalsByReviewId: ReadonlyMap<string, string>;
-            readonly nextCursor: string | null;
-          } = yield* graphqlRead({
-            cwd: input.cwd,
-            host: input.host,
-            operation: "listReviewThreadComments",
-            variables: { owner, name, number: input.number, cursor: dismissalCursor },
-            query: REVIEW_DISMISSALS_GRAPHQL_QUERY,
-            decode: decodeReviewDismissalsJson,
-          });
-          for (const [id, message] of read.dismissalsByReviewId)
-            dismissalsByReviewId.set(id, message);
-          dismissalCursor = read.nextCursor;
-          dismissalPage += 1;
+        if (dismissalCursor !== null) {
+          const { pages } = yield* readGraphQlPages(
+            (cursor) =>
+              graphqlRead({
+                cwd: input.cwd,
+                host: input.host,
+                operation: "listReviewThreadComments",
+                variables: { owner, name, number: input.number, cursor },
+                query: REVIEW_DISMISSALS_GRAPHQL_QUERY,
+                decode: decodeReviewDismissalsJson,
+              }),
+            {
+              from: dismissalCursor,
+              maxPages: REVIEW_THREAD_PAGES,
+              nextCursor: (read) => read.nextCursor,
+            },
+          );
+          for (const read of pages)
+            for (const [id, message] of read.dismissalsByReviewId)
+              dismissalsByReviewId.set(id, message);
         }
 
         const reviewThreads = entries.map((entry) => ({
@@ -2407,4 +2425,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(GitHubPullRequestCli, make);
+export const layer = Layer.effect(GitHubPullRequestApi, make);

@@ -24,7 +24,10 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
-import { ClaudeProviderCapabilitiesV2 } from "../Adapters/ClaudeAdapterV2.ts";
+import {
+  ClaudeBackgroundWorkBlocksQueryReplacementError,
+  ClaudeProviderCapabilitiesV2,
+} from "../Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "../Adapters/CodexAdapterV2.ts";
 import { CursorProviderCapabilitiesV2 } from "../Adapters/CursorAdapterV2.ts";
 import { layer as eventSinkLayer } from "../EventSink.ts";
@@ -43,6 +46,7 @@ import { layer as projectionStoreLayer } from "../ProjectionStore.ts";
 import {
   type ProviderAdapterV2Event,
   ProviderAdapterProtocolError,
+  ProviderAdapterTurnStartError,
   type ProviderAdapterV2Shape,
 } from "../ProviderAdapter.ts";
 import { makeLayer as makeProviderAdapterRegistryLayer } from "../ProviderAdapterRegistry.ts";
@@ -86,6 +90,8 @@ function makeTestAdapter(input: {
   readonly responseByThreadId?: Readonly<Record<string, Readonly<Record<number, string>>>>;
   readonly capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>;
   readonly nativeThreadGeneration?: Ref.Ref<number>;
+  /** Starts left to refuse the way Claude does while background work runs. */
+  readonly refuseStarts?: Ref.Ref<number>;
   readonly failResume?: boolean;
   readonly failedRunOrdinals?: ReadonlySet<number>;
 }): ProviderAdapterV2Shape {
@@ -153,6 +159,17 @@ function makeTestAdapter(input: {
               : Effect.succeed(providerThread),
           startTurn: (turnInput) =>
             Effect.gen(function* () {
+              if (
+                input.refuseStarts !== undefined &&
+                (yield* Ref.getAndUpdate(input.refuseStarts, (left) => Math.max(0, left - 1))) > 0
+              )
+                return yield* new ProviderAdapterTurnStartError({
+                  driver: input.driver,
+                  threadId: turnInput.threadId,
+                  providerThreadId: turnInput.providerThread.id,
+                  runId: turnInput.runId,
+                  cause: new ClaudeBackgroundWorkBlocksQueryReplacementError(),
+                });
               yield* Effect.yieldNow;
               yield* Ref.update(input.capturedTurns, (turns) => [
                 ...turns,
@@ -1301,6 +1318,91 @@ describe("orchestration v2 provider switching", () => {
             [personalThreadId, "personal prompt"],
             [workThreadId, "work prompt"],
           ],
+        );
+      }),
+    ),
+  );
+  it.live("keeps the native session after turns refused before reaching the provider", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("refused-start-keeps-native");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const refuseStarts = yield* Ref.make(0);
+        const generation = yield* Ref.make(0);
+        const registryLayer = makeProviderAdapterRegistryLayer([
+          makeTestAdapter({
+            instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+            driver: CLAUDE_DRIVER,
+            capabilities: ClaudeProviderCapabilitiesV2,
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            responseByRunOrdinal: {},
+            capturedTurns,
+            refuseStarts,
+            nativeThreadGeneration: generation,
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* OrchestratorV2;
+          const run = Effect.fn("run")(function* (ordinal: number) {
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`refused-start:${ordinal}`),
+              threadId,
+              messageId: MessageId.make(`refused-start:${ordinal}`),
+              createdBy: "user",
+              creationSource: "web",
+              text: `Request ${ordinal}`,
+              attachments: [],
+              modelSelection: CLAUDE_MODEL_SELECTION,
+              dispatchMode: { type: "start_immediately" },
+            });
+            const projection = yield* waitForIdle(threadId);
+            return projection.runs.at(-1)?.status;
+          });
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("refused-start:create"),
+            threadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Refused start",
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          assert.equal(yield* run(1), "completed");
+          yield* Ref.set(refuseStarts, 2);
+          assert.equal(yield* run(2), "failed");
+          assert.equal(yield* run(3), "failed");
+          assert.equal(yield* run(4), "completed");
+
+          const turns = yield* Ref.get(capturedTurns);
+          assert.equal(turns.length, 2);
+          // Nothing reached the provider, so the next turn continues the same
+          // native session instead of replacing it with a summary.
+          assert.equal(yield* Ref.get(generation), 1);
+          assert.equal(turns[1]?.providerThreadId, turns[0]?.providerThreadId);
+        }).pipe(
+          Effect.provide(
+            makeOrchestratorV2ReplayLayerWithRegistry(
+              {
+                name: "refused-start-keeps-native",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: {
+                    type: "readOnly",
+                    access: { type: "fullAccess" },
+                    networkAccess: false,
+                  },
+                },
+              },
+              registryLayer,
+            ),
+          ),
         );
       }),
     ),

@@ -1,8 +1,9 @@
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
-  AuthOrchestrationOperateScope,
-  type AuthSessionState,
+  type AuthEnvironmentScope,
   type EnvironmentId,
+  sessionGrantsScope,
+  type SessionGrantInput,
 } from "@t3tools/contracts";
 
 export interface ProviderEnvironmentOptionLike {
@@ -86,10 +87,12 @@ export type ProviderOperateAccess = "granted" | "denied" | "pending";
  * either way.
  */
 function resolveSessionOperateAccess(input: {
-  readonly session: Pick<AuthSessionState, "authenticated" | "scopes"> | null;
+  readonly session: SessionGrantInput | null;
   readonly isPending: boolean;
   readonly hasError: boolean;
   readonly missingScopesAccess: "granted" | "denied";
+  /** The permission the gated write needs, e.g. `providers:manage`. */
+  readonly scope: AuthEnvironmentScope;
 }): ProviderOperateAccess {
   if (input.session === null) {
     if (input.isPending) {
@@ -103,19 +106,20 @@ function resolveSessionOperateAccess(input: {
   if (!input.session.authenticated) {
     return "denied";
   }
-  if (input.session.scopes === undefined) {
+  if (input.session.scopes === undefined && input.session.permissions === undefined) {
     return input.missingScopesAccess;
   }
-  return input.session.scopes.includes(AuthOrchestrationOperateScope) ? "granted" : "denied";
+  return sessionGrantsScope(input.session, input.scope) ? "granted" : "denied";
 }
 
 /** Operate access for the primary environment's own browser session. */
 export function resolvePrimaryOperateAccess(input: {
   readonly isPrimary: boolean;
   readonly hasDesktopBridge: boolean;
-  readonly session: Pick<AuthSessionState, "authenticated" | "scopes"> | null;
+  readonly session: SessionGrantInput | null;
   readonly isPending: boolean;
   readonly hasError: boolean;
+  readonly scope: AuthEnvironmentScope;
 }): ProviderOperateAccess {
   if (!input.isPrimary || input.hasDesktopBridge) {
     return "granted";
@@ -125,6 +129,7 @@ export function resolvePrimaryOperateAccess(input: {
     isPending: input.isPending,
     hasError: input.hasError,
     missingScopesAccess: "denied",
+    scope: input.scope,
   });
 }
 
@@ -133,9 +138,10 @@ export function resolvePrimaryOperateAccess(input: {
  * `/api/auth/session` endpoint reports for this client's credential.
  */
 export function resolveRemoteOperateAccess(input: {
-  readonly session: Pick<AuthSessionState, "authenticated" | "scopes"> | null;
+  readonly session: SessionGrantInput | null;
   readonly isPending: boolean;
   readonly hasError: boolean;
+  readonly scope: AuthEnvironmentScope;
 }): ProviderOperateAccess {
   return resolveSessionOperateAccess({
     ...input,

@@ -28,6 +28,7 @@ import {
   buildProjectScript,
   commandForProjectScript,
   nextProjectScriptId,
+  releaseClaimedRoles,
 } from "../../projectScripts";
 import type { NewProjectScriptInput } from "../projectScriptEditor";
 import { toastManager } from "../ui/toast";
@@ -170,13 +171,7 @@ export function useProjectScriptSettings(
     return persist(
       (current) => {
         const updated = current.map((script) =>
-          script.id === id
-            ? next
-            : {
-                ...script,
-                ...(input.runOnWorktreeCreate ? { runOnWorktreeCreate: false } : {}),
-                ...(input.runOnWorktreeDelete ? { runOnWorktreeDelete: false } : {}),
-              },
+          script.id === id ? next : releaseClaimedRoles(script, input),
         );
         return scriptId === null ? [...updated, next] : updated;
       },

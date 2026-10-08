@@ -1,3 +1,4 @@
+import { PermissionUpdateNotice } from "../components/PermissionUpdateNotice";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
@@ -218,6 +219,7 @@ function RootRouteView() {
           <ReopenClosedViewShortcut />
           <ConfirmDialogHost />
           <SlowRpcRequestToastCoordinator />
+          <PermissionUpdateNotice />
           {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
           <HostedStaticEnvironmentBootstrap />
           {primaryEnvironmentAuthenticated ? (

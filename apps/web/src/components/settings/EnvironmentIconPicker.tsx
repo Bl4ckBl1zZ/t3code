@@ -1,4 +1,6 @@
 import {
+  AuthSettingsWriteScope,
+  type AuthEnvironmentScope,
   ENVIRONMENT_MACHINE_KINDS,
   isEnvironmentMachineKind,
   resolveEnvironmentMachineKind,
@@ -46,7 +48,10 @@ export function resolveEnvironmentIconPickerLock(input: {
 // Same split the provider settings use: the desktop app owns its primary
 // server outright, a browser session on the primary checks its cookie
 // session's scopes, and a remote checks the scopes its own server reports.
-export function useEnvironmentOperateAccess(environmentId: EnvironmentId) {
+export function useEnvironmentOperateAccess(
+  environmentId: EnvironmentId,
+  scope: AuthEnvironmentScope = AuthSettingsWriteScope,
+) {
   const isPrimary = usePrimaryEnvironmentId() === environmentId;
   const primarySession = usePrimarySessionState();
   const remoteSession = useEnvironmentSessionState(environmentId);
@@ -59,12 +64,14 @@ export function useEnvironmentOperateAccess(environmentId: EnvironmentId) {
           session: primarySession.data,
           isPending: primarySession.isPending,
           hasError: primarySession.error !== null,
+          scope,
         });
   }
   return resolveRemoteOperateAccess({
     session: remoteSession.data,
     isPending: remoteSession.isPending,
     hasError: remoteSession.hasError,
+    scope,
   });
 }
 

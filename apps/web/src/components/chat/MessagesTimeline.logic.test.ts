@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   MessageId,
   NodeId,
   RunAttemptId,
@@ -11,6 +12,7 @@ import * as DateTime from "effect/DateTime";
 import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import type { WorkLogEntry, TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import {
   collapseWorkEntriesKeepingLiveBackground,
   computeStableMessagesTimelineRows,
@@ -22,7 +24,11 @@ import {
   resolveHistoricalWorkSummary,
   resolveAssistantMessageCopyState,
   resolveTimelineToolPresentation,
+  shouldCollapseUserMessage,
   shouldPreserveAssistantLineBreaks,
+  threadReadLabelPrefix,
+  threadReadTargetId,
+  threadReadTargetTitle,
 } from "./MessagesTimeline.logic";
 
 describe("shouldPreserveAssistantLineBreaks", () => {
@@ -259,6 +265,50 @@ describe("resolveTimelineToolPresentation", () => {
 
   it("keeps unknown MCP tools on the generic renderer path", () => {
     expect(resolveTimelineToolPresentation("mcp__github__search_issues")).toBeNull();
+  });
+});
+
+describe("thread-read labels", () => {
+  it("uses live titles only for active thread shells", () => {
+    const shell = { title: " Review auth flow ", archivedAt: null, deletedAt: null };
+    expect(threadReadTargetTitle(shell)).toBe("Review auth flow");
+    expect(threadReadTargetTitle({ ...shell, title: "Harden session refresh" })).toBe(
+      "Harden session refresh",
+    );
+    expect(threadReadTargetTitle({ ...shell, archivedAt: "2026-10-07T12:00:00Z" })).toBeNull();
+    expect(threadReadTargetTitle({ ...shell, deletedAt: "2026-10-07T12:00:00Z" })).toBeNull();
+    expect(threadReadTargetTitle({ ...shell, title: "  " })).toBeNull();
+    expect(threadReadTargetTitle(null)).toBeNull();
+  });
+
+  it.each([
+    ["inProgress", "Reading thread"],
+    ["completed", "Read thread"],
+    ["failed", "Failed to read thread"],
+    ["declined", "Declined to read thread"],
+    ["stopped", "Stopped reading thread"],
+  ] as const)("names the read thread in the %s label", (status, prefix) => {
+    const input = { threadId: " thread-child ", view: "activity" };
+    const entry = {
+      structuredPayload: {
+        type: "dynamic_tool",
+        toolName: "t3-code.t3_thread_read",
+        input,
+      } as never,
+    };
+    expect(threadReadTargetId(entry)).toBe("thread-child");
+    const heading = resolveTimelineToolPresentation("t3-code.t3_thread_read", status, input);
+    expect(threadReadLabelPrefix(heading?.displayName ?? "")).toBe(prefix);
+  });
+
+  it("finds no target for other tools or thread reads without one", () => {
+    const payload = (toolName: string, input: unknown) => ({
+      structuredPayload: { type: "dynamic_tool", toolName, input } as never,
+    });
+    expect(threadReadTargetId(payload("t3-code.t3_thread_wait", { threadId: "t" }))).toBeNull();
+    expect(threadReadTargetId(payload("t3-code.t3_thread_read", { threadId: "  " }))).toBeNull();
+    expect(threadReadTargetId(payload("t3-code.t3_thread_read", null))).toBeNull();
+    expect(threadReadLabelPrefix("Read a file")).toBeNull();
   });
 });
 
@@ -2429,6 +2479,41 @@ describe("V2 live work focus", () => {
     const running = entry("running", "inProgress");
     expect(resolveLiveWorkEntry([running, entry("done")], runId)).toBe(running);
   });
+  it("carries the latest thought on the live row while a later tool runs", () => {
+    const thought = (id: string, detail: string) =>
+      entry(id, "completed", {
+        itemType: "reasoning",
+        tone: "thinking",
+        detail,
+        projectedItem: { item: { type: "reasoning", status: "completed" } } as never,
+      });
+    const result = rows([
+      work(thought("old-thought", "First idea.")),
+      work(thought("new-thought", "Found the cause.")),
+      work(thought("empty-thought", "  ")),
+      work(entry("running-command", "inProgress")),
+    ]);
+    expect(result.find((row) => row.kind === "work")).toMatchObject({
+      liveEntry: { id: "running-command" },
+      liveThought: { id: "new-thought" },
+    });
+  });
+  it("carries no thought once the turn settles", () => {
+    const result = rows(
+      [
+        work(
+          entry("thought", "completed", {
+            itemType: "reasoning",
+            tone: "thinking",
+            detail: "Found the cause.",
+          }),
+        ),
+        work(entry("done")),
+      ],
+      false,
+    );
+    expect(result.find((row) => row.kind === "work")?.liveThought).toBeUndefined();
+  });
   it("holds the last successful operation between messages and replaces the extra working row", () => {
     const result = rows([work(entry("done"))]);
     expect(result.find((row) => row.kind === "work")?.liveEntry?.id).toBe("done");
@@ -2680,4 +2765,171 @@ describe("failed turn transcript", () => {
       expect(work.map((entry) => entry.id)).toEqual(["command", "failure"]);
     },
   );
+});
+
+describe("MCP apps in the timeline", () => {
+  const now = DateTime.makeUnsafe("2026-10-07T00:00:00.000Z");
+  const sourceThreadId = ThreadId.make("thread-app-source");
+  const forkThreadId = ThreadId.make("thread-app-fork");
+  const runId = RunId.make("run-app");
+  const app = {
+    attachmentId: "thread-app-source-00000000-0000-0000-0000-000000000000-html",
+    server: "weather",
+    tool: "get_weather",
+    resourceUri: "ui://weather/dashboard",
+  };
+  const itemBase = {
+    threadId: sourceThreadId,
+    runId,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    title: null,
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  };
+  const row = (
+    item: OrchestrationV2ProjectedTurnItem["item"],
+    position: number,
+  ): OrchestrationV2ProjectedTurnItem => ({
+    position,
+    // Shown in a fork: the app still belongs to its source thread and item.
+    visibility: "inherited",
+    sourceThreadId,
+    sourceItemId: item.id,
+    item: { ...item, threadId: forkThreadId },
+  });
+  const appCall = (
+    toolName: string,
+    status: "completed" | "running" = "completed",
+  ): OrchestrationV2ProjectedTurnItem["item"] => ({
+    ...itemBase,
+    id: TurnItemId.make("item-app"),
+    ordinal: 2,
+    status,
+    type: "dynamic_tool",
+    toolName,
+    input: { city: "Oslo" },
+    output: { t3McpApp: app },
+  });
+  const entriesFor = (item: OrchestrationV2ProjectedTurnItem["item"]) =>
+    deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        row(
+          {
+            ...itemBase,
+            id: TurnItemId.make("item-user"),
+            ordinal: 0,
+            status: "completed",
+            type: "user_message",
+            messageId: MessageId.make("message-user"),
+            text: "Weather?",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+            inputIntent: "turn_start",
+          } as OrchestrationV2ProjectedTurnItem["item"],
+          0,
+        ),
+        row(
+          {
+            ...itemBase,
+            id: TurnItemId.make("item-read"),
+            ordinal: 1,
+            status: "completed",
+            type: "dynamic_tool",
+            toolName: "Read",
+            input: { file_path: "README.md" },
+            output: "notes",
+          },
+          1,
+        ),
+        row(item, 2),
+        row(
+          {
+            ...itemBase,
+            id: TurnItemId.make("item-answer"),
+            ordinal: 3,
+            status: "completed",
+            type: "assistant_message",
+            messageId: MessageId.make("message-answer"),
+            text: "Here it is.",
+            streaming: false,
+          } as OrchestrationV2ProjectedTurnItem["item"],
+          3,
+        ),
+      ],
+      optimisticMessages: [],
+    });
+
+  it("hosts a captured app in place, owned by its source thread and item", () => {
+    const entry = entriesFor(appCall("weather.get_weather")).find(
+      (candidate) => candidate.kind === "mcp-app",
+    );
+    expect(entry).toMatchObject({
+      kind: "mcp-app",
+      runId,
+      sourceThreadId,
+      itemId: "item-app",
+      mcpApp: app,
+    });
+  });
+
+  it("ignores an app reference naming another server, and a call still running", () => {
+    for (const item of [appCall("evil.lookup"), appCall("weather.get_weather", "running")]) {
+      expect(entriesFor(item).some((entry) => entry.kind === "mcp-app")).toBe(false);
+    }
+  });
+
+  it("keeps the app visible when its settled turn folds", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: entriesFor(appCall("weather.get_weather")),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    expect(rows.map((candidate) => candidate.kind)).toEqual([
+      "message",
+      "turn-fold",
+      "mcp-app",
+      "message",
+    ]);
+  });
+});
+
+describe("shouldCollapseUserMessage", () => {
+  it("measures a quote chip by its label, not its encoded link", () => {
+    const quote = "A long assistant paragraph that the user quoted. ".repeat(40);
+    const citation = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("environment"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("source"),
+      text: quote,
+      comment: "Why does this matter?",
+      start: 0,
+      end: quote.length,
+      prefix: "",
+      suffix: "",
+    });
+
+    expect(shouldCollapseUserMessage(`${citation} Can you expand on this?`)).toBe(false);
+    expect(shouldCollapseUserMessage(`${citation} ${"More text. ".repeat(60)}`)).toBe(true);
+  });
+
+  it("measures file links and context chips by their label", () => {
+    const links = Array.from(
+      { length: 8 },
+      (_, index) =>
+        `[file${index}.ts](/workspace/projects/example/packages/some/deeply/nested/directory/file${index}.ts)`,
+    );
+    const text = `Compare ${links.join(", ")} with [terminal 1](t3-context://v1/terminal/${"a".repeat(36)}).`;
+
+    expect(text.length).toBeGreaterThan(600);
+    expect(shouldCollapseUserMessage(text)).toBe(false);
+  });
 });

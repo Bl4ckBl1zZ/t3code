@@ -29,6 +29,7 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderTurnControlServiceV2 } from "./ProviderTurnControlService.ts";
 import { ProviderTurnStartServiceV2 } from "./ProviderTurnStartService.ts";
 import { RuntimeRequestServiceV2 } from "./RuntimeRequestService.ts";
+import { ThreadSettleActionRunner } from "./ThreadSettleAction.ts";
 import { OrchestratorV2, type OrchestratorV2Error } from "./Orchestrator.ts";
 import {
   ThreadManagementService,
@@ -165,6 +166,7 @@ export const executorLayer: Layer.Layer<
     const runtimeRequests = yield* RuntimeRequestServiceV2;
     const backgroundWorkSettle = yield* BackgroundWorkSettleDispatch;
     const delegatedTasksStop = yield* DelegatedTasksStopDispatch;
+    const settleAction = yield* ThreadSettleActionRunner;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect) => {
         switch (effect.request.type) {
@@ -378,7 +380,10 @@ export const executorLayer: Layer.Layer<
               ),
             );
           case "terminal.close-idle":
-            return resourceCleanup.closeIdleTerminals(effect.threadId);
+            // The settle action starts its own shell, so idle shells close first.
+            return resourceCleanup
+              .closeIdleTerminals(effect.threadId)
+              .pipe(Effect.andThen(settleAction.run(effect.threadId)));
           case "delegated-tasks.stop":
             return delegatedTasksStop
               .stop({

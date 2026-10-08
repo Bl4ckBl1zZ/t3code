@@ -167,10 +167,12 @@ export const make = Effect.gen(function* () {
   const isDue = (key: string, entries: ReadonlyArray<LinkEntry>, nowMs: number): boolean => {
     if (requested.has(key) || retryStacks.has(key)) return true;
     if (entries.some((entry) => entry.link.snapshot === null)) return true;
-    if (entries.every((entry) => entry.link.snapshot?.state === "merged")) return false;
-    if (entries.some((entry) => entry.link.snapshot?.state === "open" && isUnsettled(entry.thread)))
-      return true;
-    // Closed requests can reopen on the host, including after the thread settles.
+    // Settled threads stop watching their pull requests. Unsettling one makes its links due on
+    // the next sweep, since the cadence clock below kept running while it was settled.
+    const active = entries.filter((entry) => isUnsettled(entry.thread));
+    if (active.every((entry) => entry.link.snapshot?.state === "merged")) return false;
+    if (active.some((entry) => entry.link.snapshot?.state === "open")) return true;
+    // Closed requests can reopen on the host.
     const last = lastSyncedAt.get(key);
     return last === undefined || nowMs - last >= SLOW_SYNC_INTERVAL_MS;
   };
@@ -230,7 +232,10 @@ export const make = Effect.gen(function* () {
           },
         });
       }
-      if (fetchedStack === null || fetchedStack.stack === null) return;
+      // A settled thread that shares this pull request with an active one takes the fresh
+      // snapshot, but gains no links. Read from the sweep's snapshot, so a terminal snapshot
+      // that just settled the thread does not stop its own siblings from being linked.
+      if (fetchedStack === null || fetchedStack.stack === null || !isUnsettled(thread)) return;
       const current = yield* threads.getThreadShell(thread.id);
       if (!current || current.archivedAt !== null || current.deletedAt !== null) return;
       const currentLinks = allThreadPullRequestsOf(current);
@@ -422,6 +427,13 @@ export const make = Effect.gen(function* () {
     const merges = yield* pullRequests.subscribeMerges;
     yield* forkParked(
       Stream.runForEach(merges, (event) => requestSync(parseChangeRequestUrl(event.url) ?? event)),
+    );
+    // A client reading a pull request can see it merge or close before the next sweep does.
+    const stateChanges = yield* pullRequests.subscribeStateChanges;
+    yield* forkParked(
+      Stream.runForEach(stateChanges, requestSync).pipe(
+        Effect.catchCause(logSkipped("pull request state change stream failed", {})),
+      ),
     );
     yield* forkParked(
       Stream.runForEach(threads.streamDomainEvents, (event) => {

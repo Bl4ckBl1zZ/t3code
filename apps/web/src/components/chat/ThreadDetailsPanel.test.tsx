@@ -82,8 +82,6 @@ function baseProps(): ThreadDetailsPanelProps {
     onComposerFocusRequest: vi.fn(),
     onReconnectEnvironment: vi.fn(),
     onOpenConnectionSettings: vi.fn(),
-    versionMismatch: null,
-    onDismissVersionMismatch: vi.fn(),
     onRunProjectScript: vi.fn(),
     onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
     onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],

@@ -9,13 +9,25 @@
  */
 import { cn } from "~/lib/utils";
 
+import {
+  PullRequestChecksStatusLine,
+  PullRequestDetailHeaderBody,
+  PullRequestDetailTabBar,
+  PullRequestDetailTitleRow,
+} from "./PullRequestDetailLayout";
+
 function GhostBar({ className }: { className?: string | undefined }) {
-  return <div aria-hidden className={cn("h-3 rounded bg-muted-foreground/15", className)} />;
+  return <span aria-hidden className={cn("block h-3 rounded bg-muted-foreground/15", className)} />;
 }
 
 /** Widths cycle rather than randomize, so the ghost renders the same on every pass. */
 const TITLE_WIDTHS = ["w-3/5", "w-2/5", "w-1/2", "w-2/3", "w-2/5", "w-3/5", "w-1/2"];
 const META_WIDTHS = ["w-2/5", "w-1/3", "w-2/5", "w-1/4", "w-1/3", "w-2/5", "w-1/3"];
+const DETAIL_TABS = [
+  { value: "summary", label: "Summary" },
+  { value: "timeline", label: "Timeline" },
+  { value: "code", label: "Code" },
+] as const;
 
 /** Rows in the list's own grid — glyph, title over meta, time over diffstat. */
 export function PullRequestListGhost({
@@ -79,31 +91,35 @@ export function PullRequestDetailGhost() {
           </div>
         </div>
 
-        <div className="px-4 pb-4 pt-1">
-          <GhostBar className="h-5 w-4/5 max-w-md" />
-          <div className="mt-2 flex items-center gap-1.5">
-            <GhostBar className="size-4 rounded-full" />
-            <GhostBar className="w-24" />
-          </div>
-          <div className="mt-4 flex min-w-0 items-center gap-2">
-            <GhostBar className="h-6 w-24 rounded-md" />
-            <GhostBar className="size-3 rounded-full" />
-            <GhostBar className="h-6 w-32 rounded-md" />
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              <GhostBar className="w-10" />
-              <GhostBar className="w-20" />
-            </div>
-          </div>
-        </div>
+        <PullRequestDetailHeaderBody
+          title={
+            <PullRequestDetailTitleRow>
+              <GhostBar className="h-5 w-4/5 max-w-md" />
+            </PullRequestDetailTitleRow>
+          }
+          author={
+            <span className="flex items-center gap-1.5">
+              <GhostBar className="size-4 rounded-full" />
+              <GhostBar className="w-14" />
+            </span>
+          }
+          updated={<GhostBar className="w-16" />}
+          base={
+            <span className="inline-flex min-w-0 max-w-[40%] shrink-0 items-center gap-1">
+              <GhostBar className="w-12" />
+            </span>
+          }
+          head={<GhostBar className="w-32 flex-1" />}
+          files={<GhostBar className="w-10" />}
+          diffStat={<GhostBar className="w-20" />}
+        />
 
-        <div className="flex min-h-10 items-center justify-between gap-3 border-t border-border/60 px-4 py-2">
-          <div className="flex items-center gap-1 p-0.5">
-            <GhostBar className="h-6 w-16 rounded-md" />
-            <GhostBar className="h-6 w-16 rounded-md" />
-            <GhostBar className="h-6 w-12 rounded-md" />
-          </div>
-          <GhostBar className="w-20" />
-        </div>
+        <PullRequestDetailTabBar tabs={DETAIL_TABS} value="summary" inert>
+          <PullRequestChecksStatusLine
+            icon={<GhostBar className="my-px size-3.5 rounded-full" />}
+            label={<GhostBar className="w-28" />}
+          />
+        </PullRequestDetailTabBar>
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">

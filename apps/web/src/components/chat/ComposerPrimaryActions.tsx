@@ -1,12 +1,14 @@
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
+import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { composerFloatingLayerProps } from "./composerEventScope";
 
 interface PendingActionState {
   questionIndex: number;
@@ -37,6 +39,9 @@ interface ComposerPrimaryActionsProps {
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  /** Tokens a stale session would re-read. When set, Enter compacts first and the button says so. */
+  compactBeforeSendTokens?: number | null;
+  onSendWithFullHistory?: () => void;
 }
 
 export const formatPendingPrimaryActionLabel = (input: {
@@ -78,6 +83,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onPreviousPendingQuestion,
   onInterrupt,
   onImplementPlanInNewThread,
+  compactBeforeSendTokens = null,
+  onSendWithFullHistory,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -211,6 +218,55 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               onClick={() => void onImplementPlanInNewThread()}
             >
               Implement in a new thread
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      </div>
+    );
+  }
+
+  if (compactBeforeSendTokens !== null && !isRunning) {
+    const tokens = formatContextWindowTokens(compactBeforeSendTokens);
+    const sendBlocked = isSendBusy || isConnecting || isEnvironmentUnavailable;
+    return (
+      <div data-chat-composer-compact-send="true" className="flex items-center justify-end">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="submit"
+                size="sm"
+                className={cn(
+                  "h-9 rounded-l-full rounded-r-none sm:h-8",
+                  compact ? "px-3" : "px-4",
+                )}
+                {...pointerFocusProps}
+                disabled={sendBlocked || !hasSendableContent}
+              />
+            }
+          >
+            {isConnecting || isSendBusy ? "Sending..." : "Compact and send"}
+          </TooltipTrigger>
+          <TooltipPopup side="top">Summarize {tokens} tokens of history, then send</TooltipPopup>
+        </Tooltip>
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                size="sm"
+                variant="default"
+                className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
+                aria-label="Send options"
+                {...pointerFocusProps}
+                disabled={sendBlocked || !hasSendableContent}
+              />
+            }
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
+            <MenuItem disabled={sendBlocked} onClick={onSendWithFullHistory}>
+              Send with full history ({tokens} tokens)
             </MenuItem>
           </MenuPopup>
         </Menu>

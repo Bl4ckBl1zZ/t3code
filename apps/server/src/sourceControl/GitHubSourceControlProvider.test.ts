@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import * as GitHubCli from "./GitHubCli.ts";
+import * as GitHubRepositoryApi from "./GitHubRepositoryApi.ts";
 import { parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 
@@ -24,9 +24,9 @@ const processResult = (
   stderrTruncated: false,
 });
 
-function makeProvider(github: Partial<GitHubCli.GitHubCli["Service"]>) {
+function makeProvider(github: Partial<GitHubRepositoryApi.GitHubRepositoryApi["Service"]>) {
   return GitHubSourceControlProvider.make.pipe(
-    Effect.provide(Layer.mock(GitHubCli.GitHubCli)(github)),
+    Effect.provide(Layer.mock(GitHubRepositoryApi.GitHubRepositoryApi)(github)),
   );
 }
 
@@ -72,7 +72,7 @@ it.effect("maps GitHub PR summaries into provider-neutral change requests", () =
 
 it.effect("adds safe request context while retaining GitHub CLI causes", () =>
   Effect.gen(function* () {
-    const cause = new GitHubCli.GitHubPullRequestNotFoundError({
+    const cause = new GitHubRepositoryApi.GitHubPullRequestNotFoundError({
       command: "gh",
       cwd: "/repo",
       cause: new Error("raw upstream detail that should remain in the cause"),
@@ -113,8 +113,9 @@ it.effect("adds safe request context while retaining GitHub CLI causes", () =>
 
 it.effect("lists change request history through the batched head lookup", () =>
   Effect.gen(function* () {
-    let lookup: Parameters<GitHubCli.GitHubCli["Service"]["listPullRequestsByHead"]>[0] | null =
-      null;
+    let lookup:
+      | Parameters<GitHubRepositoryApi.GitHubRepositoryApi["Service"]["listPullRequestsByHead"]>[0]
+      | null = null;
     const provider = yield* makeProvider({
       listPullRequestsByHead: (input) => {
         lookup = input;
@@ -164,8 +165,9 @@ it.effect("lists change request history through the batched head lookup", () =>
 
 it.effect("creates GitHub PRs through provider-neutral input names", () =>
   Effect.gen(function* () {
-    let createInput: Parameters<GitHubCli.GitHubCli["Service"]["createPullRequest"]>[0] | null =
-      null;
+    let createInput:
+      | Parameters<GitHubRepositoryApi.GitHubRepositoryApi["Service"]["createPullRequest"]>[0]
+      | null = null;
     const provider = yield* makeProvider({
       createPullRequest: (input) => {
         createInput = input;

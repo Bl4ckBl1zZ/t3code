@@ -6,7 +6,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
+import { AlertTriangleIcon } from "lucide-react";
 
 import type { OpenPreviewMutation } from "../../browser/openFileInPreview";
 import type { DraftId } from "../../composerDraftStore";
@@ -14,13 +14,8 @@ import {
   useT3ProjectFilePreviewUrl,
   useT3ProjectFileScripts,
 } from "../../hooks/useT3ProjectFileScripts";
-import {
-  shouldShowEnvironmentIndicator,
-  type EnvMode,
-  type EnvironmentOption,
-} from "../BranchToolbar.logic";
+import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
-import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import GitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
@@ -39,12 +34,6 @@ import { ThreadBackgroundTasksPanel } from "./ThreadBackgroundTasksPanel";
 import { ThreadConversationPanel } from "./ThreadConversationPanel";
 import { ThreadPortsPanel } from "./ThreadPortsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
-
-interface VersionMismatchIssue {
-  readonly clientVersion: string;
-  readonly serverVersion: string;
-  readonly serverLabel: string;
-}
 
 export interface ThreadDetailsPanelProps extends Pick<
   ComponentProps<typeof ThreadDetailsCard>,
@@ -92,8 +81,6 @@ export interface ThreadDetailsPanelProps extends Pick<
   onOpenPullRequest?: ((number: number) => void) | undefined;
   onReconnectEnvironment: () => void;
   onOpenConnectionSettings: () => void;
-  versionMismatch: VersionMismatchIssue | null;
-  onDismissVersionMismatch: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
@@ -141,14 +128,6 @@ function ThreadDetailsContent(
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: props.environmentId,
     threadId: props.threadId,
-  });
-  // Same rule as the composer strip: a lone remote machine still gets a row,
-  // shown as a static label because there is nothing to pick.
-  const canPickEnvironment = props.availableEnvironments.length > 1;
-  const showEnvironment = shouldShowEnvironmentIndicator({
-    activeEnvironment:
-      props.availableEnvironments.find((env) => env.environmentId === props.environmentId) ?? null,
-    canPickEnvironment,
   });
   // Single-run scripts render as stop buttons while their run is live, so the
   // control needs the thread's terminal sessions to know what is running.
@@ -246,42 +225,17 @@ function ThreadDetailsContent(
             </div>
           ) : null}
 
-          {props.versionMismatch ? (
-            <div className="mx-3 mb-2 flex gap-2 rounded-xl border border-warning/30 bg-warning/6 p-3">
-              <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium">Client and server versions differ</p>
-                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                  Client {props.versionMismatch.clientVersion} · {props.versionMismatch.serverLabel}{" "}
-                  {props.versionMismatch.serverVersion}
-                </p>
-              </div>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label="Dismiss version mismatch warning"
-                onClick={props.onDismissVersionMismatch}
-              >
-                <XIcon className="size-3.5" />
-              </Button>
-            </div>
-          ) : null}
-
           <div className="flex flex-col px-2 pb-2.5">
-            {density === "full" && showEnvironment ? (
-              <BranchToolbarEnvironmentSelector
-                displayMode="panel"
-                autoEnvironmentLabel={props.autoEnvironmentLabel}
-                onAutoEnvironment={props.onAutoEnvironment}
-                envLocked={props.envLocked}
-                environmentId={props.environmentId}
-                availableEnvironments={props.availableEnvironments}
-                {...(canPickEnvironment ? { onEnvironmentChange: props.onEnvironmentChange } : {})}
-              />
-            ) : null}
-
+            {/* One row names the machine and workspace; a lone remote machine
+                still shows, as a static label when there is nothing to pick. */}
             {density === "full" ? (
-              <BranchToolbar layout="panel" panelSection="workspace" {...branchToolbarProps} />
+              <BranchToolbar
+                layout="panel"
+                panelSection="workspace"
+                availableEnvironments={props.availableEnvironments}
+                onEnvironmentChange={props.onEnvironmentChange}
+                {...branchToolbarProps}
+              />
             ) : null}
 
             {density !== "essential" && props.showOpenInPicker ? (

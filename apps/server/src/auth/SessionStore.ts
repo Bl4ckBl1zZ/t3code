@@ -422,8 +422,10 @@ const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
+// v2 credentials came from a prerelease of granular scopes; their recorded
+// grant is read unchanged.
 const SessionClaims = Schema.Struct({
-  v: Schema.Literal(1),
+  v: Schema.Literals([1, 2]),
   kind: Schema.Literal("session"),
   sid: AuthSessionId,
   sub: Schema.String,

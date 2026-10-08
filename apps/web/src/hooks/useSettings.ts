@@ -21,6 +21,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
+  requiredScopesForServerSettingsPatch,
   ServerSettings,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -49,6 +50,7 @@ import {
   serverEnvironment,
 } from "~/state/server";
 import { usePrimaryEnvironment, useEnvironments } from "~/state/environments";
+import { readEnvironmentScopeDenied } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useTheme } from "./useTheme";
 
@@ -432,6 +434,9 @@ export function usePrimarySettings<T = UnifiedSettings>(
   );
 }
 
+const SETTINGS_PERMISSION_DENIED_MESSAGE =
+  "This connection does not have permission to change these settings.";
+
 export const PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE =
   "This setting is saved on a server, and the hosted app is not anchored to one. Change it from the desktop app or from the server's own address.";
 
@@ -466,6 +471,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     (patch: UnifiedSettingsPatch) => {
       const { serverPatch, clientPatch } = splitPatch(patch, serverAutoSettlement);
 
+      // Settings and provider configuration are separate grants; a known
+      // denial warns instead of sending a write the server will reject.
+      const deniedOn = (targetId: EnvironmentId, targetPatch: ServerSettingsPatch) =>
+        requiredScopesForServerSettingsPatch(targetPatch).some((scope) =>
+          readEnvironmentScopeDenied(targetId, scope),
+        );
       if (Object.keys(serverPatch).length > 0) {
         const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
         // Dropping the write silently leaves the control looking saved.
@@ -476,7 +487,9 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
             description,
           });
         if (Object.keys(localPatch).length > 0) {
-          if (environmentId) {
+          if (environmentId && deniedOn(environmentId, localPatch)) {
+            warnUnsaved(SETTINGS_PERMISSION_DENIED_MESSAGE);
+          } else if (environmentId) {
             void persistServerSettings({
               environmentId,
               input: { patch: localPatch },
@@ -496,6 +509,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
             targets.add(environmentId);
           }
           let wroteToTarget = false;
+          let permissionDenied = false;
           for (const targetId of targets) {
             const target = environments.find((candidate) => candidate.environmentId === targetId);
             const targetPatch = filterSharedServerPatch(
@@ -506,6 +520,10 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
               targetId === environmentId,
             );
             if (Object.keys(targetPatch).length === 0) continue;
+            if (deniedOn(targetId, targetPatch)) {
+              permissionDenied = true;
+              continue;
+            }
             wroteToTarget = true;
             void persistServerSettings({
               environmentId: targetId,
@@ -514,7 +532,11 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           }
           if (!wroteToTarget) {
             warnUnsaved(
-              targets.size > 0 ? "Update older servers to save this setting." : undefined,
+              permissionDenied
+                ? SETTINGS_PERMISSION_DENIED_MESSAGE
+                : targets.size > 0
+                  ? "Update older servers to save this setting."
+                  : undefined,
             );
           }
         }

@@ -35,6 +35,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import { McpAppModelContext } from "../mcpApps/McpAppModelContext.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
@@ -491,6 +492,7 @@ export const layer: Layer.Layer<
   | IdAllocatorV2
   | ProviderEventIngestorV2
   | ServerSettingsService
+  | McpAppModelContext
 > = Layer.effect(
   RunExecutionServiceV2,
   Effect.gen(function* () {
@@ -499,6 +501,7 @@ export const layer: Layer.Layer<
     const idAllocator = yield* IdAllocatorV2;
     const providerEventIngestor = yield* ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettingsService;
+    const mcpAppModelContext = yield* McpAppModelContext;
 
     const writeFinalRunEvents = (input: {
       readonly run: OrchestrationV2Run;
@@ -1178,6 +1181,23 @@ export const layer: Layer.Layer<
           // its already-issued MCP credential valid even when the agent goes
           // a long time between browser-tool calls.
           yield* McpSessionRegistry.touchActiveMcpThread(input.run.threadId);
+          // A context read that fails costs the agent the apps' notes for
+          // this turn, not the turn itself.
+          const appContext = (yield* mcpAppModelContext
+            .forThread(input.run.threadId)
+            .pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to read MCP app model context.", { cause }).pipe(
+                  Effect.as([]),
+                ),
+              ),
+            )).map((entry) => ({
+            // The item id alone is unique and needs no escaping; server and
+            // tool names are free text that would break the tag Codex wraps
+            // the context in.
+            key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
+            text: entry.text,
+          }));
           yield* Effect.andThen(
             shouldStart,
             input.session.startTurn({
@@ -1198,6 +1218,7 @@ export const layer: Layer.Layer<
               },
               modelSelection: input.modelSelection,
               runtimePolicy: input.runtimePolicy,
+              ...(appContext.length === 0 ? {} : { appContext }),
             }),
           ).pipe(
             Effect.catchCause((cause) =>
