@@ -5092,9 +5092,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         // `preview` — leaving them lossy here made the open thread alternate
         // between two shapes (and sometimes two shelves) as the shell and
         // detail streams took turns publishing.
-        if let latestVisible = messages.last {
+        let clearedAt = mappedThread.timelineClearedAt
+        if let latestVisible = messages.last(where: { !ThreadTimelineClear.hides($0.createdAt, clearedAt: clearedAt) }) {
             mappedThread.preview = previewText(latestVisible.text)
             mappedThread.previewIsFromUser = latestVisible.role == .user
+        } else if clearedAt != nil {
+            mappedThread.preview = nil
         }
         // Same formula as `lastActivityDate`: real activity wins; the mapper's
         // own value (run completion, else the `updatedAt` floor) is the
@@ -5341,7 +5344,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
         switch item.payload {
         case let .userMessage(_, _, text, attachments):
-            return FeatureMessage(
+            var mapped = FeatureMessage(
                 id: item.id,
                 role: .user,
                 text: text,
@@ -5361,6 +5364,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 // from the reader's own, matching the RN feed.
                 createdBy: item.base.createdBy
             )
+            mapped.senderThreadID = item.senderThreadId.map {
+                FeatureScopedID.thread(environmentID: environmentID, wireID: $0)
+            }
+            return mapped
 
         case let .assistantMessage(messageID, text, streaming):
             return message(.assistant, text, state: streaming ? .streaming : .complete, wireMessageID: messageID)
@@ -5466,7 +5473,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environment: Environment
     ) -> FeatureThread {
         let isRunning = latestRun.map { $0.completedAt == nil } ?? false
-        return FeatureThread(
+        var mapped = FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -5544,6 +5551,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
         )
+        mapped.timelineClearedAt = thread.timelineClearedAt.flatMap(parseValidDate)
+        return mapped
     }
 
     /// The wire's project id is environment-local; every other project
@@ -5635,7 +5644,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationV2ThreadShell,
         environment: Environment
     ) -> FeatureThread {
-        FeatureThread(
+        let clearedAt = thread.timelineClearedAt.flatMap(parseValidDate)
+        var mapped = FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -5645,7 +5655,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environmentID: environment.id,
             environmentName: environment.label,
             title: thread.title,
-            preview: previewText(thread.latestVisibleMessage?.text),
+            // A message from before a clear is not what the chat says now.
+            preview: ThreadTimelineClear.hides(
+                thread.latestVisibleMessage.flatMap { parseValidDate($0.updatedAt) },
+                clearedAt: clearedAt
+            ) ? nil : previewText(thread.latestVisibleMessage?.text),
             previewIsFromUser: thread.latestVisibleMessage?.role == "user",
             branch: thread.branch,
             worktreePath: thread.worktreePath,
@@ -5731,6 +5745,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             interactionMode: mapInteractionMode(thread.interactionMode),
             archiveBlockedByLiveRun: !ThreadArchive.canArchive(shell: thread)
         )
+        mapped.timelineClearedAt = clearedAt
+        return mapped
     }
 
 
@@ -6905,6 +6921,7 @@ private struct CommandIdentity: Equatable {
 private struct ProjectionItemSupportIndex {
     private let runs: [String: OrchestrationV2Run]
     private let attemptsByRunID: [String: [OrchestrationV2RunAttempt]]
+    private let attemptResolver: ThreadTimelineAttemptResolver
     private let nodes: [String: OrchestrationV2ExecutionNode]
     private let providerSessions: [String: OrchestrationV2ProviderSession]
     private let providerThreads: [String: OrchestrationV2ProviderThread]
@@ -6920,6 +6937,7 @@ private struct ProjectionItemSupportIndex {
         // occurrence matches `Array.find`, which is what the RN client does.
         runs = Self.index(projection.runs)
         attemptsByRunID = Dictionary(grouping: projection.attempts, by: \.runId)
+        attemptResolver = ThreadTimelineAttemptResolver(attempts: projection.attempts, nodes: projection.nodes)
         nodes = Self.index(projection.nodes)
         providerSessions = Self.index(projection.providerSessions)
         providerThreads = Self.index(projection.providerThreads)
@@ -6961,7 +6979,7 @@ private struct ProjectionItemSupportIndex {
         }
         let contextTransfer = contextHandoff?.transferId.flatMap { contextTransfers[$0] }
 
-        return ThreadActivityItemSupport(
+        var support = ThreadActivityItemSupport(
             run: item.base.runId
                 .flatMap { runs[$0] }
                 .map { ThreadActivityItemSupport.Run(status: $0.status) },
@@ -7031,6 +7049,8 @@ private struct ProjectionItemSupportIndex {
                 )
             }
         )
+        support.attempt = attemptResolver.attempt(for: item)
+        return support
     }
 
     private static func index<Row: Identifiable>(

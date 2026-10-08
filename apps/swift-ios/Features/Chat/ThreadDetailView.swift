@@ -738,7 +738,7 @@ public struct ThreadDetailView: View {
                 dynamicTypeSize: dynamicTypeSize,
                 topContentInset: bannerHeight,
                 bottomContentInset: composerHeight,
-                canLoadEarlier: detail.page?.hasMore == true,
+                canLoadEarlier: ThreadTimelineClear.canLoadEarlier(detail),
                 isLoadingEarlier: detail.page?.isLoading == true,
                 workspaceRoot: threadWorkspaceRoot,
                 alwaysExpandActivity: model.snapshot.settings.alwaysExpandActivity,
@@ -1887,6 +1887,8 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     /// An MCP App a completed tool call captured, hosted where the call happened.
     case mcpApp(McpApp)
     case dayDivider(id: String, date: Date)
+    /// Rows derived from the transcript's shape; see `ThreadTimelineStructuralRow`.
+    case structural(ThreadTimelineStructuralRow)
 
     struct Lifecycle: Equatable {
         let id: String
@@ -1936,6 +1938,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .workLog(workLog): workLog.id
         case let .mcpApp(app): app.id
         case let .dayDivider(id, _): id
+        case let .structural(row): row.id
         }
     }
 
@@ -1949,6 +1952,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .workLog(workLog): workLog.date
         case let .mcpApp(app): app.date
         case let .dayDivider(_, date): date
+        case let .structural(row): row.date
         }
     }
 }
@@ -1965,14 +1969,21 @@ enum ThreadTimelineFeed {
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
         let activeRunID = detail.workflow.queueState.activeRun?.id
-        var result = entries(
+        let clearedAt = detail.thread.timelineClearedAt
+        let visible = ThreadTimelineClear.visible(
             timelineItems: detail.timelineItems,
             messages: detail.messages,
+            clearedAt: clearedAt
+        )
+        var result = entries(
+            timelineItems: visible.timelineItems,
+            messages: visible.messages,
             runs: detail.timelineRuns,
             support: detail.itemSupport,
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
             subagentMetadata: detail.subagentMetadata,
             liveRun: ThreadWorkLogLiveRun(threadState: detail.thread.state, activeRunID: activeRunID),
+            chatClearedAt: clearedAt,
             calendar: calendar
         )
         if detail.thread.state == .working, case var .workLog(work)? = result.last {
@@ -1990,11 +2001,17 @@ enum ThreadTimelineFeed {
         subagentChildThreadIDs: [String: String] = [:],
         subagentMetadata: [String: SubagentRowMetadata] = [:],
         liveRun: ThreadWorkLogLiveRun = .unscoped,
+        chatClearedAt: Date? = nil,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
         var messagesByID: [String: FeatureMessage] = [:]
         messagesByID.reserveCapacity(messages.count)
         for message in messages { messagesByID[message.id] = message }
+        let changedFiles = ThreadChangedFilesPlacement.resolve(
+            timelineItems: timelineItems,
+            latestRunID: runs.max(by: { $0.ordinal < $1.ordinal })?.id,
+            rendersMessage: { messagesByID[$0].map { !$0.isEmptyBubble } ?? false }
+        )
 
         var entries: [ThreadTimelineEntry] = []
         var openWork: [ThreadWorkLogRow] = []
@@ -2073,6 +2090,8 @@ enum ThreadTimelineFeed {
             }
             // A setup failure a retry already replaced has nothing left to say.
             if ThreadWorkspacePreparationRetry.isRetriedFailure(item) { continue }
+            // Shown as a tree under the run's reply instead.
+            if changedFiles.placedCheckpointItemIDs.contains(item.id) { continue }
             if item.type == "user_message" || item.type == "assistant_message" {
                 // An empty bubble is not a row — an assistant message before its
                 // first token, say — and skipping it must not split the work
@@ -2081,6 +2100,9 @@ enum ThreadTimelineFeed {
                 closeWork()
                 closeLifecycle()
                 entries.append(.message(message, caption: ThreadMessageCaption.origin(of: item)))
+                if let files = changedFiles.byAssistantItemID[item.id] {
+                    entries.append(.structural(.changedFiles(files)))
+                }
                 continue
             }
             if let app = McpAppReference.from(item) {
@@ -2106,6 +2128,11 @@ enum ThreadTimelineFeed {
                 continue
             }
             closeLifecycle()
+            // A superseded attempt folds on its own, so a group never spans two.
+            if let last = openWork.last,
+               support[last.projectedItem.id]?.attempt?.id != support[projected.id]?.attempt?.id {
+                closeWork()
+            }
             openWork.append(ThreadWorkLogRow.make(projected, liveRun: liveRun))
         }
         closeWork()
@@ -2140,6 +2167,10 @@ enum ThreadTimelineFeed {
         // is enforced here rather than trusted.
         var seenIDs = Set<String>()
         entries = entries.filter { seenIDs.insert($0.id).inserted }
+        entries = ThreadAgentUpdateGrouping.merge(entries)
+        if let chatClearedAt {
+            entries.insert(.structural(.chatCleared(at: chatClearedAt)), at: 0)
+        }
 
         return insertingDayDividers(entries, calendar: calendar)
     }
@@ -2223,7 +2254,7 @@ private struct ThreadTimelineEntryView: View {
             .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
         case let .message(message, caption):
-            FeatureMessageView(message: message, caption: caption, onRetrySend: onRetrySend)
+            FeatureMessageView(message: message, caption: caption, onRetrySend: onRetrySend, onOpenThread: onOpenThread)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
@@ -2289,6 +2320,17 @@ private struct ThreadTimelineEntryView: View {
 
         case let .dayDivider(_, date):
             TimelineDayDivider(date: date)
+
+        case let .structural(row):
+            ThreadTimelineStructuralRowView(
+                row: row,
+                currentThreadID: currentThreadID,
+                workspaceRoot: workspaceRoot,
+                onOpenThread: onOpenThread,
+                onOpenFile: onOpenFile,
+                onOpenDiff: onOpenDiff,
+                onToggleFold: onToggleFold
+            )
         }
     }
 }
@@ -3545,6 +3587,8 @@ struct FeatureMessageView: View {
     /// as sending even before the outbox has said more.
     var caption: ThreadMessageCaption? = nil
     var onRetrySend: () -> Void = {}
+    /// Opens the thread an agent-sent message came from.
+    var onOpenThread: ((String) -> Void)? = nil
 
     private var resolvedCaption: ThreadMessageCaption? {
         if caption?.isDelivery == true { return caption }
@@ -3572,9 +3616,7 @@ struct FeatureMessageView: View {
             // feed's treatment.
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Sent by another agent")
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textTertiary)
+                    AgentSenderByline(senderThreadID: message.senderThreadID, onOpenThread: onOpenThread)
 
                     VStack(alignment: .leading, spacing: 10) {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
@@ -3598,6 +3640,8 @@ struct FeatureMessageView: View {
                 }
                 Spacer(minLength: 44)
             }
+            // Contained, so the byline's link to the sender stays reachable.
+            .accessibilityElement(children: .contain)
             .accessibilityLabel("Another agent")
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("message-\(message.id)")

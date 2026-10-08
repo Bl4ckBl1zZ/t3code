@@ -521,6 +521,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
     /// with `orchestration.getTurnItem`. Older servers never set it, so their
     /// rows keep whatever output they shipped inline.
     public var outputOmitted: Bool = false
+    /// On a `user_message` another agent sent: that agent's thread, as a wire
+    /// id in this environment. Absent on older servers and on the user's own.
+    public var senderThreadId: String? = nil
 
     public init(type: String, base: OrchestrationV2TurnItemBase, payload: Payload) {
         self.type = type
@@ -581,6 +584,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case targetRunId, targetProviderInstanceId, targetModel
         case subagentId, origin, providerInstanceId, childThreadId, progress, result
         case toolName, toolSurface, toolIcon, toolSource
+        case senderThreadId
     }
 
     public init(from decoder: any Decoder) throws {
@@ -599,6 +603,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
 
         switch type {
         case "user_message":
+            senderThreadId = try container.decodeIfPresent(String.self, forKey: .senderThreadId)
             payload = .userMessage(
                 messageID: try container.decode(String.self, forKey: .messageId),
                 intent: try container.decode(OrchestrationV2UserMessageInputIntent.self, forKey: .inputIntent),
@@ -763,6 +768,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
 
         switch payload {
         case let .userMessage(messageID, intent, text, attachments):
+            try container.encodeIfPresent(senderThreadId, forKey: .senderThreadId)
             try container.encode(messageID, forKey: .messageId)
             try container.encode(intent.rawValue, forKey: .inputIntent)
             try container.encode(text, forKey: .text)
@@ -974,6 +980,9 @@ public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifia
     public let attemptOrdinal: Int
     public let status: String
     public let reason: String?
+    /// The execution node the attempt started from; an item belongs to the
+    /// attempt whose root node its own node descends from.
+    public var rootNodeId: String? = nil
 }
 
 public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {
@@ -986,6 +995,8 @@ public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identi
     public let runtimeRequestId: String?
     public let startedAt: OrchestrationV2Timestamp?
     public let completedAt: OrchestrationV2Timestamp?
+    public var parentNodeId: String? = nil
+    public var rootNodeId: String? = nil
 }
 
 public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Identifiable {

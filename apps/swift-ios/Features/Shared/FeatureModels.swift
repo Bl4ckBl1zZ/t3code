@@ -357,6 +357,9 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// main line of work. Absent means an ordinary thread. The inbox's Main
     /// section does not exist without this.
     public var workInboxRole: String?
+    /// The user cleared the chat here: everything up to it stays out of the
+    /// transcript and the row preview. Set by T3 Work's `/clear`.
+    public var timelineClearedAt: Date? = nil
     /// `fork`, `subagent`, or nil for a root thread. Subagent threads are
     /// excluded from both workspaces: they are steps inside their parent, not
     /// work of their own.
@@ -648,6 +651,9 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
     /// another agent sent into this thread, which renders as agent-sent rather
     /// than as the reader's own bubble.
     public var createdBy: String?
+    /// Feature-scoped id of the thread whose agent sent this message, so its
+    /// byline can open that thread. Nil for the user's own messages.
+    public var senderThreadID: String? = nil
 
     public init(
         id: String,
