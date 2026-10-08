@@ -149,12 +149,16 @@ public actor WebSocketRPCClient {
 
     private struct Subscription {
         let tag: String
-        let payload: JSONValue
+        /// Built at every (re)send so a resume names the newest sequence the
+        /// consumer holds, not the one it held when the stream opened.
+        let payload: @Sendable () async -> JSONValue
         let reconnect: Bool
         var requestID: Int?
-        /// The connection that assigned `requestID`. Request IDs are reissued
-        /// after reconnects, so an Interrupt is only valid on this connection.
+        /// The connection this subscription was claimed for, then sent on.
+        /// Request IDs are reissued after reconnects, so an Interrupt is only
+        /// valid on this connection.
         var requestConnectionID: UUID?
+        var sends = 0
         let yield: @Sendable (JSONValue) -> Void
         let finish: @Sendable (Error?) -> Void
     }
@@ -218,36 +222,60 @@ public actor WebSocketRPCClient {
         }
     }
 
+    /// Waits out a timer. Injected so tests drive keepalive and pong deadlines
+    /// without real time passing.
+    public typealias Sleeper = @Sendable (Duration) async throws -> Void
+
     private let connector: any WebSocketConnecting
     private let endpointProvider: EndpointProvider
     private let connectionWaitTimeout: Duration
     private let responseTimeout: Duration
+    private let keepaliveInterval: Duration
+    private let pongTimeout: Duration
+    private let sleep: Sleeper
     private var connection: (any WebSocketConnection)?
     private var connectionID: UUID?
     private var loopTask: Task<Void, Never>?
     private var loopID: UUID?
     private var keepaliveTask: Task<Void, Never>?
+    /// Set from the moment a Ping is sent until any Pong arrives. Pongs carry
+    /// no id, so one answer settles every outstanding ping.
+    private var awaitingPong = false
+    private var pongDeadlineTask: Task<Void, Never>?
+    private var probes: [UUID: (deadline: Task<Void, Never>, resume: CheckedContinuation<Bool, Never>)] = [:]
     private var desired = false
     private var nextRequestID = 1
     private var unary: [Int: UnaryRequest] = [:]
     private var subscriptions: [UUID: Subscription] = [:]
     private var subscriptionByRequestID: [Int: UUID] = [:]
 
+    /// - Parameters:
+    ///   - keepaliveInterval: How often an idle socket is pinged.
+    ///   - pongTimeout: How long a ping may go unanswered before the socket
+    ///     counts as dead and is replaced. A half-open socket never fails a
+    ///     send, so an unanswered ping is the only way to notice it.
     public init(
         connector: any WebSocketConnecting = URLSessionWebSocketConnector(),
         connectionWaitTimeout: Duration = .seconds(4),
         responseTimeout: Duration = .seconds(30),
+        keepaliveInterval: Duration = .seconds(5),
+        pongTimeout: Duration = .seconds(10),
+        sleep: @escaping Sleeper = { try await Task.sleep(for: $0) },
         endpointProvider: @escaping EndpointProvider
     ) {
         self.connector = connector
         self.connectionWaitTimeout = connectionWaitTimeout
         self.responseTimeout = responseTimeout
+        self.keepaliveInterval = keepaliveInterval
+        self.pongTimeout = pongTimeout
+        self.sleep = sleep
         self.endpointProvider = endpointProvider
     }
 
     deinit {
         loopTask?.cancel()
         keepaliveTask?.cancel()
+        pongDeadlineTask?.cancel()
     }
 
     public func start() {
@@ -274,6 +302,30 @@ public actor WebSocketRPCClient {
         await disconnected()
     }
 
+    /// Asks the server for a Pong and waits at most `timeout` for it. A socket
+    /// that does not answer is dropped so the connection loop dials again;
+    /// returns false then, and when no socket is open.
+    public func probe(timeout: Duration) async -> Bool {
+        guard desired, connection != nil, let connectionID else { return false }
+        let probeID = UUID()
+        let sleep = sleep
+        return await withCheckedContinuation { continuation in
+            // Register before the Ping goes out: its Pong can be handled while
+            // the send is still suspended.
+            awaitingPong = true
+            let deadline = Task { [weak self] in
+                do {
+                    try await sleep(timeout)
+                } catch {
+                    return
+                }
+                await self?.probeExpired(probeID, connectionID: connectionID)
+            }
+            probes[probeID] = (deadline, continuation)
+            Task { await self.sendPing(connectionID: connectionID) }
+        }
+    }
+
     public func stop() async {
         ConnectionLog.logger.info(
             "[conn] stopped deliberate=true subscriptions=\(self.subscriptions.count)"
@@ -285,6 +337,7 @@ public actor WebSocketRPCClient {
         loopTask = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
+        settlePongWait(answered: false)
         connection = nil
         connectionID = nil
         failUnary(RPCError.disconnected, includingUnsent: true)
@@ -319,6 +372,20 @@ public actor WebSocketRPCClient {
         reconnect: Bool = true,
         as type: Value.Type
     ) -> AsyncThrowingStream<Value, Error> {
+        subscribe(tag, reconnect: reconnect, as: type) { payload }
+    }
+
+    /// A subscription whose request payload is built each time it is sent:
+    /// first, and again on every reconnect. Resumable streams use this to name
+    /// the newest sequence their consumer holds.
+    /// - Parameter observe: Sees each decoded value before the consumer does.
+    public func subscribe<Value: Decodable & Sendable>(
+        _ tag: String,
+        reconnect: Bool = true,
+        as type: Value.Type,
+        observe: (@Sendable (Value) -> Void)? = nil,
+        payload: @escaping @Sendable () async -> JSONValue
+    ) -> AsyncThrowingStream<Value, Error> {
         let subscriptionID = UUID()
         return AsyncThrowingStream { continuation in
             subscriptions[subscriptionID] = Subscription(
@@ -328,7 +395,9 @@ public actor WebSocketRPCClient {
                 requestID: nil,
                 yield: { value in
                     do {
-                        continuation.yield(try value.decode(type))
+                        let decoded = try value.decode(type)
+                        observe?(decoded)
+                        continuation.yield(decoded)
                     } catch {
                         continuation.finish(throwing: error)
                     }
@@ -492,10 +561,18 @@ public actor WebSocketRPCClient {
             "[conn] connected resend-unary=\(self.unary.count) resubscribe=\(self.subscriptions.count)"
         )
         keepaliveTask?.cancel()
+        settlePongWait(answered: false)
         if let connectionID {
             let owner = WeakOwner(self)
+            let interval = keepaliveInterval
+            let sleep = sleep
             keepaliveTask = Task {
-                await Self.keepaliveLoop(owner: owner, connectionID: connectionID)
+                await Self.keepaliveLoop(
+                    owner: owner,
+                    connectionID: connectionID,
+                    interval: interval,
+                    sleep: sleep
+                )
             }
         }
         // Snapshot the keys: the sends suspend, and reentrant completions or
@@ -517,6 +594,7 @@ public actor WebSocketRPCClient {
         let closingConnection = connection
         keepaliveTask?.cancel()
         keepaliveTask = nil
+        settlePongWait(answered: false)
         connection = nil
         connectionID = nil
         failUnary(RPCError.disconnected, includingUnsent: false)
@@ -544,7 +622,7 @@ public actor WebSocketRPCClient {
     private func handle(_ response: RPCResponseEnvelope) async throws {
         switch response._tag {
         case "Pong":
-            return
+            settlePongWait(answered: true)
         case "Chunk":
             guard let requestID = response.requestId,
                   let subscriptionID = subscriptionByRequestID[requestID],
@@ -601,21 +679,44 @@ public actor WebSocketRPCClient {
     }
 
     private func sendSubscription(_ subscriptionID: UUID) async {
+        guard let connectionID,
+              var claimed = subscriptions[subscriptionID],
+              claimed.requestConnectionID != connectionID else { return }
+        // Claim this connection before building the payload suspends, so the
+        // subscribe call and a reconnect's resend cannot both send it.
+        claimed.requestConnectionID = connectionID
+        subscriptions[subscriptionID] = claimed
+        let payload = await claimed.payload()
         guard let connection,
-              let connectionID,
-              var subscription = subscriptions[subscriptionID] else { return }
+              self.connectionID == connectionID,
+              var subscription = subscriptions[subscriptionID],
+              subscription.requestConnectionID == connectionID,
+              subscription.requestID == nil else { return }
         let requestID = allocateRequestID()
         let envelope = RPCRequestEnvelope(
             id: requestID,
             tag: subscription.tag,
-            payload: subscription.payload,
+            payload: payload,
             headers: []
         )
+        if subscription.sends > 0 {
+            let after = switch payload["afterSequence"] {
+            case let .number(value)?: String(Int(value))
+            case let .integer(value)?: String(value)
+            default: "none"
+            }
+            ConnectionLog.logger.info(
+                """
+                [conn] resubscribe tag=\(subscription.tag, privacy: .public) \
+                after=\(after, privacy: .public)
+                """
+            )
+        }
         // Install ownership before suspending in send. A very fast response can
         // otherwise arrive before the request is routable, while termination
         // during the send must be able to remove the exact in-flight mapping.
         subscription.requestID = requestID
-        subscription.requestConnectionID = connectionID
+        subscription.sends += 1
         subscriptions[subscriptionID] = subscription
         subscriptionByRequestID[requestID] = subscriptionID
         do {
@@ -645,9 +746,14 @@ public actor WebSocketRPCClient {
         }
     }
 
-    private static func keepaliveLoop(owner: WeakOwner, connectionID: UUID) async {
+    private static func keepaliveLoop(
+        owner: WeakOwner,
+        connectionID: UUID,
+        interval: Duration,
+        sleep: Sleeper
+    ) async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(5))
+            try? await sleep(interval)
             guard !Task.isCancelled,
                   await owner.sendKeepalive(connectionID: connectionID) else { return }
         }
@@ -657,11 +763,58 @@ public actor WebSocketRPCClient {
         guard desired, connectionID == expectedConnectionID, connection != nil else {
             return false
         }
-        do {
-            try await sendControl("Ping", requestID: nil)
-            return connectionID == expectedConnectionID
-        } catch {
-            return false
+        // An earlier ping is still unanswered and its deadline is running.
+        guard !awaitingPong else { return true }
+        awaitingPong = true
+        let timeout = pongTimeout
+        let sleep = sleep
+        pongDeadlineTask = Task { [weak self] in
+            do {
+                try await sleep(timeout)
+            } catch {
+                return
+            }
+            await self?.pongDeadlineExpired(connectionID: expectedConnectionID)
+        }
+        await sendPing(connectionID: expectedConnectionID)
+        return connectionID == expectedConnectionID
+    }
+
+    private func sendPing(connectionID expectedConnectionID: UUID) async {
+        guard connectionID == expectedConnectionID else { return }
+        // A failed send already drops the socket, which settles every waiter.
+        try? await sendControl("Ping", requestID: nil)
+    }
+
+    private func pongDeadlineExpired(connectionID expectedConnectionID: UUID) async {
+        guard connectionID == expectedConnectionID, awaitingPong else { return }
+        ConnectionLog.logger.warning(
+            "[conn] pong-timeout source=keepalive subscriptions=\(self.subscriptions.count)"
+        )
+        await disconnected(expectedConnectionID: expectedConnectionID)
+    }
+
+    private func probeExpired(_ probeID: UUID, connectionID expectedConnectionID: UUID) async {
+        guard let probe = probes.removeValue(forKey: probeID) else { return }
+        probe.resume.resume(returning: false)
+        guard connectionID == expectedConnectionID else { return }
+        ConnectionLog.logger.warning(
+            "[conn] pong-timeout source=probe subscriptions=\(self.subscriptions.count)"
+        )
+        await disconnected(expectedConnectionID: expectedConnectionID)
+    }
+
+    /// Ends the current wait for a Pong: answered when one arrived, otherwise
+    /// because the socket it was asked on is gone.
+    private func settlePongWait(answered: Bool) {
+        awaitingPong = false
+        pongDeadlineTask?.cancel()
+        pongDeadlineTask = nil
+        let waiting = probes.values
+        probes.removeAll()
+        for probe in waiting {
+            probe.deadline.cancel()
+            probe.resume.resume(returning: answered)
         }
     }
 
