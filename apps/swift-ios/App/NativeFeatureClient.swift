@@ -8120,8 +8120,16 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             throw FeatureCapabilityUnavailable("Custom model pricing")
         }
         let client = try await environmentClient(id: environmentID)
+        let environmentLabel = client.environment.label
         for scope in AuthScope.required(forSettingsPatch: patch.json) {
-            try await requireScope(scope, client: client)
+            do {
+                try await requireScope(scope, client: client)
+            } catch {
+                throw ServerSettingsSaveFailure.permissionDenied(
+                    environment: environmentLabel,
+                    pairingAgainHelps: error is AuthPermissionRequired
+                )
+            }
         }
         let sourceConfig = try await client.serverConfig()
         if patch.usageLimitSources != nil, sourceConfig.environment?.capabilities.usageLimitSources != true {
@@ -8135,7 +8143,17 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             throw FeatureCapabilityUnavailable("Merge method defaults")
         }
         setServerConfig(sourceConfig, environmentID: environmentID)
-        let settings = try await client.updateServerSettings(patch: patch)
+        let settings: ServerSettingsSnapshot
+        do {
+            settings = try await client.updateServerSettings(patch: patch)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ServerSettingsSaveFailure.rejected(
+                environment: environmentLabel,
+                reason: error.localizedDescription
+            )
+        }
         // Fold the server's answer into the cached config now. The active
         // environment would also hear it on the config subscription, but a
         // second server has no live stream, and a row that waits for one it
@@ -8641,6 +8659,23 @@ struct NativeVoiceRelayClient: Sendable {
         }
 
         let models: [Model]
+    }
+}
+
+/// A settings save that failed, naming the server and why, like the web
+/// app's save-failure toasts.
+private enum ServerSettingsSaveFailure: LocalizedError {
+    case permissionDenied(environment: String, pairingAgainHelps: Bool)
+    case rejected(environment: String, reason: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .permissionDenied(environment, pairingAgainHelps):
+            "This connection lacks permission to change settings on \(environment)."
+                + (pairingAgainHelps ? " Pair this device again to get it." : "")
+        case let .rejected(environment, reason):
+            "Could not save on \(environment): \(reason)"
+        }
     }
 }
 
