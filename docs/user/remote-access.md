@@ -273,6 +273,12 @@ it asks first. The last route goes with the machine: use **Remove from this devi
 Signing out of T3 Connect removes only that route; a machine you can still reach another way stays
 saved. Machines saved before routes existed keep working as a machine with one route.
 
+On web and desktop, open **Permissions** next to **Routes** to see what your current connection can
+do on that machine; the machine you are running shows the same under **This environment**. The list
+applies only to the route in use; other routes are not checked. Direct pairing and T3 Connect have
+separate sessions and may grant different permissions. An open connection ends as soon as its
+session is revoked or expires.
+
 In the iOS app, open **Settings → Servers** and tap a server's info button. **Routes** lists them
 preferred first with the one **In use**; tap **Edit** to drag them into another order, swipe a route
 you paired to remove it, or choose **Add Route** and paste a pairing link the same machine created

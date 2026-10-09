@@ -33,6 +33,10 @@ import {
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { toastManager } from "~/components/ui/toast";
 import { isHostedStaticApp } from "~/hostedPairing";
 import { ensureLocalApi } from "~/localApi";
@@ -434,8 +438,13 @@ export function usePrimarySettings<T = UnifiedSettings>(
   );
 }
 
-const SETTINGS_PERMISSION_DENIED_MESSAGE =
-  "This connection does not have permission to change these settings.";
+/** Names the environments a known denial blocked, so a multi-environment save says where. */
+const settingsPermissionDeniedMessage = (labels: ReadonlyArray<string>) =>
+  `This connection lacks permission to change settings on ${labels.join(", ") || "the selected environment"}.`;
+
+/** The server's own reason for a failed save, or a generic hint when it gave none. */
+const settingsSaveFailureMessage = (error: unknown) =>
+  error instanceof Error ? error.message : "The save failed. Try reconnecting and saving again.";
 
 export const PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE =
   "This setting is saved on a server, and the hosted app is not anchored to one. Change it from the desktop app or from the server's own address.";
@@ -462,11 +471,31 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
   const serverAutoSettlement =
     environmentId !== null &&
     configs.get(environmentId)?.environment.capabilities.threadAutoSettlement === true;
-  const persistServerSettings = useAtomCommand(
-    serverEnvironment.updateSettings,
-    "server settings update",
-  );
+  const persist = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "server settings update",
+    reportFailure: false,
+  });
   const { environments } = useEnvironments();
+  const labelFor = useCallback(
+    (targetId: EnvironmentId) =>
+      environments.find((environment) => environment.environmentId === targetId)?.label ?? targetId,
+    [environments],
+  );
+  // A failed save names the environment and the server's reason instead of a generic error.
+  const persistServerSettings = useCallback(
+    async (request: Parameters<typeof persist>[0]) => {
+      const result = await persist(request);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        toastManager.add({
+          type: "error",
+          title: "Setting not saved",
+          description: `Could not save on ${labelFor(request.environmentId)}: ${settingsSaveFailureMessage(squashAtomCommandFailure(result))}`,
+        });
+      }
+      return result;
+    },
+    [labelFor, persist],
+  );
   const updateSettings = useCallback(
     (patch: UnifiedSettingsPatch) => {
       const { serverPatch, clientPatch } = splitPatch(patch, serverAutoSettlement);
@@ -488,7 +517,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           });
         if (Object.keys(localPatch).length > 0) {
           if (environmentId && deniedOn(environmentId, localPatch)) {
-            warnUnsaved(SETTINGS_PERMISSION_DENIED_MESSAGE);
+            warnUnsaved(settingsPermissionDeniedMessage([labelFor(environmentId)]));
           } else if (environmentId) {
             void persistServerSettings({
               environmentId,
@@ -508,8 +537,8 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           if (environmentId) {
             targets.add(environmentId);
           }
-          let wroteToTarget = false;
-          let permissionDenied = false;
+          const writes: Array<Parameters<typeof persist>[0]> = [];
+          const deniedLabels: string[] = [];
           for (const targetId of targets) {
             const target = environments.find((candidate) => candidate.environmentId === targetId);
             const targetPatch = filterSharedServerPatch(
@@ -521,23 +550,51 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
             );
             if (Object.keys(targetPatch).length === 0) continue;
             if (deniedOn(targetId, targetPatch)) {
-              permissionDenied = true;
+              deniedLabels.push(labelFor(targetId));
               continue;
             }
-            wroteToTarget = true;
-            void persistServerSettings({
+            writes.push({
               environmentId: targetId,
               input: { patch: targetPatch },
             });
           }
-          if (!wroteToTarget) {
+          if (writes.length === 0) {
             warnUnsaved(
-              permissionDenied
-                ? SETTINGS_PERMISSION_DENIED_MESSAGE
+              deniedLabels.length > 0
+                ? settingsPermissionDeniedMessage(deniedLabels)
                 : targets.size > 0
                   ? "Update older servers to save this setting."
                   : undefined,
             );
+          } else {
+            // One toast for the whole shared write, naming what saved and what did not.
+            void Promise.all(
+              writes.map(async (request) => ({
+                label: labelFor(request.environmentId),
+                result: await persist(request),
+              })),
+            ).then((outcomes) => {
+              const failures = outcomes.flatMap(({ label, result }) =>
+                result._tag !== "Failure" || isAtomCommandInterrupted(result)
+                  ? []
+                  : [
+                      `Could not save on ${label}: ${settingsSaveFailureMessage(squashAtomCommandFailure(result))}`,
+                    ],
+              );
+              if (failures.length === 0) return;
+              const saved = outcomes
+                .filter(({ result }) => result._tag === "Success")
+                .map(({ label }) => label);
+              toastManager.add({
+                type: "error",
+                title:
+                  saved.length > 0 ? "Setting saved on some environments" : "Setting not saved",
+                description: [
+                  ...failures,
+                  ...(saved.length > 0 ? [`Saved on ${saved.join(", ")}.`] : []),
+                ].join("\n"),
+              });
+            });
           }
         }
       }
@@ -545,7 +602,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         void persistClientSettingsPatch(clientPatch);
       }
     },
-    [environmentId, environments, persistServerSettings, serverAutoSettlement],
+    [environmentId, environments, labelFor, persist, persistServerSettings, serverAutoSettlement],
   );
 
   return updateSettings;
