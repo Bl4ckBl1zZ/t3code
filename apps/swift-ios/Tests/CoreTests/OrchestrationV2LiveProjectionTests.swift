@@ -125,6 +125,44 @@ struct OrchestrationV2LiveProjectionTests {
         #expect(elapsed < .seconds(5))
     }
 
+    /// A Muse workflow child can ask after the turn that launched it settled, so
+    /// its approval carries no run or provider turn. It must still decode and
+    /// stay a visible, open row, which is what the composer's approval panel
+    /// reads.
+    @Test func runlessApprovalArrivingAfterTheRunStaysVisible() throws {
+        var live = OrchestrationV2LiveProjection(largeProjection(itemCount: 3))
+        let approval = V2Fixture.turnItem(
+            id: "approval-child",
+            type: "approval_request",
+            status: "waiting",
+            ordinal: 400,
+            extra: [
+                "runId": .null,
+                "providerTurnId": .null,
+                "requestId": .string("request-child"),
+                "requestKind": .string("command"),
+                "prompt": .string("rm -rf build"),
+            ]
+        )
+        #expect(approval.base.runId == nil)
+        #expect(approval.base.providerTurnId == nil)
+        let event = OrchestrationV2ThreadEvent(
+            type: "turn-item.updated",
+            threadId: "thread-v2",
+            occurredAt: V2Fixture.timestamp,
+            change: .turnItem(approval)
+        )
+        #expect(live.apply(event) == .changed)
+        let row = try #require(live.projection.visibleTurnItems.last)
+        #expect(row.item.id == "approval-child")
+        #expect(!row.item.status.isTerminal)
+        guard case let .approvalRequest(requestID, _, _, _) = row.item.payload else {
+            Issue.record("The runless approval should decode as an approval request")
+            return
+        }
+        #expect(requestID == "request-child")
+    }
+
     // MARK: - Helpers
 
     private func storage<Element>(of array: [Element]) -> UnsafeRawPointer? {

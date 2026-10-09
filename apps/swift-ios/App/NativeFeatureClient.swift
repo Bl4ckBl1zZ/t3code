@@ -7060,6 +7060,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         case "grok": "Grok"
         case "opencode": "OpenCode"
         case "pi": "Pi"
+        case "muse": "Muse Code"
         default: id
         }
     }

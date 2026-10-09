@@ -215,6 +215,7 @@ struct SettingsUsageLimitsView: View {
         case "antigravity": "Antigravity"
         case "hermes": "Hermes"
         case "pi": "Pi"
+        case "muse": "Muse Code"
         default: driver.prefix(1).uppercased() + driver.dropFirst()
         }
     }

@@ -15,6 +15,8 @@ struct DailyUXModelPickerTests {
         #expect(ProviderBrand.resolve(driver: "cursor", providerID: "cursor") == .cursor)
         #expect(ProviderBrand.resolve(driver: "grok", providerID: "grok") == .grok)
         #expect(ProviderBrand.resolve(driver: "opencode", providerID: "opencode") == .openCode)
+        #expect(ProviderBrand.resolve(driver: "muse", providerID: "muse-work") == .muse)
+        #expect(SettingsUsageLimitsView.driverLabel("muse") == "Muse Code")
         #expect(ProviderBrand.resolve(driver: "", providerID: "claude") == .claude)
         #expect(ProviderBrand.resolve(driver: "custom", providerID: "custom") == nil)
     }
