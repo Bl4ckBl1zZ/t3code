@@ -240,12 +240,11 @@ describe("authenticated environment HTTP requests", () => {
       expect(new Headers(call.init.headers).get("dpop")).toBe("proof-1");
       expect(call.init.credentials).toBeUndefined();
       expect(harness.authorizations).toEqual([{ expectedEnvironmentId: TARGET.environmentId }]);
+      // The proof signs exactly the URL sent, minus the query that `htu` leaves out.
+      const signedUrl = new URL(call.url);
+      signedUrl.search = "";
       expect(harness.proofs).toEqual([
-        {
-          method: loader.method,
-          url: `${CURRENT_ORIGIN}${loader.path}`,
-          accessToken: "current-token",
-        },
+        { method: loader.method, url: signedUrl.toString(), accessToken: "current-token" },
       ]);
       if (loader.name === "V2 thread snapshot") {
         expect(url.searchParams.get("maxVisibleItems")).toBe("20");
