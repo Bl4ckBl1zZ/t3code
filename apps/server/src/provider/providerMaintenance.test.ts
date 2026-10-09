@@ -151,7 +151,10 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
   );
 
   it.effect("retries a failed latest-version lookup after a minute instead of an hour", () => {
-    const cache = new Map<string, { readonly expiresAt: number; readonly version: string | null }>();
+    const cache = new Map<
+      string,
+      { readonly expiresAt: number; readonly version: string | null }
+    >();
     return resolveLatestProviderVersion(manualPackageTool).pipe(
       Effect.provideService(ProviderVersionCache, cache),
       Effect.provideService(
