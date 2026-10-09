@@ -212,6 +212,65 @@ struct ThreadHeaderModifier: ViewModifier {
     }
 }
 
+// MARK: - Parent thread
+
+/// The thread a delegated subagent child leads back to. Provider-native
+/// children leave this to ``ProviderSubagentBar``, which already carries
+/// "Open parent", and a server that sends no parent id gets no link.
+struct ThreadParentLink: Equatable {
+    let threadID: String
+    let title: String
+
+    static func resolve(
+        thread: FeatureThread,
+        lineage: ThreadRelationshipShell?,
+        threads: [FeatureThread]
+    ) -> ThreadParentLink? {
+        guard let lineage, lineage.relationshipToParent == "subagent",
+              !thread.isProviderNativeSubagentThread,
+              let parentID = lineage.parentThreadID else { return nil }
+        let title = threads.first { $0.id == parentID }?.title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return ThreadParentLink(
+            threadID: parentID,
+            title: title.flatMap { $0.isEmpty ? nil : $0 } ?? "Parent thread"
+        )
+    }
+}
+
+/// Under the bar on a delegated subagent's thread: "‹ Parent title", which
+/// opens the parent so Back returns here.
+struct ThreadParentLinkButton: View {
+    let link: ThreadParentLink
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left")
+                    .font(.caption.weight(.semibold))
+                Text(link.title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .font(T3Typography.supporting)
+            .foregroundStyle(T3Colors.textSecondary)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .t3GlassEffect(interactive: true, in: Capsule(style: .continuous))
+            .t3GlassRim(in: Capsule(style: .continuous))
+            // The visual stays slim; the hit area still meets the tap minimum.
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .accessibilityLabel("Open parent thread: \(link.title)")
+        .accessibilityIdentifier("thread-parent-link")
+    }
+}
+
 // MARK: - Jump to latest
 
 /// Appears only while the reader is scrolled into history. A dot says that

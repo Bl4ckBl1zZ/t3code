@@ -24,6 +24,43 @@ struct ThreadScreenChromeTests {
         ThreadHeaderSubtitle.resolve(thread: thread, environmentName: "MacBook", connection: connection, now: now)
     }
 
+    private func lineage(parent: String?, relationship: String? = "subagent") -> ThreadRelationshipShell {
+        ThreadRelationshipShell(
+            id: "thread",
+            title: "Task",
+            status: "idle",
+            parentThreadID: parent,
+            relationshipToParent: relationship,
+            forkedFromRunThreadID: nil
+        )
+    }
+
+    @Test
+    func aDelegatedSubagentLinksToItsParentByTitle() {
+        let child = thread { $0.relationshipToParent = "subagent"; $0.creationSource = "mcp" }
+        let parent = FeatureThread(id: "parent", projectID: "project", title: "Ship login", state: .idle)
+        let link = ThreadParentLink.resolve(thread: child, lineage: lineage(parent: "parent"), threads: [parent])
+        #expect(link == ThreadParentLink(threadID: "parent", title: "Ship login"))
+
+        // A parent this device has not loaded still opens, under a generic name.
+        let unloaded = ThreadParentLink.resolve(thread: child, lineage: lineage(parent: "parent"), threads: [])
+        #expect(unloaded?.title == "Parent thread")
+    }
+
+    @Test
+    func onlyDelegatedSubagentsWithAParentIDGetTheParentLink() {
+        let parent = FeatureThread(id: "parent", projectID: "project", title: "Ship login", state: .idle)
+        // Provider-native children already lead back from their bar.
+        let native = thread { $0.relationshipToParent = "subagent"; $0.creationSource = "provider" }
+        #expect(ThreadParentLink.resolve(thread: native, lineage: lineage(parent: "parent"), threads: [parent]) == nil)
+        // Forks and root threads have no parent link; older servers send no parent id.
+        #expect(ThreadParentLink.resolve(
+            thread: thread(), lineage: lineage(parent: "parent", relationship: "fork"), threads: [parent]
+        ) == nil)
+        #expect(ThreadParentLink.resolve(thread: thread(), lineage: lineage(parent: nil), threads: [parent]) == nil)
+        #expect(ThreadParentLink.resolve(thread: thread(), lineage: nil, threads: [parent]) == nil)
+    }
+
     @Test
     func aCodeThreadReadsStateThenBranchThenEnvironment() {
         let working = subtitle(thread(.working) { $0.workingStartedAt = now.addingTimeInterval(-200) })
