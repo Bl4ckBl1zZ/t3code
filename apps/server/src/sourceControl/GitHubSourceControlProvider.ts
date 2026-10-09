@@ -254,7 +254,30 @@ export const makeDiscovery = Effect.gen(function* () {
         },
       } satisfies SourceControlProviderDiscoveryItem;
     }),
-    refineUnknownRemote: () => Effect.succeed(null),
+    /**
+     * Claims a custom host GitHub holds a credential for, from whichever source supplies it
+     * (Settings, the environment or gh). A host turned off in Settings is claimed too, so its
+     * error says so instead of "unsupported host".
+     */
+    refineUnknownRemote: ({ context }) => {
+      // Identity resolution also probes providers before a web base URL is known.
+      const url = URL.parse(context.provider.baseUrl);
+      if (!url?.host) return Effect.succeed(null);
+      return api.credential(url.host).pipe(
+        Effect.as(true),
+        Effect.catchTags({ GitHubHostDisabledError: () => Effect.succeed(true) }),
+        Effect.orElseSucceed(() => false),
+        Effect.map((known) =>
+          known
+            ? ({
+                kind: "github",
+                name: "GitHub Self-Hosted",
+                baseUrl: context.provider.baseUrl,
+              } as const)
+            : null,
+        ),
+      );
+    },
   } satisfies SourceControlManagedCliDiscoverySpec;
 });
 
@@ -269,6 +292,7 @@ export const make = Effect.gen(function* () {
             cwd: input.cwd,
             headSelector: input.headSelector,
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
+            ...(input.context === undefined ? {} : { context: input.context }),
           })
           .pipe(
             Effect.map((items) => items.map(toChangeRequest)),
@@ -298,6 +322,7 @@ export const make = Effect.gen(function* () {
           ...(input.context === undefined
             ? {}
             : { host: new URL(input.context.provider.baseUrl).host }),
+          ...(input.context === undefined ? {} : { context: input.context }),
         })
         .pipe(
           Effect.map((items) =>
@@ -357,6 +382,7 @@ export const make = Effect.gen(function* () {
           headSelector: input.headSelector,
           title: input.title,
           bodyFile: input.bodyFile,
+          ...(input.context === undefined ? {} : { context: input.context }),
         })
         .pipe(
           Effect.mapError(

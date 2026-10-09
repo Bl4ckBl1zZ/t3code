@@ -23,6 +23,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
+import type { SourceControlProviderContext } from "./SourceControlProvider.ts";
 import {
   decodeGitHubPullRequestEntries,
   type NormalizedGitHubPullRequestRecord,
@@ -283,6 +284,7 @@ export class GitHubRepositoryApi extends Context.Service<
       readonly cwd: string;
       readonly headSelector: string;
       readonly limit?: number;
+      readonly context?: SourceControlProviderContext | undefined;
     }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubRepositoryApiError>;
 
     /**
@@ -297,16 +299,19 @@ export class GitHubRepositoryApi extends Context.Service<
       readonly limit: number;
       /** The checkout's GitHub API host. Without it, the host comes from the git remotes. */
       readonly host?: string;
+      readonly context?: SourceControlProviderContext | undefined;
     }) => Effect.Effect<ReadonlyArray<NormalizedGitHubPullRequestRecord>, GitHubRepositoryApiError>;
 
     readonly getPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
+      readonly context?: SourceControlProviderContext | undefined;
     }) => Effect.Effect<GitHubPullRequestSummary, GitHubRepositoryApiError>;
 
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly context?: SourceControlProviderContext | undefined;
     }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubRepositoryApiError>;
 
     readonly createRepository: (input: {
@@ -321,16 +326,19 @@ export class GitHubRepositoryApi extends Context.Service<
       readonly headSelector: string;
       readonly title: string;
       readonly bodyFile: string;
+      readonly context?: SourceControlProviderContext | undefined;
     }) => Effect.Effect<void, GitHubRepositoryApiError>;
 
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
+      readonly context?: SourceControlProviderContext | undefined;
     }) => Effect.Effect<string | null, GitHubRepositoryApiError>;
 
     readonly checkoutPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
       readonly force?: boolean;
+      readonly context?: SourceControlProviderContext | undefined;
     }) => Effect.Effect<void, GitHubRepositoryApiError>;
   }
 >()("t3/sourceControl/GitHubRepositoryApi") {}
@@ -587,6 +595,11 @@ function apiHostForHint(host: string): string {
   return !normalized.includes(".") && normalized.includes("github") ? "github.com" : normalized;
 }
 
+/** The API host a resolved provider context names, if the caller has one. */
+function contextHost(context: SourceControlProviderContext | undefined): string | undefined {
+  return context === undefined ? undefined : URL.parse(context.provider.baseUrl)?.host || undefined;
+}
+
 /** The local branch a pull request checks out into, the way `gh pr checkout` names it. */
 export function pullRequestCheckoutBranchName(input: {
   readonly headRefName: string;
@@ -625,15 +638,18 @@ export const make = Effect.gen(function* () {
     new GitHubRepositoryCommandError({ command: "gh", cwd, cause: new Error(detail) });
 
   /**
-   * The repository `gh` would act on in `cwd`: GH_REPO, else the remote `gh` would pick, else
-   * the remote the caller resolved the provider from, else the best-ranked GitHub remote.
+   * The repository `gh` would act on in `cwd`: GH_REPO, then gh's remote selection on the
+   * detected host. The provider context is a fallback when the checkout's remotes cannot
+   * resolve that repository.
    */
   const resolveRepository = Effect.fn("GitHubRepositoryApi.resolveRepository")(function* (input: {
     readonly cwd: string;
     readonly host?: string | undefined;
+    readonly context?: SourceControlProviderContext | undefined;
   }) {
     const envRepository = environment.GH_REPO?.trim();
-    const defaultHost = (input.host ?? environment.GH_HOST ?? "github.com").toLowerCase();
+    const hostHint = input.host ?? contextHost(input.context);
+    const defaultHost = (hostHint ?? environment.GH_HOST ?? "github.com").toLowerCase();
     if (envRepository) {
       const locator = parseGitHubRepositorySelector(envRepository, defaultHost);
       if (locator !== null) return locator;
@@ -653,7 +669,7 @@ export const make = Effect.gen(function* () {
         host: gitHubApiHostForRemote(match[2]!),
       }));
     const host =
-      (input.host === undefined ? undefined : apiHostForHint(input.host)) ??
+      (hostHint === undefined ? undefined : apiHostForHint(hostHint)) ??
       fetchRemotes.find((remote) => remote.name === "origin" && remote.host !== null)?.host ??
       fetchRemotes.find((remote) => remote.host !== null)?.host ??
       defaultHost;
@@ -664,10 +680,14 @@ export const make = Effect.gen(function* () {
     });
     if (selected !== null) return { host, ...selected };
     // gh's own order without its prompt: upstream, github, origin, then the first remote, among
-    // the ones on this host (an SSH alias counts as its API host).
+    // the ones on this host (an SSH alias counts as its API host; an Enterprise remote matches
+    // by its own host name).
     const rank = (name: string) => ["upstream", "github", "origin"].indexOf(name.toLowerCase());
     const candidates = fetchRemotes
-      .filter((remote) => remote.host === host)
+      .filter(
+        (remote) =>
+          remote.host === host || normalizeGitRemoteUrl(remote.url).split("/")[0] === host,
+      )
       .toSorted((left, right) => {
         const l = rank(left.name);
         const r = rank(right.name);
@@ -676,6 +696,14 @@ export const make = Effect.gen(function* () {
     for (const remote of candidates) {
       const [owner, name, ...rest] = normalizeGitRemoteUrl(remote.url).split("/").slice(1);
       if (owner && name && rest.length === 0) return { host, owner, name };
+    }
+    if (input.context) {
+      const remote = normalizeGitRemoteUrl(input.context.remoteUrl);
+      const fallback = parseGitHubRepositorySelector(
+        `${host}/${remote.slice(remote.indexOf("/") + 1)}`,
+        host,
+      );
+      if (fallback !== null) return fallback;
     }
     return yield* commandFailure(
       input.cwd,
@@ -786,9 +814,14 @@ export const make = Effect.gen(function* () {
     readonly state: PullRequestListState;
     readonly limit: number;
     readonly rateLimitHost?: string | undefined;
+    readonly context?: SourceControlProviderContext | undefined;
     readonly allowReserve: boolean;
   }) {
-    const locator = yield* resolveRepository({ cwd: input.cwd, host: input.rateLimitHost });
+    const locator = yield* resolveRepository({
+      cwd: input.cwd,
+      host: input.rateLimitHost,
+      context: input.context,
+    });
     const limit = Math.min(Math.max(Math.trunc(input.limit), 1), 100);
     // `owner:branch` names a fork's branch. GitHub filters on the branch name only, so the
     // owner is matched on the rows it returns.
@@ -819,6 +852,7 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly reference: string;
     readonly rateLimitHost?: string | undefined;
+    readonly context?: SourceControlProviderContext | undefined;
   }) {
     const parsed = parsePullRequestReference(input.reference);
     if (parsed.kind === "branch") {
@@ -829,6 +863,7 @@ export const make = Effect.gen(function* () {
         state: "open",
         limit: 1,
         rateLimitHost: input.rateLimitHost,
+        context: input.context,
         allowReserve: true,
       });
       const found =
@@ -839,6 +874,7 @@ export const make = Effect.gen(function* () {
           state: "all",
           limit: 1,
           rateLimitHost: input.rateLimitHost,
+          context: input.context,
           allowReserve: true,
         }))[0];
       if (found === undefined) {
@@ -853,7 +889,11 @@ export const make = Effect.gen(function* () {
     const locator =
       parsed.kind === "url"
         ? parsed.locator
-        : yield* resolveRepository({ cwd: input.cwd, host: input.rateLimitHost });
+        : yield* resolveRepository({
+            cwd: input.cwd,
+            host: input.rateLimitHost,
+            context: input.context,
+          });
     const decodeFailure = (cause: unknown) =>
       new GitHubPullRequestDecodeError({ command: "gh", cwd: input.cwd, cause });
     const decoded = yield* graphqlJson(
@@ -948,9 +988,8 @@ export const make = Effect.gen(function* () {
     "GitHubRepositoryApi.checkoutPullRequest",
   )(function* (input) {
     const reference = parsePullRequestReference(input.reference);
-    const pullRequest = yield* readPullRequest({ cwd: input.cwd, reference: input.reference });
-    const base =
-      reference.kind === "url" ? reference.locator : yield* resolveRepository({ cwd: input.cwd });
+    const pullRequest = yield* readPullRequest(input);
+    const base = reference.kind === "url" ? reference.locator : yield* resolveRepository(input);
     const baseNameWithOwner = `${base.owner}/${base.name}`.toLowerCase();
     const headNameWithOwner = pullRequest.headRepositoryNameWithOwner ?? null;
     const isCrossRepository =
@@ -970,6 +1009,8 @@ export const make = Effect.gen(function* () {
         .find(
           (match) =>
             match !== null &&
+            (gitHubApiHostForRemote(match[2]!) ??
+              normalizeGitRemoteUrl(match[2]!).split("/")[0]) === base.host &&
             normalizeGitRemoteUrl(match[2]!).split("/").slice(1).join("/") ===
               nameWithOwner.toLowerCase(),
         )?.[1] ?? null;
@@ -1081,12 +1122,13 @@ export const make = Effect.gen(function* () {
         headSelector: input.headSelector,
         state: "open",
         limit: input.limit ?? 1,
+        context: input.context,
         allowReserve: true,
       }).pipe(Effect.map(toSummaries)),
     getPullRequest: (input) => readPullRequest(input).pipe(Effect.map(pullRequestSummary)),
     getRepositoryCloneUrls: (input) =>
       Effect.gen(function* () {
-        const fallbackHost = (yield* resolveRepository({ cwd: input.cwd }).pipe(
+        const fallbackHost = (yield* resolveRepository(input).pipe(
           Effect.map((locator) => locator.host),
           Effect.orElseSucceed(() => environment.GH_HOST ?? "github.com"),
         )).toLowerCase();
@@ -1128,7 +1170,7 @@ export const make = Effect.gen(function* () {
       }),
     createPullRequest: (input) =>
       Effect.gen(function* () {
-        const locator = yield* resolveRepository({ cwd: input.cwd });
+        const locator = yield* resolveRepository(input);
         const body = yield* fileSystem.readFileString(input.bodyFile).pipe(
           Effect.mapError(
             (cause) =>
@@ -1160,7 +1202,7 @@ export const make = Effect.gen(function* () {
       }),
     getDefaultBranch: (input) =>
       Effect.gen(function* () {
-        const locator = yield* resolveRepository({ cwd: input.cwd });
+        const locator = yield* resolveRepository(input);
         const repository = yield* readRepository(input.cwd, locator);
         const branch = repository.default_branch?.trim() ?? "";
         return branch.length > 0 ? branch : null;
