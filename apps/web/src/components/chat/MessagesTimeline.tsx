@@ -1820,10 +1820,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         />
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-60 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
+            <AssistantCopyButton row={row} />
             {row.projectedItem?.item.type === "assistant_message" ? (
               <AssistantForkButton projectedItem={row.projectedItem} />
             ) : null}
-            <AssistantCopyButton row={row} />
             {row.projectedItem && row.projectedItem.item.status !== "completed" ? (
               <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                 {row.projectedItem.item.status}
