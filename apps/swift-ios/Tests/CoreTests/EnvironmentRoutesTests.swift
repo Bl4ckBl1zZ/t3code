@@ -130,12 +130,14 @@ final class EnvironmentRoutesTests: XCTestCase {
 
     func testNewRoutesLandByNetworkAndUpsertReplacesTheSameAddress() {
         let relay = route("https://relay.example/e/env-1/", kind: .managedDPoP)
-        let tailnet = route("http://100.101.102.103:3773/")
+        let tailnet = route("https://desk.tail1234.ts.net/")
         let lan = route("http://192.168.1.4:3773/")
+        let vpn = route("http://100.96.0.1:3773/")
 
         var routes = EnvironmentRoutes.inserting(tailnet, into: [relay])
         routes = EnvironmentRoutes.inserting(lan, into: routes)
-        XCTAssertEqual(routes.map(\.label), ["LAN", "Tailscale", "T3 Connect"])
+        routes = EnvironmentRoutes.inserting(vpn, into: routes)
+        XCTAssertEqual(routes.map(\.label), ["LAN", "Tailscale", "VPN", "T3 Connect"])
 
         let learnedLAN = EnvironmentRoute(
             id: "learned:http://192.168.1.4:3773",
@@ -164,6 +166,7 @@ final class EnvironmentRoutesTests: XCTestCase {
         )
 
         XCTAssertEqual(learned.map(\.label), ["LAN", "Tailscale", "desk.example"])
+        XCTAssertEqual(learned.map(\.tailscaleConfirmed), [false, true, false])
         XCTAssertEqual(learned.filter(\.learned).map(\.credentialID), ["env-1", "env-1"])
         XCTAssertEqual(learned.filter(\.learned).map(\.kind), [.bearer, .bearer])
         XCTAssertEqual(learned[0].webSocketBaseURL.absoluteString, "ws://192.168.1.4:3773/")
@@ -191,6 +194,61 @@ final class EnvironmentRoutesTests: XCTestCase {
                 allowInsecure: false
             )
         )
+    }
+
+    func testSharedAddressesAreLabelledTailscaleOnlyWhileTheServerConfirmsIt() throws {
+        let relay = route("https://relay.example/e/env-1/", kind: .managedDPoP, credentialID: "env-1")
+        let tailscale = ServerDirectEndpoint(kind: .tailnet, httpBaseUrl: "http://100.101.102.103:3773/")
+        let mesh = ServerDirectEndpoint(kind: .lan, httpBaseUrl: "http://100.96.0.1:3773/")
+
+        let first = try XCTUnwrap(
+            EnvironmentRoutes.mergingLearned(into: [relay], activeRoute: relay, reported: [tailscale, mesh])
+        )
+        XCTAssertEqual(first.map(\.label), ["Tailscale", "VPN", "T3 Connect"])
+
+        // The server later finds the address is not on its Tailscale interface.
+        let notTailscale = ServerDirectEndpoint(kind: .lan, httpBaseUrl: tailscale.httpBaseUrl)
+        let corrected = try XCTUnwrap(
+            EnvironmentRoutes.mergingLearned(into: first, activeRoute: relay, reported: [notTailscale, mesh])
+        )
+        XCTAssertEqual(corrected.map(\.id), first.map(\.id))
+        XCTAssertEqual(corrected.map(\.label), ["VPN", "VPN", "T3 Connect"])
+        XCTAssertNil(
+            EnvironmentRoutes.mergingLearned(into: corrected, activeRoute: relay, reported: [notTailscale, mesh])
+        )
+
+        // A route paired by its numeric address keeps its place and gains the label.
+        let paired = route("http://100.101.102.103:3773/", credentialID: "env-1#tailnet")
+        XCTAssertEqual(paired.label, "VPN")
+        let confirmed = try XCTUnwrap(
+            EnvironmentRoutes.mergingLearned(into: [paired, relay], activeRoute: paired, reported: [tailscale])
+        )
+        XCTAssertEqual(confirmed.map(\.id), [paired.id, relay.id])
+        XCTAssertEqual(confirmed.map(\.label), ["Tailscale", "T3 Connect"])
+    }
+
+    func testTailscaleConfirmationSurvivesSavingAndOlderRecordsDecode() throws {
+        var confirmed = route("http://100.101.102.103:3773/")
+        confirmed.tailscaleConfirmed = true
+        let decoded = try JSONDecoder().decode(
+            EnvironmentRoute.self,
+            from: JSONEncoder().encode(confirmed)
+        )
+        XCTAssertEqual(decoded, confirmed)
+        XCTAssertEqual(decoded.label, "Tailscale")
+
+        let older = try JSONDecoder().decode(
+            EnvironmentRoute.self,
+            from: Data(
+                #"""
+                {"id":"learned:http://100.101.102.103:3773","httpBaseURL":"http://100.101.102.103:3773/",
+                 "webSocketBaseURL":"ws://100.101.102.103:3773/","kind":"bearer","credentialID":"env-1",
+                 "learned":true}
+                """#.utf8
+            )
+        )
+        XCTAssertFalse(older.tailscaleConfirmed)
+        XCTAssertEqual(older.label, "VPN")
     }
 
     func testRoutesLearnedThroughTConnectUseItsCredentialAndGoWithIt() throws {
@@ -250,9 +308,13 @@ final class EnvironmentRoutesTests: XCTestCase {
         XCTAssertTrue(HostClassification.isLoopback("127.0.0.2"))
         XCTAssertTrue(HostClassification.isLoopback("[::1]"))
         XCTAssertTrue(HostClassification.isTailnet("studio.tailnet.ts.net"))
-        XCTAssertTrue(HostClassification.isTailnet("100.64.0.1"))
-        XCTAssertFalse(HostClassification.isTailnet("100.128.0.1"))
         XCTAssertTrue(HostClassification.isTailnet("fd7a:115c:a1e0::1"))
+        // Tailscale, Cloudflare WARP, and other VPNs share 100.64.0.0/10.
+        XCTAssertFalse(HostClassification.isTailnet("100.64.0.1"))
+        XCTAssertTrue(HostClassification.isSharedAddressSpace("100.64.0.1"))
+        XCTAssertTrue(HostClassification.isSharedAddressSpace("100.127.255.254"))
+        XCTAssertFalse(HostClassification.isSharedAddressSpace("100.128.0.1"))
+        XCTAssertFalse(HostClassification.isSharedAddressSpace("studio.tailnet.ts.net"))
         XCTAssertTrue(HostClassification.isPrivateNetwork("192.168.1.4"))
         XCTAssertTrue(HostClassification.isPrivateNetwork("studio.local"))
         XCTAssertTrue(HostClassification.isPrivateNetwork("fe80::1"))

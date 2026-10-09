@@ -1,7 +1,7 @@
 import Foundation
 
 /// Where a hostname points, as far as connection routes care: this device,
-/// a private network, a tailnet, or the public internet. Mirrors
+/// a private network, a tailnet or another VPN, or the public internet. Mirrors
 /// `packages/shared/src/hostClassification.ts` so the app ranks and labels
 /// routes the way the web client does.
 public enum HostClassification {
@@ -19,16 +19,21 @@ public enum HostClassification {
         return ipv4(value)?.first == 127
     }
 
-    /// A Tailscale address: a MagicDNS name, the 100.64.0.0/10 range
-    /// Tailscale assigns, or its IPv6 range fd7a:115c:a1e0::/48.
+    /// A name or address only Tailscale uses: a MagicDNS name or its IPv6
+    /// range fd7a:115c:a1e0::/48. Its IPv4 addresses come from the shared
+    /// 100.64.0.0/10 range, so they prove nothing on their own.
     public static func isTailnet(_ host: String) -> Bool {
         let value = normalized(host)
         if value.hasSuffix(".ts.net") { return true }
-        if let parts = ipv4(value) {
-            return parts[0] == 100 && (64...127).contains(parts[1])
-        }
         guard let address = ipv6(value) else { return false }
         return address[0] == 0xfd7a && address[1] == 0x115c && address[2] == 0xa1e0
+    }
+
+    /// An IPv4 address in 100.64.0.0/10. Tailscale, Cloudflare WARP and Mesh,
+    /// other VPNs, and carrier-grade NAT all assign from this range.
+    public static func isSharedAddressSpace(_ host: String) -> Bool {
+        guard let parts = ipv4(normalized(host)) else { return false }
+        return parts[0] == 100 && (64...127).contains(parts[1])
     }
 
     public static func isPrivateNetwork(_ host: String) -> Bool {
