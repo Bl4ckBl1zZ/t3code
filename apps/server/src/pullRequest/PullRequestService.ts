@@ -782,6 +782,16 @@ export const make = Effect.gen(function* () {
           if (own === undefined) {
             return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
           }
+          // A checkout with an `upstream` remote is identified by upstream, but its branches
+          // open PRs on the `origin` fork. Hostless references to that fork stay on this host.
+          const origin = own.project.repositoryIdentity?.origin;
+          if (
+            origin !== undefined &&
+            canonicalRepositoryKey(`${own.host}/${repository}`.toLowerCase()) ===
+              canonicalRepositoryKey(origin.canonicalKey.toLowerCase())
+          ) {
+            return Effect.succeed({ ...own, repository });
+          }
           // The repository travels through the client, so it is checked against the project's
           // own remote rather than being handed to a provider verbatim.
           return Effect.fail(

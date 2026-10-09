@@ -58,15 +58,32 @@ interface RefreshRequest {
   readonly backfill?: boolean;
 }
 
+/**
+ * The fork a branch PR lives on when the project's identity is the upstream
+ * repository and the checkout pushes to `origin`. Null for any other PR.
+ */
+function forkRepositoryOf(
+  pullRequest: GitManager.GitBranchPullRequest,
+  project: Project,
+): string | null {
+  const origin = project.repositoryIdentity?.origin;
+  if (pullRequest.repositoryKey === null || origin === undefined) return null;
+  return canonicalRepositoryKey(pullRequest.repositoryKey) ===
+    canonicalRepositoryKey(origin.canonicalKey)
+    ? (origin.displayName ?? null)
+    : null;
+}
+
 export function pullRequestMatchesProject(
   pullRequest: GitManager.GitBranchPullRequest,
   project: Project,
 ): boolean {
   return (
-    pullRequest.repositoryKey !== null &&
-    project.repositoryIdentity != null &&
-    canonicalRepositoryKey(pullRequest.repositoryKey) ===
-      canonicalRepositoryKey(project.repositoryIdentity.canonicalKey)
+    (pullRequest.repositoryKey !== null &&
+      project.repositoryIdentity != null &&
+      canonicalRepositoryKey(pullRequest.repositoryKey) ===
+        canonicalRepositoryKey(project.repositoryIdentity.canonicalKey)) ||
+    forkRepositoryOf(pullRequest, project) !== null
   );
 }
 
@@ -180,7 +197,7 @@ export const make = Effect.gen(function* () {
             detected !== null && repository !== null
               ? {
                   projectId: project.id,
-                  repository,
+                  repository: forkRepositoryOf(detected, project) ?? repository,
                   number: detected.number,
                   url: detected.url,
                 }
