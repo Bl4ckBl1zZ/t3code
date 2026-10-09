@@ -15,7 +15,7 @@ whether a turn runs. This page lists the decisions and evidence a new driver nee
   Antigravity, and OpenClaw. Never add agent-id checks to the generic registry adapter.
 - **Other protocols** get a native adapter that implements
   [`ProviderAdapterV2`](../../apps/server/src/orchestration-v2/ProviderAdapter.ts), like Codex,
-  Claude, Cursor, OpenCode, Pi, and Hermes.
+  Claude, Cursor, OpenCode, Pi, Muse, and Hermes.
 
 Provider-specific behavior stays in the adapter and driver. Orchestration and clients read
 capabilities, never the driver kind.
