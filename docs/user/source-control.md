@@ -190,8 +190,9 @@ On web and desktop, sidebar search and the command palette match the linked PR n
 (such as **#287**), repository plus number, or URL. This searches links already attached to
 threads; it does not query the source-control host.
 
-Remote **Open in editor** also supports Zed over SSH when the environment advertises an
-SSH target and Zed is installed on the client machine.
+Remote **Open in editor** also supports Zed and JetBrains IDEs over SSH when the environment
+advertises an SSH target and the editor is installed on the client machine. JetBrains IDEs open
+the project through the JetBrains Toolbox App.
 
 Enable **Proactive panels** in Settings → General to open linked pull requests and completed-run
 changes automatically on desktop-sized layouts. Changes open only when a ready checkpoint contains
