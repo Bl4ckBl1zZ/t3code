@@ -165,7 +165,8 @@ final class ThreadFindTests: XCTestCase {
     }
 
     func testProgressiveEarlyFrameBlocksSteppingUntilTheCountLands() async throws {
-        let match = ThreadFindMatch(entryId: "a", runId: nil, occurrence: 0)
+        // The early frame names the same match the final count lands on.
+        let match = ThreadFindMatch(entryId: "a", runId: "run-a", occurrence: 0)
         // The stream exists before the model asks, so no hand-off can race.
         let (frames, continuation) = AsyncThrowingStream<ThreadFindResult, Error>.makeStream()
         continuation.yield(ThreadFindResult(complete: false, snapshotSequence: 1, totalMatches: 1, activeIndex: 0, match: match))
