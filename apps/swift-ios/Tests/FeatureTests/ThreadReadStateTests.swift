@@ -48,6 +48,19 @@ struct ThreadReadStateTests {
     }
 
     @Test
+    func inFlightRowsFadeButRowsNeedingTheUserDoNot() {
+        #expect(thread(state: .working).homeFadesInFlight(at: now))
+        #expect(thread(state: .queued).homeFadesInFlight(at: now))
+        #expect(thread(state: .waitingForApproval).homeFadesInFlight(at: now))
+
+        #expect(!thread(state: .waitingForInput).homeFadesInFlight(at: now))
+        #expect(!thread(state: .failed).homeFadesInFlight(at: now))
+        #expect(!thread(completedAt: now, visitedAt: now.addingTimeInterval(-60)).homeFadesInFlight(at: now))
+        // A read, idle row recedes by color only; it does not fade.
+        #expect(!thread(completedAt: now, visitedAt: now).homeFadesInFlight(at: now))
+    }
+
+    @Test
     func usageLimitFailuresReadAsLimitedNotFailed() {
         var limited = thread(state: .failed)
         limited.lastErrorClass = "usage_limit"

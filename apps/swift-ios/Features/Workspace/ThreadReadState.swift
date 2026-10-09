@@ -86,6 +86,16 @@ extension FeatureThread {
         case .input, .failed, .limited, .woke, .done: false
         }
     }
+
+    /// Web's sidebar `isInFlight`: a working, background or approval row fades
+    /// as a whole, status label included, because there is nothing for the
+    /// user to do with it yet. Input stays at full strength; it needs a human.
+    func homeFadesInFlight(at now: Date) -> Bool {
+        switch homeStatus(at: now) {
+        case .working, .background, .approval: true
+        case .input, .failed, .limited, .woke, .done, .ready: false
+        }
+    }
 }
 
 /// When to send `thread.visit` for the thread on screen. Mirrors web's
