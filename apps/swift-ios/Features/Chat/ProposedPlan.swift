@@ -152,6 +152,8 @@ enum ProposedPlanMarkdown {
 struct ThreadProposedPlan: Equatable, Sendable, Identifiable {
     /// The projected item's id, unique across inherited rows.
     let id: String
+    /// The turn item's own id, which thread find names a plan by.
+    let itemID: String
     let planID: String
     let runID: String?
     let markdown: String
@@ -169,6 +171,7 @@ struct ThreadProposedPlan: Equatable, Sendable, Identifiable {
         // A finished plan with nothing in it says nothing a work row does not.
         guard isStreaming || !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         id = projected.id
+        itemID = projected.item.id
         self.planID = planID
         runID = projected.item.base.runId
         self.markdown = markdown

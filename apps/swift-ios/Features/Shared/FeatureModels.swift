@@ -67,6 +67,11 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var supportsAssistantCitations: Bool? = nil
     public var supportsCustomModelDefinitions: Bool? = nil
     public var supportsProjectIcons: Bool? = nil
+    /// `ServerConfig.threadFind`: the server answers find in one thread. Nil
+    /// until its config arrives, which reads as unsupported.
+    public var supportsThreadFind: Bool? = nil
+    /// `ServerConfig.threadFindProgressive`: its find can stream an early match.
+    public var supportsProgressiveThreadFind: Bool? = nil
     public var machineSymbol: String { EnvironmentMachineKind(rawValue: machineKind ?? "")?.symbol ?? "server.rack" }
 
     public init(

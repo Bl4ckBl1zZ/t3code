@@ -214,6 +214,32 @@ public actor T3Client {
         ).matches
     }
 
+    /// Finds `query` in one thread's messages and proposed plans, as the
+    /// timeline renders them, and selects one match. Servers advertise it with
+    /// `ServerConfig.threadFind`.
+    public func searchThread(threadID: String, query: ThreadFindQuery) async throws -> ThreadFindResult {
+        try await rpc.request(
+            RPCMethod.searchThread.rawValue,
+            payload: query.payload(threadID: threadID),
+            as: ThreadFindResult.self
+        )
+    }
+
+    /// The same search as a stream: without `index` or `offset` the server may
+    /// first send a `complete: false` frame with the nearest match, then the
+    /// final result. Servers advertise it with `threadFindProgressive`.
+    public func searchThreadStream(
+        threadID: String,
+        query: ThreadFindQuery
+    ) async -> AsyncThrowingStream<ThreadFindResult, Error> {
+        await rpc.subscribe(
+            RPCMethod.searchThreadStream.rawValue,
+            payload: query.payload(threadID: threadID),
+            reconnect: false,
+            as: ThreadFindResult.self
+        )
+    }
+
     public func threadSnapshot(
         id: String,
         maxVisibleItems: Int? = nil
@@ -2807,6 +2833,8 @@ public enum RPCMethod: String, Sendable {
     case mcpAppsReadResource = "mcpApps.readResource"
     case mcpAppsUpdateModelContext = "mcpApps.updateModelContext"
     case searchThreads = "orchestration.searchThreads"
+    case searchThread = "orchestration.searchThread"
+    case searchThreadStream = "orchestration.searchThreadStream"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
     case projectsMutate = "projects.mutate"

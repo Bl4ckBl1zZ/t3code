@@ -880,6 +880,10 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public let threadResumeCompletionMarker: Bool?
     /// Whether shell subscriptions can emit a catch-up completion marker.
     public let shellResumeCompletionMarker: Bool?
+    /// Whether `orchestration.searchThread` (find in one thread) is served.
+    public var threadFind: Bool? = nil
+    /// Whether `orchestration.searchThreadStream` emits an early match before the count.
+    public var threadFindProgressive: Bool? = nil
     /// The folder behind this environment's Scratch project, for threads with
     /// no project. Present only on servers that answer `projects.ensureScratch`.
     public var scratchWorkspaceRoot: String? = nil
@@ -913,6 +917,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case providers, settings, t3WorkDirectory, cwd, environment
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
+        case threadFind, threadFindProgressive
         case scratchWorkspaceRoot
         case directEndpoints
     }
@@ -939,6 +944,8 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .shellResumeCompletionMarker
         )
+        threadFind = try container.decodeIfPresent(Bool.self, forKey: .threadFind)
+        threadFindProgressive = try container.decodeIfPresent(Bool.self, forKey: .threadFindProgressive)
         scratchWorkspaceRoot = try container.decodeIfPresent(String.self, forKey: .scratchWorkspaceRoot)
         // Forward-compatible like the contract: an endpoint kind this build
         // does not know is dropped, and a malformed list never fails the config.
@@ -964,6 +971,8 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             shellResumeCompletionMarker,
             forKey: .shellResumeCompletionMarker
         )
+        try container.encodeIfPresent(threadFind, forKey: .threadFind)
+        try container.encodeIfPresent(threadFindProgressive, forKey: .threadFindProgressive)
         try container.encodeIfPresent(scratchWorkspaceRoot, forKey: .scratchWorkspaceRoot)
         try container.encodeIfPresent(directEndpoints, forKey: .directEndpoints)
     }

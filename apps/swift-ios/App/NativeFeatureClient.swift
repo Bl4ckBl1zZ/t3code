@@ -17,7 +17,7 @@ extension FeatureInputAnswer {
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
-    FeatureMcpAppHosting, T3ConnectCapable
+    FeatureMcpAppHosting, FeatureThreadFinding, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -985,6 +985,34 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     // MARK: MCP apps
+
+    func findInThread(
+        threadID: String,
+        query: ThreadFindQuery,
+        progressive: Bool
+    ) -> AsyncThrowingStream<ThreadFindResult, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { @MainActor [weak self] in
+                do {
+                    guard let self else { throw CancellationError() }
+                    let route = try self.threadRoute(for: threadID)
+                    // Relative steps need the final count, so the server
+                    // answers them in one frame either way.
+                    if progressive, query.index == nil, query.offset == 0 {
+                        for try await result in await route.client.searchThreadStream(threadID: route.wireID, query: query) {
+                            continuation.yield(result)
+                        }
+                    } else {
+                        continuation.yield(try await route.client.searchThread(threadID: route.wireID, query: query))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 
     func mcpAppDocumentURL(threadID: String, app: McpAppReference) async throws -> URL {
         let route = try threadRoute(for: threadID)
@@ -4346,7 +4374,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         let previous = self.serverConfigsByEnvironmentID[
                             activeClient.environment.id
                         ]
-                        let config = ServerConfigSnapshot(
+                        var config = ServerConfigSnapshot(
                             providers: providers,
                             settings: previous?.settings,
                             t3WorkDirectory: previous?.t3WorkDirectory,
@@ -4354,6 +4382,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                             threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
                             shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
                         )
+                        config.threadFind = previous?.threadFind
+                        config.threadFindProgressive = previous?.threadFindProgressive
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
                     case let .settingsUpdated(settings):
@@ -5814,6 +5844,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             .flatMap { mcpOAuthSupport[$0.absoluteString] == true ? $0 : nil }
         mapped.permissionUpdate = permissionUpdate(environmentID: environment.id)
         mapped.accessEnded = refusedCredentials[environment.id]
+        mapped.supportsThreadFind = serverConfigsByEnvironmentID[environment.id]?.threadFind
+        mapped.supportsProgressiveThreadFind = serverConfigsByEnvironmentID[environment.id]?.threadFindProgressive
         return mapped
     }
 
@@ -6206,7 +6238,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         switch item.payload {
-        case let .userMessage(_, _, text, attachments):
+        case let .userMessage(messageID, _, text, attachments):
             var mapped = FeatureMessage(
                 id: item.id,
                 role: .user,
@@ -6225,7 +6257,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 },
                 // Kept so the transcript can tell an agent-sent user message
                 // from the reader's own, matching the RN feed.
-                createdBy: item.base.createdBy
+                createdBy: item.base.createdBy,
+                // Thread find names messages by this id rather than the turn item's.
+                wireMessageID: messageID
             )
             mapped.senderThreadID = item.senderThreadId.map {
                 FeatureScopedID.thread(environmentID: environmentID, wireID: $0)
