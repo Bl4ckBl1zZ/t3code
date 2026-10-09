@@ -35,6 +35,7 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
   [ProviderDriverKind.make("opencode")]: "text-[#211E1E] dark:text-[#F1ECEC]",
   [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
   [ProviderDriverKind.make("pi")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
+  [ProviderDriverKind.make("muse")]: "text-[#171717] dark:text-[#e5e5e5]",
 };
 
 export function providerTextColorClassName(driverKind: ProviderDriverKind): string | undefined {
