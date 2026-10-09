@@ -1,4 +1,4 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
+import { ProviderDriverKind, type UsageProviderKind } from "@t3tools/contracts";
 
 import { ClaudeAI, GrokIcon, type Icon, OpenAI } from "../Icons";
 
@@ -6,6 +6,8 @@ type UsageProviderPresentation = {
   readonly label: string;
   readonly color: string;
   readonly mark: Icon;
+  /** Provider driver whose limit accounts belong to this usage provider. */
+  readonly driverKind: ProviderDriverKind;
 };
 
 /**
@@ -18,17 +20,20 @@ export const PROVIDER_PRESENTATION = {
     label: "Codex",
     color: "var(--contrast-foreground)",
     mark: OpenAI,
+    driverKind: ProviderDriverKind.make("codex"),
   },
   claude: {
     label: "Claude Code",
     color: "#d97757",
     mark: ClaudeAI,
+    driverKind: ProviderDriverKind.make("claudeAgent"),
   },
   grok: {
     label: "Grok Build",
     // Contrast-aware neutral between the Codex series and muted chart chrome.
     color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
     mark: GrokIcon,
+    driverKind: ProviderDriverKind.make("grok"),
   },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 

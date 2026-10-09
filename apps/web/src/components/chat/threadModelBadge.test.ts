@@ -232,6 +232,37 @@ describe("resolveSubagentModelTraits", () => {
     }
   });
 
+  it("uses the selection the provider reported for any subagent, after it completes", () => {
+    const entry = providerEntry("codex", [serviceTier]);
+    const reported = childSelection([
+      { id: "reasoningEffort", value: "high" },
+      { id: "serviceTier", value: "ultrafast" },
+    ]);
+    for (const origin of ["provider_native", "app_owned"] as const) {
+      expect(
+        resolveSubagentModelTraits({
+          subagent: { ...subagent, origin, modelSelection: reported },
+          // A provider-native child mirrors the parent; a stale child selection loses.
+          modelSelection: childSelection([{ id: "reasoningEffort", value: "medium" }]),
+          providerEntry: entry,
+        }),
+        origin,
+      ).toEqual({ reasoning: "High", speedIcon: "ultrafast" });
+    }
+    // A reported selection on another model still does not describe this agent.
+    expect(
+      resolveSubagentModelTraits({
+        subagent: {
+          ...subagent,
+          origin: "provider_native",
+          modelSelection: { ...reported, model: "gpt-5.5" },
+        },
+        modelSelection: null,
+        providerEntry: entry,
+      }),
+    ).toBeNull();
+  });
+
   it("keeps the match but no traits once the provider instance is gone", () => {
     expect(
       resolveSubagentModelTraits({

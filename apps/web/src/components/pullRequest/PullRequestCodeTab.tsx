@@ -24,6 +24,7 @@ import {
   MessageSquareOffIcon,
   PilcrowIcon,
   Rows3Icon,
+  Settings2Icon,
   TextWrapIcon,
   TriangleAlertIcon,
   XIcon,
@@ -41,6 +42,7 @@ import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
+  getDiffLineStat,
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
@@ -66,10 +68,12 @@ import { MorphIcon } from "~/components/MorphIcon";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/menu";
 import { toastManager } from "../ui/toast";
@@ -557,6 +561,23 @@ export function PullRequestCodeTab({
       ),
     [loadedSlices],
   );
+  const sourceFileStats = useMemo(
+    () =>
+      new Map(
+        parsedSlices.flatMap((parsed) =>
+          parsed?.kind === "files"
+            ? parsed.files.map(
+                (file, index) =>
+                  [
+                    buildFileDiffRenderKey(file),
+                    getDiffLineStat([parsed.sourceFiles[index] ?? file]),
+                  ] as const,
+              )
+            : [],
+        ),
+      ),
+    [parsedSlices],
+  );
   const fileKeys = useMemo(() => items.map((item) => item.id), [items]);
   const collapsedFileKeys = useMemo(
     () => new Set(items.filter((item) => item.collapsed === true).map((item) => item.id)),
@@ -768,12 +789,8 @@ export function PullRequestCodeTab({
   const renderHeaderMetadata = useCallback(
     (item: CodeViewItem<ReviewAnnotationGroup>) => {
       if (item.type !== "diff") return null;
-      let additions = 0;
-      let deletions = 0;
-      for (const hunk of item.fileDiff.hunks) {
-        additions += hunk.additionLines;
-        deletions += hunk.deletionLines;
-      }
+      let { additions, deletions } =
+        sourceFileStats.get(item.id) ?? getDiffLineStat([item.fileDiff]);
       if (additions === 0 && deletions === 0) {
         const withheld = omittedFileStats.get(resolveFileDiffPath(item.fileDiff));
         if (withheld) ({ additions, deletions } = withheld);
@@ -786,7 +803,7 @@ export function PullRequestCodeTab({
         />
       );
     },
-    [omittedFileStats],
+    [omittedFileStats, sourceFileStats],
   );
 
   const diffViewOptions = useMemo(
@@ -1043,8 +1060,13 @@ export function PullRequestCodeTab({
     }
   }, [commit, onSelectedCommitChange, selectedCommit]);
   const scopeLabel = selectedCommit ? selectedCommit.messageHeadline : "All commits";
+  const changeIgnoreWhitespace = (next: boolean) => {
+    setIgnoreWhitespace(next);
+    setDraft(null);
+    setSelectedLines(null);
+  };
   const toolbar = (
-    <div className="flex h-10 min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background px-4 text-xs text-muted-foreground">
+    <div className="@container flex h-10 min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background px-4 text-xs text-muted-foreground">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         {/* A host that reports no commits has nothing to scope by, and a dropdown whose only
             entry is the scope already showing is a control that does nothing. */}
@@ -1058,7 +1080,7 @@ export function PullRequestCodeTab({
               <span className="truncate">{scopeLabel}</span>
               <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="start" className="max-w-[min(28rem,calc(100vw-2rem))]">
               <DropdownMenuRadioGroup
                 value={commit ?? "all"}
                 onValueChange={(value) => onSelectedCommitChange(value === "all" ? null : value)}
@@ -1101,7 +1123,7 @@ export function PullRequestCodeTab({
         ) : null}
         {/* One count, and the caveats as icons that carry their own words. Spelled out they
             competed for a strip this narrow and every one of them truncated to nothing. */}
-        <PullRequestMetaLine className="shrink-0">
+        <PullRequestMetaLine>
           <span className="shrink-0 tabular-nums">
             {files.length} {files.length === 1 ? "file" : "files"}
             {nextCursor === null ? "" : "+"}
@@ -1136,30 +1158,112 @@ export function PullRequestCodeTab({
         </PullRequestMetaLine>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                aria-label={
-                  ignoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <DropdownMenuTrigger
+                  render={<Button size="icon-sm" variant="ghost" />}
+                  className="@lg:hidden"
+                  aria-label="Diff options"
+                />
+              }
+            >
+              <Settings2Icon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Diff options</TooltipPopup>
+          </Tooltip>
+          <DropdownMenuContent align="end">
+            <DropdownMenuCheckboxItem
+              checked={ignoreWhitespace}
+              onCheckedChange={(checked) => changeIgnoreWhitespace(checked)}
+            >
+              Hide whitespace changes
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={wordWrap}
+              onCheckedChange={(checked) => setWordWrap(checked)}
+            >
+              Wrap lines
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuRadioGroup
+              value={diffRenderMode}
+              onValueChange={(value) => {
+                if (value === "stacked" || value === "split") {
+                  setDiffRenderMode(value);
                 }
-                variant="ghost"
-                size="sm"
-                pressed={ignoreWhitespace}
-                onPressedChange={(pressed) => {
-                  setIgnoreWhitespace(Boolean(pressed));
-                  setDraft(null);
-                  setSelectedLines(null);
-                }}
-              />
-            }
+              }}
+            >
+              <DropdownMenuRadioItem value="stacked" closeOnClick>
+                Stacked
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="split" closeOnClick>
+                Split
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <div className="hidden items-center gap-1 @lg:flex">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  aria-label={
+                    ignoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
+                  }
+                  variant="ghost"
+                  size="sm"
+                  pressed={ignoreWhitespace}
+                  onPressedChange={(pressed) => changeIgnoreWhitespace(Boolean(pressed))}
+                />
+              }
+            >
+              <PilcrowIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {ignoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"}
+            </TooltipPopup>
+          </Tooltip>
+          <ToggleGroup
+            className="shrink-0 gap-1"
+            size="sm"
+            value={[diffRenderMode]}
+            onValueChange={(value) => {
+              const next = value[0];
+              if (next === "stacked" || next === "split") {
+                setDiffRenderMode(next);
+              }
+            }}
           >
-            <PilcrowIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {ignoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"}
-          </TooltipPopup>
-        </Tooltip>
+            <Toggle aria-label="Stacked diff view" value="stacked" variant="ghost">
+              <Rows3Icon className="size-3.5" />
+            </Toggle>
+            <Toggle aria-label="Split diff view" value="split" variant="ghost">
+              <Columns2Icon className="size-3.5" />
+            </Toggle>
+          </ToggleGroup>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  aria-label={wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
+                  variant="ghost"
+                  size="sm"
+                  pressed={wordWrap}
+                  onPressedChange={(pressed) => {
+                    setWordWrap(Boolean(pressed));
+                  }}
+                />
+              }
+            >
+              <TextWrapIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
+            </TooltipPopup>
+          </Tooltip>
+        </div>
         {fileKeys.length > 0 ? (
           <Tooltip>
             <TooltipTrigger
@@ -1183,44 +1287,6 @@ export function PullRequestCodeTab({
             </TooltipPopup>
           </Tooltip>
         ) : null}
-        <ToggleGroup
-          className="shrink-0 gap-1"
-          size="sm"
-          value={[diffRenderMode]}
-          onValueChange={(value) => {
-            const next = value[0];
-            if (next === "stacked" || next === "split") {
-              setDiffRenderMode(next);
-            }
-          }}
-        >
-          <Toggle aria-label="Stacked diff view" value="stacked" variant="ghost">
-            <Rows3Icon className="size-3.5" />
-          </Toggle>
-          <Toggle aria-label="Split diff view" value="split" variant="ghost">
-            <Columns2Icon className="size-3.5" />
-          </Toggle>
-        </ToggleGroup>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                aria-label={wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
-                variant="ghost"
-                size="sm"
-                pressed={wordWrap}
-                onPressedChange={(pressed) => {
-                  setWordWrap(Boolean(pressed));
-                }}
-              />
-            }
-          >
-            <TextWrapIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
-          </TooltipPopup>
-        </Tooltip>
         {fileKeys.length > 0 ? (
           <Tooltip>
             <TooltipTrigger

@@ -20,9 +20,11 @@ import { resolveAssetUrl } from "~/assets/assetUrls";
 import {
   applyPreviewServerSnapshot,
   isPreviewSupportedInRuntime,
+  readThreadPreviewState,
   rememberPreviewUrl,
+  setActivePreviewTab,
 } from "~/previewStateStore";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { selectSelectedRightPanelSurface, useRightPanelStore } from "~/rightPanelStore";
 
 export const isBrowserPreviewFile = (path: string): boolean =>
   /\.(?:html?|pdf)$/i.test(path.split(/[?#]/, 1)[0] ?? "");
@@ -42,15 +44,40 @@ export async function openUrlInPreview<E>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly url: string;
   readonly openPreview: OpenPreviewMutation<E>;
+  /** Profile to open under; omit for the configured default. */
+  readonly profileId?: PreviewOpenInput["profileId"];
+  /** Open the tab without switching the thread to it. */
+  readonly background?: boolean;
 }): Promise<AtomCommandResult<void, E>> {
+  const previousActiveTabId = readThreadPreviewState(input.threadRef).activeTabId;
+  // The server's "opened" event switches the preview tab but not the panel's
+  // selection, so a changed selection means the user picked a tab themselves.
+  const selectedSurface = () =>
+    selectSelectedRightPanelSurface(useRightPanelStore.getState().byThreadKey, input.threadRef)
+      ?.id ?? null;
+  const surfaceBeforeOpen = selectedSurface();
   const result = await openPreviewSession({
     openPreview: input.openPreview,
     threadRef: input.threadRef,
     url: input.url,
+    ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
+    ...(input.background ? { background: true } : {}),
   });
   return mapAtomCommandResult(result, (snapshot) => {
-    applyPreviewServerSnapshot(input.threadRef, snapshot);
     rememberPreviewUrl(input.threadRef, input.url);
+    if (input.background) {
+      // The server's "opened" event activates the new tab; hand focus back,
+      // unless the user picked a tab, this one included, while the open was in flight.
+      if (
+        previousActiveTabId &&
+        readThreadPreviewState(input.threadRef).activeTabId === snapshot.tabId &&
+        selectedSurface() === surfaceBeforeOpen
+      ) {
+        setActivePreviewTab(input.threadRef, previousActiveTabId);
+      }
+      return;
+    }
+    applyPreviewServerSnapshot(input.threadRef, snapshot);
     useRightPanelStore.getState().openBrowser(input.threadRef, snapshot.tabId);
   });
 }

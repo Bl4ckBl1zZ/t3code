@@ -1,4 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -25,6 +26,8 @@ import { useUpdateEnvironmentSettings, useUpdatePrimarySettings } from "./useSet
 beforeEach(() => {
   state.primary = null;
   state.persist.mockReset();
+  // Saves report their outcome; a failure toasts the environment and reason.
+  state.persist.mockResolvedValue(AsyncResult.success(undefined));
   state.notify.mockReset();
 });
 

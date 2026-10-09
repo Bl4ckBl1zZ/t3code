@@ -2,15 +2,18 @@
 
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
 import { useActivePreviewSessions } from "~/previewStateStore";
+import { previewEnvironment } from "~/state/preview";
+import { useAtomCommand } from "~/state/use-atom-command";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserPointerStore } from "./browserPointerStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
+import { openUrlInPreview } from "./openFileInPreview";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 export function ElectronBrowserHost() {
@@ -78,6 +81,32 @@ export function ElectronBrowserHost() {
       useBrowserPointerStore.getState().apply(event);
     });
   }, []);
+
+  // A `target="_blank"` link inside a hosted page opens as another tab of the
+  // same thread, so the page that held the link stays where it is.
+  const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: true });
+  const sessionByRuntimeTabId = useRef(new Map<string, (typeof sessions)[number]>());
+  useEffect(() => {
+    sessionByRuntimeTabId.current = new Map(
+      sessions.map((session) => [session.runtimeTabId, session]),
+    );
+  }, [sessions]);
+  useEffect(() => {
+    const preview = window.desktopBridge?.preview;
+    if (!preview) return;
+    return preview.onOpenLink(({ tabId, url, background }) => {
+      const source = sessionByRuntimeTabId.current.get(tabId);
+      if (!source) return;
+      // The new tab keeps the source tab's profile so its cookies carry over.
+      void openUrlInPreview({
+        threadRef: source.threadRef,
+        url,
+        openPreview,
+        profileId: source.snapshot.profileId,
+        background,
+      });
+    });
+  }, [openPreview]);
 
   if (!isElectron) return null;
   return (

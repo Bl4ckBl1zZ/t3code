@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { backgroundProcessTail } from "@t3tools/shared/backgroundProcess";
 import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
+import { omitLocalVisibleTurnItems } from "@t3tools/shared/orchestrationV2BoundedSnapshot";
 import {
   mcpAppFromToolItem,
   omitToolOutputImageData,
@@ -213,6 +214,27 @@ export function projectThreadProjectionForWire(
       ...row,
       item: project(row.item),
     })),
+  };
+}
+
+/**
+ * The wire fields of a thread snapshot, shared by the HTTP route and the socket
+ * snapshot frame. Only clients that opted in get compact `turnItems` and the
+ * marker; everyone else gets the unchanged representation.
+ */
+export function threadSnapshotForWire(input: {
+  readonly snapshotSequence: number;
+  readonly projection: OrchestrationV2ThreadProjection;
+  readonly compactTurnItems: boolean;
+}) {
+  const projection = projectThreadProjectionForWire(input.projection);
+  // Relies on the shared item objects `projectThreadProjectionForWire` keeps
+  // between `turnItems` and `visibleTurnItems`.
+  const compact = input.compactTurnItems ? omitLocalVisibleTurnItems(projection) : null;
+  return {
+    snapshotSequence: input.snapshotSequence,
+    projection: compact ?? projection,
+    ...(compact === null ? {} : { turnItemsOmitLocalVisible: true as const }),
   };
 }
 

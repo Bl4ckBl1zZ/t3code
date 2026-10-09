@@ -31,11 +31,12 @@ vi.mock("@lexical/react/LexicalPlainTextPlugin", () => ({
 let renderer: ReactTestRenderer | undefined;
 const editorRef = createRef<ComposerPromptEditorHandle>();
 
-function composer(value: string) {
+function composer(value: string, literalText = false) {
   return (
     <ComposerPromptEditor
       value={value}
-      cursor={collapseExpandedComposerCursor(value, value.length)}
+      literalText={literalText}
+      cursor={collapseExpandedComposerCursor(value, value.length, literalText)}
       terminalContexts={[]}
       skills={[]}
       disabled={false}
@@ -48,10 +49,10 @@ function composer(value: string) {
   );
 }
 
-async function renderPrompt(value: string) {
+async function renderPrompt(value: string, literalText = false) {
   await act(() => {
-    if (renderer) renderer.update(composer(value));
-    else renderer = create(composer(value));
+    if (renderer) renderer.update(composer(value, literalText));
+    else renderer = create(composer(value, literalText));
   });
 }
 
@@ -84,6 +85,39 @@ afterEach(async () => {
   await act(() => renderer?.unmount());
   renderer = undefined;
   vi.unstubAllGlobals();
+});
+
+describe("literal editor answers", () => {
+  const $nodeTypes = () => {
+    const paragraph = $getRoot().getFirstChildOrThrow();
+    if (!$isElementNode(paragraph)) throw new Error("Expected a composer paragraph");
+    return paragraph.getChildren().map((node) => node.getType());
+  };
+
+  it.each([
+    "",
+    "\n\n",
+    "  - [X] done\n\n**keep** $my-skill @README.md  \n",
+    `- [X] done\n${"  detail $my-skill @README.md\n".repeat(100)}`,
+  ])("keeps token-like text verbatim with character cursors", async (value) => {
+    await renderPrompt(value, true);
+    expect(editorRef.current?.readSnapshot()).toMatchObject({
+      value,
+      cursor: value.length,
+      expandedCursor: value.length,
+    });
+    const types = lexicalEditor.getEditorState().read($nodeTypes);
+    expect(types.every((type) => type === "text" || type === "linebreak")).toBe(true);
+  });
+
+  it("rebuilds chips when the same text leaves literal mode", async () => {
+    const value = "@README.md control";
+    await renderPrompt(value, true);
+    expect(lexicalEditor.getEditorState().read($nodeTypes)).toEqual(["text"]);
+    await renderPrompt(value, false);
+    expect(lexicalEditor.getEditorState().read(() => $firstMention().isInline())).toBe(true);
+    expect(editorRef.current?.readSnapshot().value).toBe(value);
+  });
 });
 
 describe("composer mention serialization", () => {

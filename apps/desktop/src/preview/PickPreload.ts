@@ -1341,7 +1341,14 @@ function startAnnotation(): void {
         ...regions.map((region) => region.rect),
         ...strokes.map((stroke) => stroke.bounds),
       ]);
-      ipcRenderer.send(ELEMENT_PICKED_CHANNEL, annotation, screenshotRect, submission);
+      ipcRenderer.send(
+        ELEMENT_PICKED_CHANNEL,
+        annotation,
+        screenshotRect,
+        submission,
+        // Main crops a full-page capture, whose pixels are CSS px × this.
+        window.devicePixelRatio,
+      );
     });
   };
   submit.addEventListener("click", () => submitAnnotation("attach"));

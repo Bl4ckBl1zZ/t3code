@@ -29,6 +29,7 @@ import { GrokDriver, type GrokDriverEnv } from "./Drivers/GrokDriver.ts";
 import { HermesDriver, type HermesDriverEnv } from "./Drivers/HermesDriver.ts";
 import { OpenClawDriver, type OpenClawDriverEnv } from "./Drivers/OpenClawDriver.ts";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "./Drivers/OpenCodeDriver.ts";
+import { MuseDriver, type MuseDriverEnv } from "./Drivers/MuseDriver.ts";
 import { PiDriver, type PiDriverEnv } from "./Drivers/PiDriver.ts";
 import type { AnyProviderDriver } from "./ProviderDriver.ts";
 
@@ -47,7 +48,8 @@ export type BuiltInDriversEnv =
   | HermesDriverEnv
   | OpenClawDriverEnv
   | OpenCodeDriverEnv
-  | PiDriverEnv;
+  | PiDriverEnv
+  | MuseDriverEnv;
 
 /**
  * Ordered list of built-in drivers. Order matters only for tie-breaking in
@@ -62,6 +64,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   OpenCodeDriver,
   AntigravityDriver,
   PiDriver,
+  MuseDriver,
   AcpRegistryDriver,
   OpenClawDriver,
   HermesDriver,

@@ -195,6 +195,7 @@ const checkpointRollbackServiceProvided = checkpointRollbackServiceLayer.pipe(
       idAllocatorLayer,
       projectionStoreLayer,
       providerSessionManagerProvided,
+      threadCommandExecutorLayer,
       runtimePolicyProvided,
     ),
   ),

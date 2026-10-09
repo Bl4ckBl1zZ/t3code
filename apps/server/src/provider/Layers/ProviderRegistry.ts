@@ -153,9 +153,16 @@ const mergeProviderModels = (
   nextModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
   const shouldRetainMissingModels = shouldRetainMissingProviderModels(provider);
+  // A model the installed CLI is too old to run was offered by the pending
+  // snapshot, before the version was known; retaining it would make it
+  // selectable again.
+  const updateRequiredSlugs = new Set(provider.updateRequiredModels?.map((model) => model.slug));
+  const retainablePreviousModels = previousModels.filter(
+    (model) => !updateRequiredSlugs.has(model.slug),
+  );
 
-  if (shouldRetainMissingModels && nextModels.length === 0 && previousModels.length > 0) {
-    return previousModels;
+  if (shouldRetainMissingModels && nextModels.length === 0 && retainablePreviousModels.length > 0) {
+    return retainablePreviousModels;
   }
 
   const previousBySlug = new Map(previousModels.map((model) => [model.slug, model] as const));
@@ -171,7 +178,7 @@ const mergeProviderModels = (
   });
   const nextSlugs = new Set(nextModels.map((model) => model.slug));
   return shouldRetainMissingModels
-    ? [...mergedModels, ...previousModels.filter((model) => !nextSlugs.has(model.slug))]
+    ? [...mergedModels, ...retainablePreviousModels.filter((model) => !nextSlugs.has(model.slug))]
     : mergedModels;
 };
 

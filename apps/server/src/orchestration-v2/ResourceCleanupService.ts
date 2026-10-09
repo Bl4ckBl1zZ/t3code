@@ -1,3 +1,4 @@
+import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,12 +9,13 @@ import { resolvePathWithinRoot } from "../attachmentPaths.ts";
 import { threadUploadsRelativeDir } from "../attachments/uploadPaths.ts";
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 
 export class ResourceCleanupError extends Schema.TaggedErrorClass<ResourceCleanupError>()(
   "ResourceCleanupError",
   {
-    operation: Schema.Literals(["terminal", "attachment"]),
+    operation: Schema.Literals(["terminal", "preview", "attachment"]),
     threadId: Schema.optional(Schema.String),
     attachmentId: Schema.optional(Schema.String),
     cause: Schema.Defect(),
@@ -24,6 +26,8 @@ export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupTerminals: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
   /** Closes the thread's idle shells. Terminals that run a command stay open. */
   readonly closeIdleTerminals: (threadId: string) => Effect.Effect<void>;
+  /** Closes every preview session of the thread; clients drop the tabs with them. */
+  readonly cleanupPreviews: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupAttachments: (input: {
     readonly attachmentIds: ReadonlyArray<string>;
     readonly threadId: string;
@@ -33,6 +37,7 @@ export class ResourceCleanupService extends Context.Reference<{
   defaultValue: () => ({
     cleanupTerminals: () => Effect.void,
     closeIdleTerminals: () => Effect.void,
+    cleanupPreviews: () => Effect.void,
     cleanupAttachments: () => Effect.void,
   }),
 }) {}
@@ -41,6 +46,7 @@ export const live = Layer.effect(
   ResourceCleanupService,
   Effect.gen(function* () {
     const terminals = yield* TerminalManager.TerminalManager;
+    const previews = yield* PreviewManager.PreviewManager;
     const fileSystem = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
     return {
@@ -53,6 +59,14 @@ export const live = Layer.effect(
             ),
           ),
       closeIdleTerminals: (threadId: string) => terminals.closeIdle({ threadId }),
+      cleanupPreviews: (threadId: string) =>
+        previews
+          .close({ threadId: ThreadId.make(threadId) })
+          .pipe(
+            Effect.mapError(
+              (cause) => new ResourceCleanupError({ operation: "preview", threadId, cause }),
+            ),
+          ),
       cleanupAttachments: (input) =>
         Effect.forEach(
           input.attachmentIds,

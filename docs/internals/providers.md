@@ -3,7 +3,8 @@
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
 A provider is the agent runtime that does the actual work. T3 Code supports several, and the
-orchestration layer does not know which one is behind a thread.
+orchestration layer does not know which one is behind a thread. For a new driver, start with
+[adding a provider](./adding-a-provider.md).
 
 ## Built-in drivers
 
@@ -36,8 +37,9 @@ Two registries separate configuration from live processes:
 [`ProviderService`][service] sits on top. It combines the adapter registry with the provider session
 directory to route session and turn operations for a thread, so callers name a thread, not an agent.
 
-Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
-orchestration, contract, or client change is required for the common case.
+Adding a driver means writing the driver plus adapter and registering both. No orchestration change
+is required for the common case; [adding a provider](./adding-a-provider.md) lists the contract,
+client, and docs entries a new driver still needs.
 
 ## Workspace snapshots
 
@@ -113,8 +115,10 @@ See the [adapter](../../apps/server/src/orchestration-v2/Adapters/PiAdapterV2.ts
 
 ## Model manifest
 
-The model picker's legacy section is driven by `apps/server/src/provider/model-manifest.json`, which
-lists the current (non-legacy) model slugs per driver kind. The `ModelManifest` service
+The model picker's legacy section is driven by `apps/server/src/provider/model-manifest.json`. A
+model lands in the legacy section only when the driver's catalog (`providers.<driver>.models`)
+marks it `"status": "legacy"`; models the manifest does not know, such as a freshly released one,
+stay current. The `ModelManifest` service
 (`apps/server/src/provider/ModelManifest.ts`) refreshes that data from the same file on `main` via
 raw.githubusercontent.com, so moving a model in or out of the legacy section is a commit, not a
 release. Preference order is remote fetch, then the on-disk copy of the last successful fetch (in
@@ -126,6 +130,12 @@ probe, the resolved update capabilities, and the npm latest-version entry. Backg
 keep every cache. The
 Codex and Claude drivers apply the classification to every snapshot with `applyModelManifest`;
 driver kinds absent from the manifest have no legacy concept.
+
+A model that needs a newer provider CLI is announced as soon as it ships. Claude catalog entries
+set `adapter.claudeCode.minVersion`; Codex entries set `adapter.codex.minVersion`, since Codex's
+own `model/list` cannot name models released after the installed build. Snapshots report those
+models in `updateRequiredModels` (never in `models`, so they are not selectable), and the model
+picker tells the user which update unlocks them.
 
 The manifest's optional `compatibility` list holds per-driver version policies
 (`apps/server/src/provider/providerCompatibility.ts`). A policy applies only when its

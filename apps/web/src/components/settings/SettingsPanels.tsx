@@ -4094,33 +4094,37 @@ function EnvironmentProviderSettings(
     );
   };
 
+  const canAddInstance = !readOnly && props.allowAddInstance !== false;
+
   return (
     <>
       <SettingsSection
         {...searchableSetting("providers")}
         title={props.title ?? "Providers"}
+        titleAction={
+          canAddInstance ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => setIsAddInstanceDialogOpen(true)}
+                    aria-label="Add provider instance"
+                  >
+                    <PlusIcon className="size-3" />
+                  </Button>
+                }
+              />
+              <TooltipPopup side="top">Add provider instance</TooltipPopup>
+            </Tooltip>
+          ) : null
+        }
         headerAction={
           <div className="flex items-center gap-1.5">
             <ProviderUpdatesAction includeDriver={props.includeDriver} />
             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
-            {!readOnly && props.allowAddInstance !== false ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                      onClick={() => setIsAddInstanceDialogOpen(true)}
-                      aria-label="Add provider instance"
-                    >
-                      <PlusIcon className="size-3" />
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="top">Add provider instance</TooltipPopup>
-              </Tooltip>
-            ) : null}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -4150,6 +4154,16 @@ function EnvironmentProviderSettings(
         <div className="overflow-hidden rounded-xl border border-border/60 lg:grid lg:grid-cols-[17rem_minmax(0,1fr)]">
           <div className="divide-y divide-border/50 border-b border-border/60 bg-muted/10 lg:max-h-[42rem] lg:overflow-y-auto lg:border-r lg:border-b-0">
             {rows.map((row) => renderProviderInstance(row, "list"))}
+            {canAddInstance ? (
+              <button
+                type="button"
+                className="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-muted/25 hover:text-foreground focus-visible:bg-muted/25 focus-visible:text-foreground sm:px-4"
+                onClick={() => setIsAddInstanceDialogOpen(true)}
+              >
+                <PlusIcon className="size-4 shrink-0" />
+                Add provider instance
+              </button>
+            ) : null}
           </div>
           <div className="min-w-0 p-2 lg:max-h-[42rem] lg:overflow-y-auto">
             {selectedRow ? (

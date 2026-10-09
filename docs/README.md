@@ -21,7 +21,7 @@
 - [MCP apps](./user/mcp-apps.md)
 - [Voice input](./user/voice-input.md)
 - [Background service (Linux)](./user/background-service.md)
-- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Pi](./user/providers-pi.md)
+- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md)
 
 Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 
@@ -40,6 +40,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - [Voice input](./internals/voice-input.md)
 - [Native iOS design system](./internals/ios-native-design.md)
 - [Providers](./internals/providers.md)
+- [Adding a provider](./internals/adding-a-provider.md)
 - [Remote environments](./internals/remote.md)
 - [Server updates](./internals/server-updates.md)
 - [Resource telemetry](./internals/resource-telemetry.md)

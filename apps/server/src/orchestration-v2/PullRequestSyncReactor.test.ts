@@ -23,6 +23,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
+import * as GitManager from "../git/GitManager.ts";
 import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
 import {
   type PullRequestMergeEvent,
@@ -128,6 +129,9 @@ function harness(
       invalidate: extra.invalidate ?? (() => Effect.void),
       subscribeMerges: Effect.succeed(merges),
       subscribeStateChanges: Effect.succeed(extra.stateChanges ?? Stream.empty),
+    }),
+    Layer.mock(GitManager.GitManager)({
+      subscribePullRequestStateChanges: Effect.succeed(Stream.empty),
     }),
     NodeServices.layer,
   );

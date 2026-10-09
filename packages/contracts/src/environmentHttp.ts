@@ -47,7 +47,7 @@ import {
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   OrchestrationV2ShellSnapshot,
-  OrchestrationV2ThreadDetailSnapshot,
+  OrchestrationV2ThreadSnapshotResponse,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
@@ -610,6 +610,11 @@ const EnvironmentOrchestrationThreadSnapshotQuery = Schema.Struct({
   maxVisibleItems: Schema.optional(
     Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
   ),
+  /**
+   * `compactTurnItems=1` opts into `turnItemsOmitLocalVisible`. Other values are
+   * ignored, and older servers ignore the key.
+   */
+  compactTurnItems: Schema.optionalKey(Schema.String),
 });
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
@@ -625,7 +630,7 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
       query: EnvironmentOrchestrationThreadSnapshotQuery,
-      success: OrchestrationV2ThreadDetailSnapshot,
+      success: OrchestrationV2ThreadSnapshotResponse,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

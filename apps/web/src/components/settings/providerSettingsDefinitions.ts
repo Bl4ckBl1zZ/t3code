@@ -6,6 +6,7 @@ import {
   CursorSettings,
   GrokSettings,
   HermesSettings,
+  MuseSettings,
   OpenClawSettings,
   OpenCodeSettings,
   PiSettings,
@@ -142,6 +143,12 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
     value: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
     settingsSchema: AntigravitySettings,
+  },
+  {
+    value: ProviderDriverKind.make("muse"),
+    label: "Muse Code",
+    settingsSchema: MuseSettings,
+    badgeLabel: "Beta",
   },
   {
     value: ProviderDriverKind.make("pi"),

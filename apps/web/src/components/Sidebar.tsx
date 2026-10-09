@@ -12,6 +12,7 @@ import {
   useSidebarFileDropNavigation,
   useSidebarFileDropTarget,
 } from "../hooks/useSidebarFileDrop";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { ConnectedEnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
@@ -1030,6 +1031,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
   environmentLabel: string | null;
+  /** The machine to name on a branchless Scratch row, when the sidebar spans machines. */
+  scratchMachineLabel: string | null;
   projectCwd: string | null;
   projectFaviconPath: string | null;
   projectTitle: string | null;
@@ -1306,6 +1309,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
+  const showsScratchMachine = !thread.branch && props.scratchMachineLabel !== null;
 
   const detailsTooltip = (
     <SidebarThreadTooltip
@@ -1994,7 +1998,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       aria-hidden
       className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
     >
-      {isRemote ? (
+      {isRemote && !showsScratchMachine ? (
         <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
           <ConnectedEnvironmentMachineIcon
             environmentId={props.thread.environmentId}
@@ -2132,6 +2136,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       <ThreadWorktreeIndicator thread={thread} />
                       <span className="min-w-0 flex-1 truncate whitespace-nowrap">
                         {thread.branch}
+                      </span>
+                    </>
+                  ) : showsScratchMachine ? (
+                    <>
+                      <ConnectedEnvironmentMachineIcon
+                        environmentId={thread.environmentId}
+                        aria-hidden
+                        className="size-3 shrink-0 text-muted-foreground/40"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-muted-foreground/40">
+                        {props.scratchMachineLabel}
                       </span>
                     </>
                   ) : (
@@ -2737,6 +2752,25 @@ export default function Sidebar() {
   const showProjectEnvironments = useMemo(
     () => projectGroupsSpanEnvironments(projectGroups),
     [projectGroups],
+  );
+  // Scratch threads have no project of their own to tell machines apart, so once the
+  // sidebar spans machines a branchless Scratch row names the machine it runs on.
+  const scratchMachineLabelFor = useCallback(
+    (thread: Pick<SidebarThreadSummary, "environmentId" | "projectId">) => {
+      if (!showProjectEnvironments) return null;
+      const workspaceRoot = projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`);
+      if (
+        workspaceRoot === undefined ||
+        !isScratchProject(
+          { workspaceRoot },
+          serverConfigs.get(thread.environmentId)?.scratchWorkspaceRoot,
+        )
+      ) {
+        return null;
+      }
+      return environmentLabelById.get(thread.environmentId) ?? null;
+    },
+    [environmentLabelById, projectCwdByKey, serverConfigs, showProjectEnvironments],
   );
   const projectGroupByScopeKey = useMemo(
     () => new Map(projectGroups.map((project) => [project.projectKey, project] as const)),
@@ -5244,6 +5278,7 @@ export default function Sidebar() {
                             : null,
                           currentEnvironmentId: primaryEnvironmentId,
                           environmentLabel: environmentLabelById.get(thread.environmentId) ?? null,
+                          scratchMachineLabel: scratchMachineLabelFor(thread),
                           projectCwd:
                             projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
                             null,

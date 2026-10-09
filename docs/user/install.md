@@ -106,8 +106,9 @@ to use, then authenticate it.
 | Grok Build | [Grok Build CLI](https://x.ai/cli)                    | `grok`         | `grok login`          |
 | OpenCode   | [OpenCode](https://opencode.ai)                       | `opencode`     | `opencode auth login` |
 | Pi         | [Pi](https://pi.dev)                                  | `pi`           | run `pi` once         |
+| Muse Code  | [Muse Code](https://dev.meta.ai/docs/muse-code)       | `muse`         | `muse login`          |
 
-Codex and Claude are on by default. Cursor, Grok Build, OpenCode, and Pi are off by default; turn
+Codex and Claude are on by default. Cursor, Grok Build, OpenCode, Pi, and Muse Code are off by default; turn
 them on in **Settings** → the provider's card when you want to use them. Pi finishes its own login
 or API-key setup the first time you run `pi` in a terminal.
 
@@ -136,7 +137,7 @@ authenticated shows its status in **Settings** and fails at session start with t
 to run.
 
 For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./providers-claude.md).
-For Pi, see [Pi](./providers-pi.md).
+For Pi, see [Pi](./providers-pi.md). For Muse Code, see [Muse Code](./providers-muse.md).
 
 ## Next Steps
 

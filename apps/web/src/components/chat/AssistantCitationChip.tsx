@@ -4,7 +4,7 @@ import {
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { PencilIcon, QuoteIcon, XIcon } from "lucide-react";
+import { ArrowUpRightIcon, PencilIcon, QuoteIcon, XIcon } from "lucide-react";
 import {
   useEffect,
   useEffectEvent,
@@ -23,13 +23,15 @@ import {
 } from "../../lib/assistantCitationNavigation";
 import {
   CHAT_INLINE_CHIP_CLASS_NAME,
+  CHAT_INLINE_CHIP_LABEL_CLASS_NAME,
   COMPOSER_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
 } from "../composerInlineChip";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Button } from "../ui/button";
+import { Popover, PopoverClose, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import { AssistantCitationCommentEditor } from "./AssistantCitationCommentEditor";
 import { resolveAssistantCitationCommentDismissal } from "./assistantCitationCommentDismissal";
 import { observeAssistantCitationCommentSource } from "./AssistantCitationSource";
@@ -134,34 +136,52 @@ export function AssistantCitationChip({
       <span className={cn(COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME, "max-w-[16em]")}>{label}</span>
     </Link>
   );
-  const chatSourceLink = (
-    <Link
-      {...sourceLinkProps}
-      className="inline-flex h-full min-w-0 items-center gap-[0.33em] rounded-sm text-inherit no-underline hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary"
-      aria-label={`View cited assistant text: ${label}`}
-    >
-      <QuoteIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_ICON_CLASS_NAME} />
-      <span className={cn(COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME, "max-w-[16em]")}>{label}</span>
-    </Link>
-  );
+  // Sent messages open the quote and the comment written about it; the composer chip keeps
+  // linking straight to the source because it also hosts the comment editor and remove button.
+  if (!onRemove) {
+    const accessibleLabel = `Quoted assistant text: ${label}`;
+    return (
+      <Popover>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              className={cn(
+                CHAT_INLINE_CHIP_CLASS_NAME,
+                "cursor-pointer border-primary/20 bg-primary/8 text-primary hover:bg-primary/12 focus-visible:outline-2 focus-visible:outline-primary",
+              )}
+              aria-label={`${accessibleLabel}. Show details`}
+              data-assistant-citation-chip="true"
+              data-markdown-copy={serializeAssistantCitation(citation)}
+            />
+          }
+        >
+          <QuoteIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_ICON_CLASS_NAME} />
+          <span className={cn(CHAT_INLINE_CHIP_LABEL_CLASS_NAME, "max-w-[16em]")}>{label}</span>
+        </PopoverTrigger>
+        <PopoverPopup side="top" width="lg" padding="compact">
+          <PopoverTitle className="sr-only">{accessibleLabel}</PopoverTitle>
+          <div className="flex max-h-[calc(var(--available-height)_-_1rem_-_2px)] flex-col items-start gap-3 p-1 text-sm">
+            <AssistantCitationQuote citation={citation} />
+            <PopoverClose
+              render={<Button variant="outline" size="sm" render={<Link {...sourceLinkProps} />} />}
+            >
+              <ArrowUpRightIcon aria-hidden="true" />
+              Go to source
+            </PopoverClose>
+          </div>
+        </PopoverPopup>
+      </Popover>
+    );
+  }
   return (
     <span
-      className={cn(
-        onRemove ? COMPOSER_INLINE_CHIP_CLASS_NAME : CHAT_INLINE_CHIP_CLASS_NAME,
-        "border-primary/20 bg-primary/8 text-primary",
-      )}
+      className={cn(COMPOSER_INLINE_CHIP_CLASS_NAME, "border-primary/20 bg-primary/8 text-primary")}
       contentEditable={false}
       data-assistant-citation-chip="true"
       data-markdown-copy={serializeAssistantCitation(citation)}
     >
-      {onRemove ? (
-        composerSourceLink
-      ) : (
-        <Tooltip>
-          <TooltipTrigger render={chatSourceLink} />
-          <TooltipPopup side="top">View source</TooltipPopup>
-        </Tooltip>
-      )}
+      {composerSourceLink}
       {commentEditor ? (
         <Popover
           open={commentEditor.open}
@@ -258,5 +278,36 @@ export function AssistantCitationChip({
         </button>
       ) : null}
     </span>
+  );
+}
+
+function AssistantCitationQuote({ citation }: { citation: AssistantCitation }) {
+  const [fade, setFade] = useState({ top: false, bottom: false });
+  const updateFade = (element: HTMLElement) => {
+    const top = element.scrollTop > 1;
+    const bottom = element.scrollHeight - element.clientHeight - element.scrollTop > 1;
+    setFade((current) =>
+      current.top === top && current.bottom === bottom ? current : { top, bottom },
+    );
+  };
+  return (
+    <div
+      ref={(element) => {
+        if (!element) return;
+        const observer = new ResizeObserver(() => updateFade(element));
+        observer.observe(element);
+        return () => observer.disconnect();
+      }}
+      onScroll={(event) => updateFade(event.currentTarget)}
+      className={cn(
+        "max-h-64 min-h-0 space-y-3 self-stretch overflow-y-auto whitespace-pre-wrap wrap-break-word",
+        getVirtualizedScrollFadeClassName(fade),
+      )}
+    >
+      <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">
+        {citation.text}
+      </blockquote>
+      {citation.comment ? <p>{citation.comment}</p> : null}
+    </div>
   );
 }

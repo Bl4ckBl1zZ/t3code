@@ -46,6 +46,14 @@ every file in it, including folded files and unchanged lines hidden between chan
 search. This shortcut is not configurable. A pull request diff that loads in slices only searches
 the files loaded so far.
 
+## Find in the current thread
+
+`chat.find` searches conversation messages and proposed plans in the active thread, including
+folded turns and collapsed messages and plans. It defaults to `mod+f` outside terminals, previews,
+and diffs, and is also in the command palette as **Find in current thread**. Press **Enter** or
+**Shift+Enter** to move between matches, and **Escape** to close find. Thread search requires server
+support; update an older server to enable it. Select **Retry** if a search fails.
+
 ## Rule Shape
 
 - `key` (required): shortcut string, like `mod+j`, `ctrl+k`, `cmd+shift+d`

@@ -89,6 +89,7 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "chat.new",
   "chat.newLocal",
   "chat.newWithoutProject",
+  "chat.find",
   "composer.cycleHost",
   "editor.openFavorite",
   ...MODEL_PICKER_KEYBINDING_COMMANDS,

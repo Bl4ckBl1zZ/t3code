@@ -4,7 +4,9 @@ import {
   MessageId,
   ORCHESTRATION_V2_WS_METHODS,
   ThreadId,
+  TurnItemId,
   type OrchestrationV2ThreadDetailSnapshot,
+  type OrchestrationV2TurnItem,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
 } from "@t3tools/contracts";
@@ -102,6 +104,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const loaderCalls = yield* Ref.make(0);
   const lastSubscribeAfterSequence = yield* Ref.make<number | undefined>(undefined);
   const lastRequestCompletionMarker = yield* Ref.make(false);
+  const lastAcceptCompactTurnItems = yield* Ref.make<true | undefined>(undefined);
   const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationV2ThreadDetailSnapshot>>([]);
   const removedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
@@ -118,6 +121,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input: {
       readonly afterSequence?: number;
       readonly requestCompletionMarker?: true;
+      readonly acceptCompactTurnItems?: true;
     }) =>
       Stream.unwrap(
         Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
@@ -125,6 +129,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
           Effect.andThen(
             Ref.set(lastRequestCompletionMarker, input.requestCompletionMarker === true),
           ),
+          Effect.andThen(Ref.set(lastAcceptCompactTurnItems, input.acceptCompactTurnItems)),
           Effect.as(streamFrom(inputs)),
         ),
       ),
@@ -204,6 +209,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     loaderCalls,
     lastSubscribeAfterSequence,
     lastRequestCompletionMarker,
+    lastAcceptCompactTurnItems,
     supervisorState,
     supervisorSession,
     savedThreads,
@@ -330,6 +336,107 @@ describe("EnvironmentThreads", () => {
         "Live title",
       );
       expect((yield* Ref.get(harness.savedThreads)).at(-1)?.snapshotSequence).toBe(2);
+    }),
+  );
+
+  it.effect("restores compact socket snapshot turnItems before reducing and caching", () =>
+    Effect.gen(function* () {
+      const at = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
+      const command = (id: string, ordinal: number, threadId = THREAD_ID) =>
+        ({
+          id: TurnItemId.make(id),
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal,
+          status: "completed" as const,
+          title: null,
+          startedAt: at,
+          completedAt: at,
+          updatedAt: at,
+          type: "command_execution" as const,
+          input: id,
+          output: id,
+          exitCode: 0,
+        }) satisfies OrchestrationV2TurnItem;
+      const parentThread = ThreadId.make("thread:compact-parent");
+      const inherited = command("parent-item", 1, parentThread);
+      const local = [command("local-1", 1), command("local-2", 2)];
+      const hiddenRequest = {
+        ...command("hidden-request", 3),
+        type: "run_interrupt_request" as const,
+        message: "Stop",
+      } as unknown as OrchestrationV2TurnItem;
+      const visibleTurnItems = [
+        {
+          position: 0,
+          visibility: "inherited" as const,
+          sourceThreadId: parentThread,
+          sourceItemId: inherited.id,
+          item: inherited,
+        },
+        ...local.map((item, index) => ({
+          position: index + 1,
+          visibility: "local" as const,
+          sourceThreadId: THREAD_ID,
+          sourceItemId: item.id,
+          item,
+        })),
+      ];
+      const harness = yield* makeHarness();
+      yield* Queue.offer(harness.inputs, {
+        kind: "snapshot",
+        snapshotSequence: 5,
+        // Only the item that is not a visible local row is on the wire.
+        projection: { ...BASE_PROJECTION, turnItems: [hiddenRequest], visibleTurnItems },
+        turnItemsOmitLocalVisible: true,
+      });
+
+      const seeded = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.data),
+      );
+      expect(Option.getOrThrow(seeded.data).turnItems).toEqual([...local, hiddenRequest]);
+      expect(yield* Ref.get(harness.lastAcceptCompactTurnItems)).toBe(true);
+
+      // Live updates reduce against the restored list, not the compact one.
+      const updated = { ...local[1]!, output: "updated" };
+      yield* Queue.offer(harness.inputs, {
+        kind: "event",
+        sequence: 6,
+        event: {
+          id: EventId.make("event-compact-update"),
+          type: "turn-item.updated",
+          threadId: THREAD_ID,
+          occurredAt: at,
+          payload: updated,
+        },
+      });
+      const live = yield* awaitThreadState(harness.observed, (value) =>
+        Option.exists(value.data, (data) =>
+          data.turnItems.some(
+            (item) => item.type === "command_execution" && item.output === "updated",
+          ),
+        ),
+      );
+      expect(Option.getOrThrow(live.data).turnItems.map((item) => String(item.id))).toEqual([
+        "local-1",
+        "local-2",
+        "hidden-request",
+      ]);
+
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+      const saved = (yield* Ref.get(harness.savedThreads)).at(-1);
+      expect(saved?.projection.turnItems.map((item) => String(item.id))).toEqual([
+        "local-1",
+        "local-2",
+        "hidden-request",
+      ]);
+      expect(saved && "turnItemsOmitLocalVisible" in saved).toBe(false);
     }),
   );
 

@@ -48,6 +48,7 @@ import {
   type GitManagerServiceError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationSearchThreadsError,
+  OrchestrationV2SearchThreadError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2DispatchCommandError,
@@ -117,6 +118,7 @@ import * as LiveThreadShells from "./orchestration-v2/LiveThreadShells.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
+  loadShellSnapshotParts,
   canChangeShell,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
@@ -133,6 +135,7 @@ import { readThreadResumeReplay } from "./orchestration-v2/ThreadStream.ts";
 import {
   projectDomainEventForWire,
   projectThreadProjectionForWire,
+  threadSnapshotForWire,
 } from "./orchestration-v2/WireProjection.ts";
 import {
   coalesceThreadStreamFrames,
@@ -832,6 +835,8 @@ const makeWsRpcLayer = (
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
           threadSnapshotWindow: true,
+          threadFind: true,
+          threadFindProgressive: true,
           ...(scratchWorkspaceRoot === undefined ? {} : { scratchWorkspaceRoot }),
           newProjectsRoot,
         };
@@ -848,6 +853,7 @@ const makeWsRpcLayer = (
           readonly afterSequence?: number;
           readonly requestCompletionMarker?: boolean;
           readonly snapshotMaxVisibleItems?: number;
+          readonly acceptCompactTurnItems?: boolean;
         }) {
           yield* Effect.annotateCurrentSpan({
             "orchestration_v2.thread_id": input.threadId,
@@ -882,8 +888,10 @@ const makeWsRpcLayer = (
                 );
               return {
                 kind: "snapshot" as const,
-                snapshotSequence: snapshot.snapshotSequence,
-                projection: projectThreadProjectionForWire(snapshot.projection),
+                ...threadSnapshotForWire({
+                  ...snapshot,
+                  compactTurnItems: input.acceptCompactTurnItems === true,
+                }),
               };
             },
           );
@@ -1010,15 +1018,12 @@ const makeWsRpcLayer = (
         }) {
           const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
           const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
-            const base = yield* sql.withTransaction(
-              Effect.gen(function* () {
-                const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
-                const threads = yield* threadManagement.getShellSnapshot({ location: "active" });
-                return buildActiveShellSnapshot({
-                  projects,
-                  threads,
-                  snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-                });
+            const base = buildActiveShellSnapshot(
+              yield* loadShellSnapshotParts({
+                sql,
+                readThreads: threadManagement.readShellSnapshot({ location: "active" }),
+                listProjects: projectionSnapshotQuery.getProjectShellsWithoutEnrichment(),
+                latestSequence: applicationEvents.latestApplicationSequence,
               }),
             );
             const enriched = yield* enrichProjectShells(base.projects);
@@ -1249,33 +1254,33 @@ const makeWsRpcLayer = (
         },
       );
 
-      const getOrchestrationV2ArchivedShellSnapshot = sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
-            const threads = yield* threadManagement.getShellSnapshot({ location: "archive" });
-            return {
-              schemaVersion: threads.schemaVersion,
-              snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-              projects,
-              threads: threads.archivedThreads,
-            } as const;
-          }),
-        )
-        .pipe(
-          Effect.flatMap((snapshot) =>
-            enrichProjectShells(snapshot.projects).pipe(
-              Effect.map(({ projects }) => ({ ...snapshot, projects })),
-            ),
+      const getOrchestrationV2ArchivedShellSnapshot = Effect.gen(function* () {
+        const { threads, projects, snapshotSequence } = yield* loadShellSnapshotParts({
+          sql,
+          readThreads: threadManagement.readShellSnapshot({ location: "archive" }),
+          listProjects: projectionSnapshotQuery.getProjectShellsWithoutEnrichment(),
+          latestSequence: applicationEvents.latestApplicationSequence,
+        });
+        return {
+          schemaVersion: threads.schemaVersion,
+          snapshotSequence,
+          projects,
+          threads: threads.archivedThreads,
+        } as const;
+      }).pipe(
+        Effect.flatMap((snapshot) =>
+          enrichProjectShells(snapshot.projects).pipe(
+            Effect.map(({ projects }) => ({ ...snapshot, projects })),
           ),
-          Effect.mapError(
-            (cause) =>
-              new OrchestrationV2GetShellSnapshotError({
-                message: "Failed to load archived thread snapshot",
-                cause,
-              }),
-          ),
-        );
+        ),
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2GetShellSnapshotError({
+              message: "Failed to load archived thread snapshot",
+              cause,
+            }),
+        ),
+      );
 
       const subscribeOrchestrationV2ArchivedShell = Effect.fn(
         "ws.orchestrationV2.subscribeArchivedShell",
@@ -1478,6 +1483,14 @@ const makeWsRpcLayer = (
                 }),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.searchThread]: (input) =>
+          threadManagement
+            .searchThread(input)
+            .pipe(Effect.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
+        [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: (input) =>
+          threadManagement
+            .searchThreadStream(input)
+            .pipe(Stream.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
         [ORCHESTRATION_V2_WS_METHODS.searchThreads]: (input) =>
           threadSearchQuery.searchThreads(input).pipe(
             Effect.mapError(
@@ -2084,6 +2097,14 @@ const makeWsRpcLayer = (
                   : {}),
               });
             }
+            if (input.resource._tag === "draft-workspace-file") {
+              // A draft names its workspace directly; there is no thread to
+              // resolve one from. Asset access confines the file to that root.
+              return yield* issueAssetUrl({
+                resource: input.resource,
+                workspaceRoot: input.resource.cwd,
+              });
+            }
             if (input.resource._tag !== "workspace-file" && input.resource._tag !== "media-file") {
               return yield* issueAssetUrl({ resource: input.resource });
             }
@@ -2491,7 +2512,17 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         );
         return yield* Effect.acquireUseRelease(
           sessions.markConnected(session.sessionId),
-          () => rpcWebSocketHttpEffect,
+          () =>
+            Effect.raceFirst(
+              rpcWebSocketHttpEffect,
+              sessions.awaitInvalidation(session.sessionId).pipe(
+                Effect.as(HttpServerResponse.empty()),
+                Effect.catchTags({
+                  SessionCredentialVerificationError: (error) =>
+                    failEnvironmentInternal("internal_error", error),
+                }),
+              ),
+            ),
           () => sessions.markDisconnected(session.sessionId),
         );
       }).pipe(

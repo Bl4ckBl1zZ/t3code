@@ -8,7 +8,11 @@ import type {
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 
 import { browserDefaultOpenViewport, resolveBrowserDefaults } from "~/browser/browserDefaults";
-import { applyPreviewServerSnapshot, rememberPreviewUrl } from "~/previewStateStore";
+import {
+  applyPreviewServerSnapshot,
+  rememberPreviewUrl,
+  updatePreviewServerSnapshot,
+} from "~/previewStateStore";
 
 interface OpenPreviewSessionInput<E> {
   openPreview: (input: {
@@ -20,6 +24,8 @@ interface OpenPreviewSessionInput<E> {
   /** Overrides the configured default; automation passes an explicit size. */
   viewport?: PreviewViewportSetting;
   profileId?: string;
+  /** Merge the new tab without making it the thread's active tab. */
+  background?: boolean;
 }
 
 export async function openPreviewSession<E>(
@@ -39,7 +45,8 @@ export async function openPreviewSession<E>(
     return result;
   }
   const snapshot = result.value;
-  applyPreviewServerSnapshot(input.threadRef, snapshot);
+  if (input.background) updatePreviewServerSnapshot(input.threadRef, snapshot);
+  else applyPreviewServerSnapshot(input.threadRef, snapshot);
   if (input.url !== undefined) {
     rememberPreviewUrl(
       input.threadRef,

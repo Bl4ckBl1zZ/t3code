@@ -7,6 +7,7 @@ import {
   getClaudeCatalogModelCapabilities,
   resolveClaudeModelsForVersion,
   resolveClaudeModelSlug,
+  resolveClaudeUpdateRequiredModels,
   scopeClaudeModelCatalog,
 } from "./ClaudeModelCatalog.ts";
 
@@ -32,6 +33,28 @@ describe("Claude manifest catalog", () => {
         (model) => model.slug === "claude-fable-5-1",
       ),
     ).toBe(false);
+  });
+
+  it("names current models the installed CLI is too old to run", () => {
+    expect(
+      resolveClaudeUpdateRequiredModels(bundled, "2.1.256").find(
+        (model) => model.slug === "claude-fable-5-1",
+      ),
+    ).toEqual({ slug: "claude-fable-5-1", name: "Claude Fable 5.1", minVersion: "2.1.257" });
+    expect(
+      resolveClaudeUpdateRequiredModels(bundled, "2.1.257").some(
+        (model) => model.slug === "claude-fable-5-1",
+      ),
+    ).toBe(false);
+    // Legacy models are never announced, and an unknown version cannot be compared.
+    expect(
+      resolveClaudeUpdateRequiredModels(bundled, "0.0.1").every((model) =>
+        resolveClaudeModelsForVersion(bundled, "99.0.0").some(
+          (current) => current.slug === model.slug && current.isLegacy !== true,
+        ),
+      ),
+    ).toBe(true);
+    expect(resolveClaudeUpdateRequiredModels(bundled, null)).toEqual([]);
   });
 
   it("compiles the new model's effort profile and the fork's real compaction threshold", () => {

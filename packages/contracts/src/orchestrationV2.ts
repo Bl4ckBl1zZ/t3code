@@ -863,6 +863,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   prompt: Schema.String,
   title: Schema.NullOr(Schema.String),
   model: Schema.NullOr(Schema.String),
+  modelSelection: Schema.optional(ModelSelection),
   // Parent-wake policy for app-owned tasks: "always" offers a continuation on
   // every terminal (async delegations; a live parent run is steered, with
   // queue_after_active as fallback), "settled_only" offers only when the parent has no
@@ -1312,6 +1313,8 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
       description: TrimmedNonEmptyString,
     }),
   ),
+  /** Editable initial text. Answers preserve whitespace and allow an empty string when present. */
+  initialAnswer: Schema.optional(Schema.String),
 });
 export type OrchestrationV2UserInputQuestion = typeof OrchestrationV2UserInputQuestion.Type;
 
@@ -3495,6 +3498,8 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
+  searchThread: "orchestration.searchThread",
+  searchThreadStream: "orchestration.searchThreadStream",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
   launchThread: "orchestration.launchThread",
@@ -3625,6 +3630,11 @@ export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
    * Full history stays available over the HTTP snapshot endpoint.
    */
   snapshotMaxVisibleItems: Schema.optionalKey(PositiveInt),
+  /**
+   * Allows snapshot frames to omit `projection.turnItems` entries that repeat
+   * local visible rows. See `turnItemsOmitLocalVisible`.
+   */
+  acceptCompactTurnItems: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2SubscribeThreadInput.Type;
 
@@ -3633,6 +3643,21 @@ export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
   projection: OrchestrationV2ThreadProjection,
 });
 export type OrchestrationV2ThreadDetailSnapshot = typeof OrchestrationV2ThreadDetailSnapshot.Type;
+
+/**
+ * Set only for clients that opted in: `projection.turnItems` omits the items of
+ * local visible rows, which lead the full list. Clients must restore them with
+ * `boundedSnapshotProjection` before using or caching the projection.
+ */
+const TurnItemsOmitLocalVisible = Schema.optionalKey(Schema.Literal(true));
+
+/** The HTTP thread snapshot: a detail snapshot, possibly with compact turnItems. */
+export const OrchestrationV2ThreadSnapshotResponse = Schema.Struct({
+  ...OrchestrationV2ThreadDetailSnapshot.fields,
+  turnItemsOmitLocalVisible: TurnItemsOmitLocalVisible,
+});
+export type OrchestrationV2ThreadSnapshotResponse =
+  typeof OrchestrationV2ThreadSnapshotResponse.Type;
 
 const knownDomainEventTypes: ReadonlySet<string> = new Set(
   OrchestrationV2DomainEvent.members.flatMap((member) => {
@@ -3688,6 +3713,7 @@ export const OrchestrationV2ThreadStreamItem = Schema.Union([
     kind: Schema.Literal("snapshot"),
     snapshotSequence: NonNegativeInt,
     projection: OrchestrationV2ThreadProjection,
+    turnItemsOmitLocalVisible: TurnItemsOmitLocalVisible,
   }),
   Schema.Struct({
     kind: Schema.Literal("event"),
@@ -3830,6 +3856,69 @@ export const OrchestrationV2GetTurnItemResult = Schema.Struct({
 });
 export type OrchestrationV2GetTurnItemResult = typeof OrchestrationV2GetTurnItemResult.Type;
 
+/**
+ * Find in one thread: counts matches of `query` in the text the timeline shows
+ * for user and assistant messages and proposed plans, then selects one match.
+ * `index` selects an absolute ordinal; otherwise the selection is `start`
+ * (an entry identity and the occurrence within it) moved by `offset`.
+ */
+export const OrchestrationV2SearchThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  // Match the skill labels displayed by this client, including custom display names.
+  skills: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String.check(Schema.isMaxLength(200)),
+        displayName: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
+      }),
+    ).check(Schema.isMaxLength(1_000)),
+  ),
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  index: Schema.optionalKey(NonNegativeInt),
+  // Select relative to an entry identity so updates before it do not shift navigation.
+  offset: Schema.optionalKey(Schema.Int),
+  start: Schema.optionalKey(
+    Schema.Struct({ entryId: TrimmedNonEmptyString, occurrence: NonNegativeInt }),
+  ),
+});
+export type OrchestrationV2SearchThreadInput = typeof OrchestrationV2SearchThreadInput.Type;
+
+/** A message id for messages, the turn item id for plans; occurrence is within that entry. */
+export const OrchestrationV2ThreadFindMatch = Schema.Struct({
+  entryId: TrimmedNonEmptyString,
+  runId: Schema.NullOr(RunId),
+  occurrence: NonNegativeInt,
+});
+export const OrchestrationV2SearchThreadResult = Schema.Struct({
+  // Omitted by older servers. An early match has no final ordinal or total yet.
+  complete: Schema.optionalKey(Schema.Boolean),
+  snapshotSequence: NonNegativeInt,
+  totalMatches: NonNegativeInt,
+  activeIndex: NonNegativeInt,
+  match: Schema.NullOr(OrchestrationV2ThreadFindMatch),
+  // Counts and identities around the selection let clients step without another round trip.
+  navigation: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        entryId: TrimmedNonEmptyString,
+        runId: Schema.NullOr(RunId),
+        startIndex: NonNegativeInt,
+        count: NonNegativeInt,
+      }),
+    ).check(Schema.isMaxLength(17)),
+  ),
+});
+export type OrchestrationV2SearchThreadResult = typeof OrchestrationV2SearchThreadResult.Type;
+
+export class OrchestrationV2SearchThreadError extends Schema.TaggedErrorClass<OrchestrationV2SearchThreadError>()(
+  "OrchestrationV2SearchThreadError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not search this thread. Please retry.";
+  }
+}
+
 export const OrchestrationV2RpcError = Schema.Union([
   OrchestrationV2GenerateHandoffScriptError,
   OrchestrationV2DispatchCommandError,
@@ -3841,6 +3930,10 @@ export const OrchestrationV2RpcError = Schema.Union([
 export type OrchestrationV2RpcError = typeof OrchestrationV2RpcError.Type;
 
 export const OrchestrationV2RpcSchemas = {
+  searchThread: {
+    input: OrchestrationV2SearchThreadInput,
+    output: OrchestrationV2SearchThreadResult,
+  },
   dispatchCommand: {
     input: OrchestrationV2Command,
     output: OrchestrationV2DispatchCommandResult,

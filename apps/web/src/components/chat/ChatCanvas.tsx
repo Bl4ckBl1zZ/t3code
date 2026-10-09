@@ -23,15 +23,18 @@ import {
  * over to make room for it.
  */
 export function ChatCanvas({
+  detailsCardTopInset = 0,
   children,
   ...props
-}: Omit<ComponentProps<"div">, "className" | "style" | "ref">) {
+}: Omit<ComponentProps<"div">, "className" | "style" | "ref"> & {
+  detailsCardTopInset?: number;
+}) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
   const [measurements, setMeasurements] = useState({
     width: 0,
     height: 0,
-    padding: 20,
+    padding: 48,
     maxChatWidth: 768,
   });
   const [detailsCard, setDetailsCard] = useState<ChatCanvasDetailsCard | null>(null);
@@ -87,8 +90,9 @@ export function ChatCanvas({
       lane: { padding: measurements.padding, minChatWidth: MIN_DOCKED_CHAT_WIDTH },
       layout: resolveChatCanvasLayout({ ...measurements, container, detailsCard }),
       reportDetailsCard,
+      detailsCardTopInset,
     };
-  }, [measurements, detailsCard, reportDetailsCard]);
+  }, [measurements, detailsCard, reportDetailsCard, detailsCardTopInset]);
   return (
     <ChatCanvasContext value={context}>
       <div
@@ -104,7 +108,7 @@ export function ChatCanvas({
         <div
           ref={widthProbeRef}
           aria-hidden
-          className="pointer-events-none invisible absolute h-0 w-[max(var(--chat-content-max-width),var(--chat-max-width))] max-w-full box-content ps-3 sm:ps-5"
+          className="pointer-events-none invisible absolute h-0 w-[max(var(--chat-content-max-width),var(--chat-max-width))] max-w-full box-content ps-3 sm:ps-12"
         />
         {children}
       </div>

@@ -7,6 +7,12 @@ import {
 
 export type ProviderSkillSourceKind = "app" | "repo" | "project" | "personal" | "system" | "other";
 
+function normalizePathSeparators(pathValue: string): string {
+  return pathValue.replaceAll("\\", "/");
+}
+
+export { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
+
 function titleCaseWords(value: string): string {
   const words: string[] = [];
   for (const segment of value.split(/[\s:_-]+/)) {
@@ -14,20 +20,6 @@ function titleCaseWords(value: string): string {
     words.push(segment.charAt(0).toUpperCase() + segment.slice(1));
   }
   return words.join(" ");
-}
-
-function normalizePathSeparators(pathValue: string): string {
-  return pathValue.replaceAll("\\", "/");
-}
-
-export function formatProviderSkillDisplayName(
-  skill: Pick<ServerProviderSkill, "name" | "displayName">,
-): string {
-  const displayName = skill.displayName?.trim();
-  if (displayName) {
-    return displayName;
-  }
-  return titleCaseWords(skill.name);
 }
 
 /**

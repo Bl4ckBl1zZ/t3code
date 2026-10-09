@@ -40,6 +40,8 @@ import { layer as idAllocatorLayer } from "../IdAllocator.ts";
 import { layer as orchestratorLayer } from "../Orchestrator.ts";
 import { layer as projectionStoreLayer } from "../ProjectionStore.ts";
 import { layer as threadManagementServiceLayer } from "../ThreadManagementService.ts";
+import { layer as providerContinuationRequestsLayer } from "../ProviderContinuationRequests.ts";
+import { workerLive as providerContinuationWorkerLayer } from "../ProviderContinuationService.ts";
 import { OrchestratorV2, type OrchestratorV2Error } from "../Orchestrator.ts";
 import { ProviderAdapterRegistryV2 } from "../ProviderAdapterRegistry.ts";
 import { layer as providerEventIngestorLayer } from "../ProviderEventIngestor.ts";
@@ -191,6 +193,8 @@ export function runOrchestratorV2ProviderReplayScenario<
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
+    /** Replays a provider wake turn as a continuation run, as the live runtime does. */
+    readonly runContinuationWorker?: boolean;
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
@@ -221,6 +225,8 @@ export function makeOrchestratorV2ProviderReplayLayer<
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
+    /** Replays a provider wake turn as a continuation run, as the live runtime does. */
+    readonly runContinuationWorker?: boolean;
   } = {},
 ): Layer.Layer<
   OrchestratorV2 | OrchestrationEffectWorkerV2,
@@ -232,7 +238,7 @@ export function makeOrchestratorV2ProviderReplayLayer<
 
 export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   scenario: Pick<OrchestratorV2ProviderReplayScenario, "name" | "runtimePolicyOverride">,
-  registryLayer: Layer.Layer<ProviderAdapterRegistryV2, Error>,
+  providedRegistryLayer: Layer.Layer<ProviderAdapterRegistryV2, Error>,
   options: {
     readonly databaseLayer?: Layer.Layer<
       SqlClient.SqlClient,
@@ -240,6 +246,8 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
+    /** Replays a provider wake turn as a continuation run, as the live runtime does. */
+    readonly runContinuationWorker?: boolean;
   } = {},
 ): Layer.Layer<
   OrchestratorV2 | OrchestrationEffectWorkerV2 | EventSinkV2 | ProviderSessionManagerV2,
@@ -256,6 +264,11 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
           Layer.provide(runtimePolicyLayer),
         );
   const databaseLayer = options.databaseLayer ?? SqlitePersistenceMemory;
+  // One queue shared by the adapters and the continuation worker, like runtimeLayer.ts;
+  // layer memoization keeps it a single instance.
+  const continuationRequestsLayer =
+    options.runContinuationWorker === true ? providerContinuationRequestsLayer : Layer.empty;
+  const registryLayer = providedRegistryLayer.pipe(Layer.provide(continuationRequestsLayer));
   const serverSettingsLayer = ServerSettingsService.layerTest({
     enableLegacyTokenStreaming: options.enableLegacyTokenStreaming ?? false,
   }).pipe(Layer.orDie);
@@ -373,6 +386,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         idAllocatorLayer,
         storesLayer,
         providerSessionManagerProvided,
+        threadCommandExecutorLayer,
         runtimeLayer,
       ),
     ),
@@ -420,11 +434,24 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const effectWorkerProvided = effectWorkerLayer.pipe(
     Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
   );
+  const continuationWorkerProvided =
+    options.runContinuationWorker === true
+      ? providerContinuationWorkerLayer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              continuationRequestsLayer,
+              threadManagementServiceLayer.pipe(Layer.provide(orchestratorProvided)),
+              idAllocatorLayer,
+            ),
+          ),
+        )
+      : Layer.empty;
   const replayRuntime = Layer.mergeAll(
     orchestratorProvided,
     providerSessionManagerProvided,
     effectWorkerProvided,
     eventSinkProvided,
+    continuationWorkerProvided,
   );
 
   // Build the daemon from the exact worker instance exposed alongside the

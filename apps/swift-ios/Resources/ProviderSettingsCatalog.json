@@ -362,6 +362,23 @@
     ]
   },
   {
+    "driver": "muse",
+    "label": "Muse Code",
+    "hasDefaultInstance": true,
+    "badgeLabel": "Beta",
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to the Muse Code binary on this environment. Sign in with muse login on that host.",
+        "placeholder": "muse",
+        "clearWhenEmpty": "omit"
+      }
+    ]
+  },
+  {
     "driver": "pi",
     "label": "Pi",
     "hasDefaultInstance": true,

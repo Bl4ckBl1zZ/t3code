@@ -26,6 +26,7 @@ import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { mergeOrchestrationV2FullHistory } from "@t3tools/shared/orchestrationV2Window";
+import { boundedSnapshotProjection } from "@t3tools/shared/orchestrationV2BoundedSnapshot";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
@@ -257,7 +258,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
       if (item.kind === "snapshot") {
         sequence = item.snapshotSequence;
-        data = Option.some(item.projection);
+        data = Option.some(boundedSnapshotProjection(item));
         changed = true;
         continue;
       }
@@ -410,6 +411,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ...(serverSupport.snapshotWindow && options?.snapshotWindow !== undefined
             ? { snapshotMaxVisibleItems: options.snapshotWindow }
             : {}),
+          // Older servers drop the unknown key and keep sending full turnItems.
+          acceptCompactTurnItems: true as const,
         };
       }),
       {

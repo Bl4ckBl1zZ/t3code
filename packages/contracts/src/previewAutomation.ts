@@ -73,7 +73,7 @@ export const PreviewAutomationSnapshotInput = Schema.Struct({
   includeImage: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "Include the screenshot image in the tool result. Defaults to true; set false for text-only output.",
+        "Include the screenshot image in the tool result. Defaults to false. Set true only when you need to see the page.",
     }),
   ),
   ...PreviewAutomationTabTargetFields,

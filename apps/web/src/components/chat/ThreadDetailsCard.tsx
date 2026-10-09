@@ -32,7 +32,11 @@ export function ThreadDetailsCard({
 }) {
   const canvas = useChatCanvas();
   const placement = canvas
-    ? resolveThreadDetailsCardLayout({ container: canvas.container, lane: canvas.lane })
+    ? resolveThreadDetailsCardLayout({
+        container: canvas.container,
+        lane: canvas.lane,
+        topInset: canvas.detailsCardTopInset,
+      })
     : null;
   const mode: ThreadPanelPresentation = placement ? "inline" : "popover";
   const inlineOpen = useRightPanelStore((state) =>

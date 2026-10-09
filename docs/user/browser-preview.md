@@ -16,5 +16,13 @@ On desktop, **Settings → Integrations** can show key presses and mouse presses
 recordings. Both are off by default, and password fields are never shown. The recorded cursor
 follows the page's own pointer, so it stays aligned with what was clicked.
 
-Agents can request text-only page snapshots or include an image. Large text responses are
-bounded, while structured page metadata remains available for precise page inspection.
+Agents get text-only page snapshots unless they ask for an image, so screenshots do not pile
+up in the conversation history. Large text responses are bounded, while structured page metadata
+remains available for precise page inspection.
+
+The address bar opens what you type as an address when it looks like one (`localhost:5173`,
+`example.com`) and searches the web otherwise. On desktop, a link that opens a new tab opens as
+another browser tab of the same thread; middle-click or Cmd-click opens it in the background.
+A page that goes fullscreen fills its tab instead of the whole window, and a page that tries to
+open another app (such as a `slack://` link) asks first. Deleting a thread closes its browser
+tabs.

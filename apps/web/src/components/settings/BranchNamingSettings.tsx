@@ -26,6 +26,11 @@ export function BranchNamingSettings() {
         id="worktree-branch-naming"
         title="Worktree branch naming"
         description="Choose how new worktree branches are named from your first message."
+        status={
+          settings.branchNamingMode === "semantic"
+            ? "The model chooses a prefix that describes the work, such as feat/add-search, fix/login-timeout, or refactor/auth."
+            : undefined
+        }
         resetAction={
           settings.branchNamingMode !== DEFAULT_SERVER_SETTINGS.branchNamingMode ? (
             <SettingResetButton
@@ -94,12 +99,6 @@ export function BranchNamingSettings() {
             />
           }
         />
-      ) : null}
-      {settings.branchNamingMode === "semantic" ? (
-        <p className="pb-3 text-sm text-muted-foreground">
-          The model chooses a prefix that describes the work, such as feat/add-search,
-          fix/login-timeout, or refactor/auth.
-        </p>
       ) : null}
       {settings.branchNamingMode === "custom" ? (
         <SettingsRow

@@ -522,7 +522,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compactDisabled: boolean;
   compactDisabledReason: string | null;
   compactBeforeSendTokens: number | null;
-  onSendWithFullHistory: () => void;
+  keepFullHistory: boolean;
+  onToggleKeepFullHistory: () => void;
 }) {
   return (
     <>
@@ -561,7 +562,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
         compactBeforeSendTokens={props.compactBeforeSendTokens}
-        onSendWithFullHistory={props.onSendWithFullHistory}
+        keepFullHistory={props.keepFullHistory}
+        onToggleKeepFullHistory={props.onToggleKeepFullHistory}
       />
     </>
   );
@@ -681,6 +683,7 @@ export interface ChatComposerProps {
     customAnswer: string;
     activeQuestion: {
       id: string;
+      initialAnswer?: string | undefined;
       multiSelect?: boolean | undefined;
       allowCustomAnswer?: boolean | undefined;
     } | null;
@@ -723,10 +726,12 @@ export interface ChatComposerProps {
   onCompactContext?: (() => void) | undefined;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
-  /** Tokens Enter compacts before sending; null when the next send keeps full history. */
+  /** Tokens a stale session would re-read; null when the thread is not offered compaction. */
   resumeCompactionTokens: number | null;
-  /** Runs `send` as a one-off send that keeps full history instead of compacting first. */
-  onSendWithFullHistory: (send: () => void) => void;
+  /** The Compact chip is off, so the next send keeps full history. */
+  keepFullHistory: boolean;
+  /** Flips the Compact chip for the active thread. */
+  onToggleKeepFullHistory: () => void;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -845,7 +850,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     compactDisabled,
     compactDisabledReason,
     resumeCompactionTokens,
-    onSendWithFullHistory,
+    keepFullHistory,
+    onToggleKeepFullHistory,
     resolvedTheme,
     settings,
     keybindings,
@@ -879,6 +885,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setThreadError,
     onExpandImage,
   } = props;
+  // Editor-style questions (Pi `editor` dialogs) answer with verbatim text:
+  // no chips, no suggestion menus, and character-exact cursors.
+  const isLiteralPendingAnswer = activePendingProgress?.activeQuestion?.initialAnswer !== undefined;
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -1318,16 +1327,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Composer-local state
   // ------------------------------------------------------------------
-  const [composerCursor, setComposerCursor] = useState(() =>
-    collapseExpandedComposerCursor(prompt, prompt.length),
-  );
+  const [composerCursor, setComposerCursor] = useState(() => {
+    const value = isLiteralPendingAnswer ? (activePendingProgress?.customAnswer ?? prompt) : prompt;
+    return collapseExpandedComposerCursor(value, value.length, isLiteralPendingAnswer);
+  });
   const {
     trigger: composerTrigger,
     setTrigger: setComposerTrigger,
     resolveTrigger: resolveComposerTrigger,
     dismissTrigger: dismissComposerTrigger,
     resetTrigger: resetComposerTrigger,
-  } = useComposerTriggerState(() => detectComposerTrigger(prompt, prompt.length));
+  } = useComposerTriggerState(() =>
+    isLiteralPendingAnswer ? null : detectComposerTrigger(prompt, prompt.length),
+  );
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const composerSuggestionId = useId();
   const composerSuggestionListId = `${composerSuggestionId}-${encodeURIComponent(draftId ?? activeThreadId ?? "new")}-suggestions`;
@@ -1671,7 +1683,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable !== null ||
     !composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionLabel =
-    resumeCompactionTokens !== null ? "Open composer to compact and send" : "Send message";
+    resumeCompactionTokens !== null && !keepFullHistory
+      ? "Open composer to compact and send"
+      : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
 
@@ -1871,9 +1885,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Sync refs back to parent
   // ------------------------------------------------------------------
   useEffect(() => {
+    if (isLiteralPendingAnswer) return;
     promptRef.current = prompt;
     setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
-  }, [prompt, promptRef]);
+  }, [isLiteralPendingAnswer, prompt, promptRef]);
 
   useEffect(() => {
     if (composerSubmissionError === null) return;
@@ -1975,13 +1990,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
 
     promptRef.current = nextCustomAnswer;
-    const { cursor, trigger } = composerStateAtPromptEnd(nextCustomAnswer);
+    const { cursor, trigger } = composerStateAtPromptEnd(nextCustomAnswer, isLiteralPendingAnswer);
     setComposerCursor(cursor);
     resetComposerTrigger(trigger);
     setComposerHighlightedItemId(null);
   }, [
     activePendingProgress?.customAnswer,
     activePendingProgress?.activeQuestion?.id,
+    isLiteralPendingAnswer,
     activePendingUserInput?.requestId,
     prompt,
     promptRef,
@@ -1996,10 +2012,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setComposerHighlightedSearchKey(null);
     setComposerSubmissionError(null);
     setProviderInputSubmissionError(null);
-    setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
-    resetComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
+    const { cursor, trigger } = composerStateAtPromptEnd(promptRef.current, isLiteralPendingAnswer);
+    setComposerCursor(cursor);
+    resetComposerTrigger(trigger);
     setIsDragOverComposer(false);
-  }, [draftId, activeThreadId, promptRef, resetComposerTrigger]);
+  }, [draftId, activeThreadId, isLiteralPendingAnswer, promptRef, resetComposerTrigger]);
 
   // ------------------------------------------------------------------
   // Footer compact layout observation
@@ -2167,7 +2184,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
         setComposerCursor(nextCursor);
         setComposerTrigger(
-          cursorAdjacentToMention ? null : detectComposerTrigger(nextPrompt, expandedCursor),
+          cursorAdjacentToMention || isLiteralPendingAnswer
+            ? null
+            : detectComposerTrigger(nextPrompt, expandedCursor),
         );
         onChangeActivePendingUserInputCustomAnswer(
           activePendingProgress.activeQuestion.id,
@@ -2194,6 +2213,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       resting.expand,
       activePendingProgress?.activeQuestion,
+      isLiteralPendingAnswer,
       pendingUserInputs.length,
       onChangeActivePendingUserInputCustomAnswer,
       promptRef,
@@ -2224,8 +2244,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return false;
       }
       const next = replaceTextRange(promptRef.current, rangeStart, rangeEnd, replacement);
-      const nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
-      const nextExpandedCursor = expandCollapsedComposerCursor(next.text, nextCursor);
+      const nextCursor = collapseExpandedComposerCursor(
+        next.text,
+        next.cursor,
+        isLiteralPendingAnswer,
+      );
+      const nextExpandedCursor = expandCollapsedComposerCursor(
+        next.text,
+        nextCursor,
+        isLiteralPendingAnswer,
+      );
       promptRef.current = next.text;
       const activePendingQuestion = activePendingProgress?.activeQuestion;
       if (activePendingQuestion && activePendingUserInput) {
@@ -2240,7 +2268,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         setPrompt(next.text);
       }
       setComposerCursor(nextCursor);
-      setComposerTrigger(detectComposerTrigger(next.text, nextExpandedCursor));
+      setComposerTrigger(
+        isLiteralPendingAnswer ? null : detectComposerTrigger(next.text, nextExpandedCursor),
+      );
       if (options?.focusEditorAfterReplace !== false) {
         window.requestAnimationFrame(() => {
           composerEditorRef.current?.focusAt(nextCursor);
@@ -2251,6 +2281,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       activePendingProgress?.activeQuestion,
       activePendingUserInput,
+      isLiteralPendingAnswer,
       onChangeActivePendingUserInputCustomAnswer,
       promptRef,
       setPrompt,
@@ -2270,10 +2301,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return {
       value: promptRef.current,
       cursor: composerCursor,
-      expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+      expandedCursor: expandCollapsedComposerCursor(
+        promptRef.current,
+        composerCursor,
+        isLiteralPendingAnswer,
+      ),
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
-  }, [composerCursor, composerTerminalContexts, promptRef]);
+  }, [composerCursor, composerTerminalContexts, isLiteralPendingAnswer, promptRef]);
 
   const resolveActiveComposerTrigger = useCallback((): {
     snapshot: { value: string; cursor: number; expandedCursor: number };
@@ -2282,11 +2317,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const snapshot = readComposerSnapshot();
     return {
       snapshot,
-      trigger: resolveComposerTrigger(
-        detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
-      ),
+      trigger: isLiteralPendingAnswer
+        ? null
+        : resolveComposerTrigger(detectComposerTrigger(snapshot.value, snapshot.expandedCursor)),
     };
-  }, [readComposerSnapshot, resolveComposerTrigger]);
+  }, [isLiteralPendingAnswer, readComposerSnapshot, resolveComposerTrigger]);
 
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
@@ -2501,10 +2536,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       shouldBlurMobileComposerOnSubmit,
     ],
   );
-  const sendWithFullHistory = useCallback(
-    () => onSendWithFullHistory(() => submitComposer()),
-    [onSendWithFullHistory, submitComposer],
-  );
   const compactThreadContext = useMemo(
     () =>
       onCompactContext === undefined
@@ -2628,7 +2659,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return true;
     }
     const { trigger } = resolveActiveComposerTrigger();
-    const menuIsActive = composerMenuOpenRef.current || trigger !== null;
+    const menuIsActive =
+      !isLiteralPendingAnswer && (composerMenuOpenRef.current || trigger !== null);
     if (key === "Escape") {
       if (!menuIsActive || event.isComposing || event.keyCode === 229) return false;
       dismissComposerTrigger(trigger);
@@ -3455,11 +3487,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         detectTrigger?: boolean;
       }) => {
         const promptForState = options?.prompt ?? promptRef.current;
-        const cursor = clampCollapsedComposerCursor(promptForState, options?.cursor ?? 0);
+        const cursor = clampCollapsedComposerCursor(
+          promptForState,
+          options?.cursor ?? 0,
+          isLiteralPendingAnswer,
+        );
         setComposerHighlightedItemId(null);
         setComposerCursor(cursor);
         resetComposerTrigger(
-          options?.detectTrigger
+          options?.detectTrigger && !isLiteralPendingAnswer
             ? detectComposerTrigger(
                 promptForState,
                 expandCollapsedComposerCursor(promptForState, cursor),
@@ -3468,7 +3504,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
       },
       addTerminalContext: (selection: TerminalContextSelection) => {
-        if (!activeThread) return;
+        if (!activeThread || isLiteralPendingAnswer) return;
         const snapshot = composerEditorRef.current?.readSnapshot() ?? {
           value: promptRef.current,
           cursor: composerCursor,
@@ -3547,6 +3583,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       primaryEnvironmentId,
       isConnecting,
       isComposerApprovalState,
+      isLiteralPendingAnswer,
       pendingUserInputs.length,
       projectSelectionRequired,
       applyPromptReplacement,
@@ -3930,8 +3967,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  // Compacting first is only sent from the labeled button, so expand to show it.
-                  if (resumeCompactionTokens !== null) expandMobileComposer();
+                  // Compacting first only sends from the expanded composer, where the chip shows it.
+                  if (resumeCompactionTokens !== null && !keepFullHistory) expandMobileComposer();
                   else submitComposer();
                 }}
               >
@@ -4119,6 +4156,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 onCitationSubmitAndSend={() => composerFormRef.current?.requestSubmit()}
                 editorRef={composerEditorRef}
+                literalText={isLiteralPendingAnswer}
                 value={
                   isComposerApprovalState
                     ? ""
@@ -4432,7 +4470,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     (noProviderAvailable ? "Compacting is unavailable right now" : null)
                   }
                   compactBeforeSendTokens={resumeCompactionTokens}
-                  onSendWithFullHistory={sendWithFullHistory}
+                  keepFullHistory={keepFullHistory}
+                  onToggleKeepFullHistory={onToggleKeepFullHistory}
                 />
               </div>
             </div>

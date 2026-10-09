@@ -28,6 +28,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import { boundedSnapshotProjection } from "@t3tools/shared/orchestrationV2BoundedSnapshot";
 import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -45,7 +46,7 @@ import {
   loadProductionPlannerStatistics,
 } from "../persistence/productionPlannerStatistics.testkit.ts";
 import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
-import { projectThreadProjectionForWire } from "./WireProjection.ts";
+import { projectThreadProjectionForWire, threadSnapshotForWire } from "./WireProjection.ts";
 
 const TestLayer = Layer.mergeAll(
   projectionStoreLayer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
@@ -62,6 +63,9 @@ const at = (seconds: number) => DateTime.makeUnsafe(Date.UTC(2026, 0, 1, 0, 0, s
 
 // Wire bytes, so "equal" means what every client decodes is identical.
 const encodeProjection = Schema.encodeSync(Schema.fromJsonString(OrchestrationV2ThreadProjection));
+const decodeProjectionJson = Schema.decodeUnknownSync(
+  Schema.toCodecJson(OrchestrationV2ThreadProjection),
+);
 
 let eventCounter = 0;
 const nextEventId = () => EventId.make(`event:window:${++eventCounter}`);
@@ -725,6 +729,67 @@ it.layer(TestLayer)("windowed thread snapshots", (it) => {
       const after = yield* store.getThreadSnapshot(forkId);
       assert.strictEqual(encodeProjection(after.projection), encodeProjection(before.projection));
       assert.strictEqual(after.projection.visibleTurnItems.length, 10);
+    }),
+  );
+
+  it.effect("send compact turnItems only to opted-in clients, restorable byte for byte", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const sourceId = ThreadId.make("thread:window:compact-source");
+      const forkId = ThreadId.make("thread:window:compact-fork");
+      yield* createThread(sourceId);
+      for (let ordinal = 1; ordinal <= 3; ordinal++) {
+        yield* createRun(sourceId, ordinal);
+        yield* addTurn({ threadId: sourceId, runOrdinal: ordinal, start: ordinal * 10 });
+      }
+      yield* createThread(forkId, {
+        forkedFrom: { threadId: sourceId, runId: runIdFor(sourceId, 2) },
+      });
+      for (let ordinal = 1; ordinal <= 4; ordinal++) {
+        yield* createRun(forkId, ordinal);
+        yield* addTurn({ threadId: forkId, runOrdinal: ordinal, start: ordinal * 10, tools: 2 });
+      }
+
+      for (const threadId of [sourceId, forkId]) {
+        for (const maxVisibleItems of [undefined, 4, 8]) {
+          const snapshot = yield* store.getThreadSnapshot(
+            threadId,
+            maxVisibleItems === undefined ? undefined : { maxVisibleItems },
+          );
+          const plain = threadSnapshotForWire({ ...snapshot, compactTurnItems: false });
+          assert.notProperty(plain, "turnItemsOmitLocalVisible");
+          const compact = threadSnapshotForWire({ ...snapshot, compactTurnItems: true });
+          assert.strictEqual(compact.turnItemsOmitLocalVisible, true);
+          // Nothing hidden here: every local item is also a visible row.
+          assert.strictEqual(compact.projection.turnItems.length, 0);
+          // What a client decodes and restores is exactly the plain snapshot.
+          const decoded = decodeProjectionJson(JSON.parse(encodeProjection(compact.projection)));
+          assert.strictEqual(
+            encodeProjection(boundedSnapshotProjection({ ...compact, projection: decoded })),
+            encodeProjection(plain.projection),
+          );
+        }
+      }
+    }),
+  );
+
+  it.effect("send full turnItems when a hidden item breaks the compact layout", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:window:compact-hidden");
+      yield* createThread(threadId);
+      yield* createRun(threadId, 1, "rolled_back");
+      yield* addTurn({ threadId, runOrdinal: 1, start: 1 });
+      yield* createRun(threadId, 2);
+      yield* addTurn({ threadId, runOrdinal: 2, start: 10 });
+
+      const snapshot = yield* store.getThreadSnapshot(threadId);
+      const compact = threadSnapshotForWire({ ...snapshot, compactTurnItems: true });
+      assert.notProperty(compact, "turnItemsOmitLocalVisible");
+      assert.strictEqual(
+        encodeProjection(compact.projection),
+        encodeProjection(projectThreadProjectionForWire(snapshot.projection)),
+      );
     }),
   );
 

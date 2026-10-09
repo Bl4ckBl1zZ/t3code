@@ -4,9 +4,27 @@ import {
   resolveTerminalSelectionActionPosition,
   shouldHandleTerminalExit,
   shouldHandleTerminalSelectionMouseUp,
+  terminalContextMenuItems,
   terminalSelectionActionDelayForClickCount,
   terminalSelectionLineRange,
 } from "./ThreadTerminalDrawer";
+
+describe("terminalContextMenuItems", () => {
+  it("offers local scrollback actions that stay enabled without a selection", () => {
+    const items = terminalContextMenuItems({ hasSelection: false });
+    expect(items.map(({ id }) => id)).toEqual([
+      "add-to-chat",
+      "copy",
+      "paste",
+      "select-all",
+      "scroll-to-bottom",
+    ]);
+    expect(items.filter((item) => item.disabled).map(({ id }) => id)).toEqual([
+      "add-to-chat",
+      "copy",
+    ]);
+  });
+});
 
 describe("resolveTerminalSelectionActionPosition", () => {
   it("prefers the selection rect over the last pointer position", () => {

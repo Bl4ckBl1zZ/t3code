@@ -64,7 +64,6 @@ export function PullRequestStackControl({
   const openLink = useOpenPrLink(threadRef);
   const [method, setMethod] = useState<PullRequestMergeMethod>("merge");
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   if (!supported) return null;
   const stack = query.data;
   const fresh = stack !== null && !query.isPending && !query.error;
@@ -92,25 +91,27 @@ export function PullRequestStackControl({
     if (!candidate) return;
     setReview({ ...candidate, mergeMethods: [...mergeMethods] });
     setMethod(mergeMethods[0] ?? "merge");
-    setError(null);
   };
   const close = () => {
-    if (!pending) {
-      setReview(null);
-      query.refresh();
-      onActed();
-    }
+    setReview(null);
+    query.refresh();
+    onActed();
   };
   const perform = async () => {
     if (
       !review ||
       disabled ||
       pending ||
-      error ||
       (review.action === "merge" && !review.mergeMethods.includes(method))
     )
       return;
+    // The dialog closes on confirm; a toast carries the run's progress and outcome.
     setPending(true);
+    setReview(null);
+    const toastId = toastManager.add({
+      type: "loading",
+      title: review.action === "merge" ? "Merging stack..." : "Rebasing stack...",
+    });
     const result = await runAction({
       environmentId,
       input: {
@@ -127,10 +128,15 @@ export function PullRequestStackControl({
     setPending(false);
     query.refresh();
     onActed();
-    if (result._tag === "Failure") setError(String(squashAtomCommandFailure(result)));
-    else {
-      setReview(null);
-      toastManager.add({
+    if (result._tag === "Failure") {
+      toastManager.update(toastId, {
+        type: "error",
+        title:
+          review.action === "merge" ? "Could not merge the stack" : "Could not rebase the stack",
+        description: String(squashAtomCommandFailure(result)),
+      });
+    } else {
+      toastManager.update(toastId, {
         type: "success",
         title: review.action === "merge" ? "Stack merge completed" : "Stack rebased",
       });
@@ -210,7 +216,7 @@ export function PullRequestStackControl({
           if (!value) close();
         }}
       >
-        <DialogPopup showCloseButton={!pending} className="max-w-md">
+        <DialogPopup className="max-w-md">
           <DialogHeader>
             <DialogTitle>
               {review?.action === "merge" ? `Merge through #${review.number}` : "Rebase stack"}
@@ -238,7 +244,6 @@ export function PullRequestStackControl({
                 <select
                   className="rounded-md border bg-background p-2"
                   value={method}
-                  disabled={pending}
                   onChange={(event) => setMethod(event.target.value as PullRequestMergeMethod)}
                 >
                   {review.mergeMethods.map((method) => (
@@ -249,18 +254,13 @@ export function PullRequestStackControl({
                 </select>
               </label>
             ) : null}
-            {error ? (
-              <p role="alert" className="mt-3 text-sm text-destructive">
-                {error} Close to refresh before retrying.
-              </p>
-            ) : null}
           </DialogPanel>
           <DialogFooter>
-            <Button variant="outline" disabled={pending} onClick={close}>
+            <Button variant="outline" onClick={close}>
               Close
             </Button>
-            <Button disabled={pending || !!error || !review} onClick={() => void perform()}>
-              {pending ? "Working…" : "Confirm reviewed layers"}
+            <Button disabled={!review} onClick={() => void perform()}>
+              Confirm reviewed layers
             </Button>
           </DialogFooter>
         </DialogPopup>

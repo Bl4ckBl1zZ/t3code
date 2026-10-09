@@ -13,6 +13,7 @@ import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import type { WorkLogEntry, TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import {
   collapseWorkEntriesKeepingLiveBackground,
   computeStableMessagesTimelineRows,
@@ -25,10 +26,10 @@ import {
   resolveAssistantMessageCopyState,
   resolveTimelineToolPresentation,
   shouldCollapseUserMessage,
-  shouldPreserveAssistantLineBreaks,
   threadReadLabelPrefix,
   threadReadTargetId,
   threadReadTargetTitle,
+  timelineTurnFoldRunIdsByEntryId,
 } from "./MessagesTimeline.logic";
 
 describe("shouldPreserveAssistantLineBreaks", () => {
@@ -765,6 +766,11 @@ describe("deriveMessagesTimelineRows", () => {
       "thread-created-entry",
       "assistant-final-entry",
     ]);
+    // Find opens the fold that hides a match, keyed like the fold row.
+    const foldRunIds = timelineTurnFoldRunIdsByEntryId({ timelineEntries, isWorking: false });
+    expect(foldRunIds.get("assistant-first-entry")).toBe(foldRow?.runId);
+    expect(foldRunIds.has("assistant-final-entry")).toBe(false);
+    expect(foldRunIds.has("user-entry")).toBe(false);
 
     const expandedRows = deriveMessagesTimelineRows({
       timelineEntries,

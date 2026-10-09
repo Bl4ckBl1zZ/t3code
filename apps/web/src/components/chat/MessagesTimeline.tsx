@@ -1,4 +1,10 @@
 import { SnapShotAttachmentDetails } from "./SnapShotAttachmentDetails";
+import { ThreadFindTimelineContext } from "./ThreadFindProvider";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
+import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
+import type { ThreadFindMatch, ThreadFindPositionReader } from "./threadFind";
+import { useThreadFindNavigation } from "./useThreadFindNavigation";
+import { readThreadFindPosition } from "./threadFindPosition";
 import { resolveWorkingActivityText } from "./workingActivity";
 import { ActivityFocusText } from "./ActivityFocusText";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
@@ -37,7 +43,7 @@ import {
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
 import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
-import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type EnvironmentId,
@@ -65,6 +71,7 @@ import {
   memo,
   use,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -151,7 +158,7 @@ import {
   resolveTimelineMinimapNavigationInteractive,
   resolveTimelineMinimapTopPercent,
   shouldCollapseUserMessage,
-  shouldPreserveAssistantLineBreaks,
+  timelineTurnFoldRunIdsByEntryId,
   threadReadLabelPrefix,
   threadReadTargetId,
   threadReadTargetTitle,
@@ -247,6 +254,8 @@ interface TimelineRowSharedState {
    */
   onAppFullscreenChange: (rowId: string, fullscreen: boolean) => void;
   onRunShellCommand?: ((command: string) => void) | undefined;
+  /** Find is open with a query: folded content stays mounted so it can match. */
+  findActive: boolean;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
   threadRef: ScopedThreadRef | null;
@@ -387,13 +396,31 @@ interface MessagesTimelineProps {
   /** Runs whose failed workspace preparation can be retried, keyed by run id. */
   retryableWorkspacePreparationRunIds?: ReadonlySet<RunId>;
   onRetryWorkspacePreparation?: (runId: RunId) => void;
+  findOpen?: boolean;
+  findPositionReaderRef?: React.RefObject<ThreadFindPositionReader | null>;
+  findExpanded?: boolean;
+  findQuery?: string;
+  activeFindMatch?: ThreadFindMatch | null;
+  findNavigationId?: number;
 }
 
 // ---------------------------------------------------------------------------
 // MessagesTimeline — list owner
 // ---------------------------------------------------------------------------
 
-export const MessagesTimeline = memo(function MessagesTimeline({
+/** Reads find state from `ThreadFindProvider`, so stepping matches skips the chat view. */
+export function MessagesTimeline(props: MessagesTimelineProps) {
+  const find = useContext(ThreadFindTimelineContext);
+  const findOpen = find?.findOpen ?? props.findOpen;
+  const { onManualNavigation } = props;
+  // Find owns scrolling while open; stop following the live end.
+  useEffect(() => {
+    if (findOpen) onManualNavigation();
+  }, [findOpen, onManualNavigation]);
+  return <ConversationTimeline {...props} {...find} />;
+}
+
+const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistoryLoading = false,
   onCiteAssistantText,
@@ -444,7 +471,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   footer = null,
   retryableWorkspacePreparationRunIds = EMPTY_RUN_IDS,
   onRetryWorkspacePreparation,
+  findExpanded = false,
+  findQuery = "",
+  activeFindMatch = null,
+  findNavigationId = 0,
+  findPositionReaderRef,
 }: MessagesTimelineProps) {
+  const normalizedFindQuery = findQuery.trim();
+  const findActive = findExpanded;
   const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(new Set());
   const [expandedAttemptIds, setExpandedAttemptIds] = useState<ReadonlySet<RunAttemptId>>(
     new Set(),
@@ -520,14 +554,71 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
   }, [latestRun]);
 
+  // Find opens the fold that hides the match: imported turns have no run id but
+  // still fold under a synthetic key, so the match's own run id cannot open them.
+  const findFoldRunIds = useMemo(
+    () =>
+      findActive
+        ? timelineTurnFoldRunIdsByEntryId({
+            timelineEntries,
+            timelineClearedAt,
+            latestRun,
+            alwaysExpandActivity,
+            isWorking,
+            runlessWorkActive,
+          })
+        : null,
+    [
+      findActive,
+      timelineEntries,
+      timelineClearedAt,
+      latestRun,
+      alwaysExpandActivity,
+      isWorking,
+      runlessWorkActive,
+    ],
+  );
+  const activeFindRunId = activeFindMatch
+    ? findFoldRunIds?.get(activeFindMatch.entryId)
+    : undefined;
+  useEffect(() => {
+    if (!activeFindRunId) return;
+    setExpandedRunIds((previous) =>
+      previous.has(activeFindRunId) ? previous : new Set(previous).add(activeFindRunId),
+    );
+  }, [activeFindRunId]);
+  const visibleExpandedRunIds = useMemo(
+    () =>
+      activeFindRunId && !expandedRunIds.has(activeFindRunId)
+        ? new Set(expandedRunIds).add(activeFindRunId)
+        : expandedRunIds,
+    [activeFindRunId, expandedRunIds],
+  );
+  const activeFindAttemptId = activeFindMatch
+    ? timelineEntries.find((entry) => entry.id === activeFindMatch.entryId)?.attempt?.id
+    : undefined;
+  useEffect(() => {
+    if (!activeFindAttemptId) return;
+    setExpandedAttemptIds((previous) =>
+      previous.has(activeFindAttemptId) ? previous : new Set(previous).add(activeFindAttemptId),
+    );
+  }, [activeFindAttemptId]);
+  const visibleExpandedAttemptIds = useMemo(
+    () =>
+      activeFindAttemptId && !expandedAttemptIds.has(activeFindAttemptId)
+        ? new Set(expandedAttemptIds).add(activeFindAttemptId)
+        : expandedAttemptIds,
+    [activeFindAttemptId, expandedAttemptIds],
+  );
+
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
         timelineClearedAt,
         latestRun,
-        expandedRunIds,
-        expandedAttemptIds,
+        expandedRunIds: visibleExpandedRunIds,
+        expandedAttemptIds: visibleExpandedAttemptIds,
         alwaysExpandActivity,
         isWorking,
         runlessWorkActive,
@@ -539,8 +630,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timelineEntries,
       timelineClearedAt,
       latestRun,
-      expandedRunIds,
-      expandedAttemptIds,
+      visibleExpandedRunIds,
+      visibleExpandedAttemptIds,
       alwaysExpandActivity,
       isWorking,
       runlessWorkActive,
@@ -703,6 +794,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onManualNavigation,
   });
 
+  const [findListReady, setFindListReady] = useState(false);
+  const { onListLoad: onCitationListLoad } = citationTarget;
+  const handleListLoad = useCallback(() => {
+    onCitationListLoad();
+    setFindListReady(true);
+  }, [onCitationListLoad]);
+
   const [fullscreenAppRowId, setFullscreenAppRowId] = useState<string | null>(null);
   // Only the row that holds the pin can release it.
   const onAppFullscreenChange = useCallback((rowId: string, fullscreen: boolean) => {
@@ -743,6 +841,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSendAppMessage,
       onAppFullscreenChange,
       onRunShellCommand,
+      findActive,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -776,6 +875,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSendAppMessage,
       onAppFullscreenChange,
       onRunShellCommand,
+      findActive,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -833,6 +933,103 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [footer],
   );
 
+  // Find addresses messages by message id and plans by turn item id, which are
+  // also their row ids; grouped agent updates answer for the messages they hold.
+  const findRowIndex = useMemo(() => {
+    if (!activeFindMatch) return -1;
+    return rows.findIndex(
+      (row) =>
+        row.id === activeFindMatch.entryId ||
+        (row.kind === "agent-updates" &&
+          row.updates.some((update) => update.id === activeFindMatch.entryId)),
+    );
+  }, [activeFindMatch, rows]);
+
+  useLayoutEffect(() => {
+    if (!findPositionReaderRef || !timelineViewportElement) return;
+    const read: ThreadFindPositionReader = (query) => {
+      // Imported turns fold under a synthetic key, so match folds by key, not run id.
+      const foldRunIds =
+        findFoldRunIds ??
+        timelineTurnFoldRunIdsByEntryId({
+          timelineEntries,
+          timelineClearedAt,
+          latestRun,
+          alwaysExpandActivity,
+          isWorking,
+          runlessWorkActive,
+        });
+      const entryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
+      const searchable = (entry: (typeof timelineEntries)[number] | undefined) =>
+        entry && (entry.kind === "message" || entry.kind === "proposed-plan")
+          ? entry.id
+          : undefined;
+      return readThreadFindPosition(
+        timelineViewportElement,
+        query,
+        (rowId) => {
+          const rowIndex = rows.findIndex((row) => row.id === rowId);
+          for (const row of rows.slice(Math.max(0, rowIndex))) {
+            if (row.kind === "agent-updates") return row.updates[0]?.id;
+            // Ordinary rows map to one entry by id; only folds need a scan.
+            if (row.kind !== "turn-fold" && row.kind !== "attempt-fold") {
+              const entryId = searchable(entryById.get(row.id));
+              if (entryId) return entryId;
+              continue;
+            }
+            const entry = timelineEntries.find((entry) => {
+              const runId =
+                row.kind === "turn-fold"
+                  ? foldRunIds.get(entry.id)
+                  : entry.kind === "message"
+                    ? entry.message.runId
+                    : entry.kind === "proposed-plan"
+                      ? entry.proposedPlan.runId
+                      : null;
+              return (
+                runId === row.runId &&
+                (entry.kind !== "message" || entry.message.role === "assistant") &&
+                (row.kind !== "attempt-fold" || entry.attempt?.id === row.attemptId)
+              );
+            });
+            const entryId = searchable(entry);
+            if (entryId) return entryId;
+          }
+          return undefined;
+        },
+        contentInsetEndAdjustment,
+      );
+    };
+    findPositionReaderRef.current = read;
+    return () => {
+      if (findPositionReaderRef.current === read) findPositionReaderRef.current = null;
+    };
+  }, [
+    alwaysExpandActivity,
+    contentInsetEndAdjustment,
+    findFoldRunIds,
+    findPositionReaderRef,
+    isWorking,
+    latestRun,
+    rows,
+    runlessWorkActive,
+    timelineClearedAt,
+    timelineEntries,
+    timelineViewportElement,
+  ]);
+
+  useThreadFindNavigation({
+    listReady: findListReady,
+    entries: timelineEntries,
+    container: timelineViewportElement,
+    query: normalizedFindQuery,
+    match: activeFindMatch,
+    navigationId: findNavigationId,
+    rowIndex: findRowIndex,
+    listRef,
+    contentInsetEndAdjustment,
+  });
+
   // Stable renderItem — no closure deps. Row components read shared state
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
@@ -866,69 +1063,71 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <TimelineRowCtx value={sharedState}>
-      <TimelineRowActivityCtx value={activityState}>
-        <TooltipScrollDismissArea
-          ref={setTimelineViewportElement}
-          className="relative h-full min-h-0"
-          data-assistant-citation-viewport="true"
-        >
-          {threadRef && onCiteAssistantText ? (
-            <AssistantSelectionToolbar
-              viewport={timelineViewportElement}
-              threadRef={threadRef}
-              onCite={onCiteAssistantText}
+    <MarkdownFindContext value={findActive}>
+      <TimelineRowCtx value={sharedState}>
+        <TimelineRowActivityCtx value={activityState}>
+          <TooltipScrollDismissArea
+            ref={setTimelineViewportElement}
+            className="relative h-full min-h-0"
+            data-assistant-citation-viewport="true"
+          >
+            {threadRef && onCiteAssistantText ? (
+              <AssistantSelectionToolbar
+                viewport={timelineViewportElement}
+                threadRef={threadRef}
+                onCite={onCiteAssistantText}
+              />
+            ) : null}
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              onLoad={handleListLoad}
+              {...(alwaysRender ? { alwaysRender } : {})}
+              {...(citationTarget.target ? { dataVersion: citationTarget.target.key } : {})}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd={!findActive}
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={contentInsetEndAdjustment}
+              // The app owns end-following (ChatView live-follow + scroll-to-end
+              // pill), which respects the user's scroll gestures. LegendList's
+              // internal maintainScrollAtEnd races post-mount measurement: it
+              // caches its at-end flag while a maintain cycle is active, so
+              // overlapping item-layout reconciliations keep snapping the view
+              // to stale content ends even after the user scrolled away.
+              maintainScrollAtEnd={false}
+              maintainVisibleContentPosition={findActive ? false : maintainVisibleContentPosition}
+              onScroll={handleScroll}
+              className={cn(
+                "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                topFadeEnabled && "topbar-scroll-fade",
+              )}
+              ListHeaderComponent={
+                topFadeEnabled && parentThreadLink === null ? TIMELINE_LIST_FADE_HEADER : listHeader
+              }
+              ListFooterComponent={timelineListFooter}
             />
-          ) : null}
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            onLoad={citationTarget.onListLoad}
-            {...(alwaysRender ? { alwaysRender } : {})}
-            {...(citationTarget.target ? { dataVersion: citationTarget.target.key } : {})}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={contentInsetEndAdjustment}
-            // The app owns end-following (ChatView live-follow + scroll-to-end
-            // pill), which respects the user's scroll gestures. LegendList's
-            // internal maintainScrollAtEnd races post-mount measurement: it
-            // caches its at-end flag while a maintain cycle is active, so
-            // overlapping item-layout reconciliations keep snapping the view
-            // to stale content ends even after the user scrolled away.
-            maintainScrollAtEnd={false}
-            maintainVisibleContentPosition={maintainVisibleContentPosition}
-            onScroll={handleScroll}
-            className={cn(
-              "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "topbar-scroll-fade",
-            )}
-            ListHeaderComponent={
-              topFadeEnabled && parentThreadLink === null ? TIMELINE_LIST_FADE_HEADER : listHeader
-            }
-            ListFooterComponent={timelineListFooter}
-          />
-          <TimelineMinimap
-            currentIndex={minimapCurrentIndex}
-            items={minimapItems}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
-        </TooltipScrollDismissArea>
-      </TimelineRowActivityCtx>
-    </TimelineRowCtx>
+            <TimelineMinimap
+              currentIndex={minimapCurrentIndex}
+              items={minimapItems}
+              hasPersistentGutter={minimapHasPersistentGutter}
+              hitStripWidth={minimapHitStripWidth}
+              stripMap={minimapStripMap}
+              onSelect={(item) => {
+                onManualNavigation();
+                void listRef.current?.scrollToIndex({
+                  index: item.rowIndex,
+                  animated: true,
+                  viewOffset: 24,
+                });
+              }}
+            />
+          </TooltipScrollDismissArea>
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>
+    </MarkdownFindContext>
   );
 });
 
@@ -1792,25 +1991,27 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     <>
       <div className="relative min-w-0 px-1 py-0.5">
         <MessageAuthorHeading>T3 Code</MessageAuthorHeading>
-        <AssistantCitationSource
-          messageId={row.message.id}
-          threadRef={ctx.threadRef ?? undefined}
-          itemKey={row.id}
-          request={ctx.citationRequest}
-          listRef={ctx.listRef}
-        >
-          <ChatMarkdown
-            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-            onRunShellCommand={ctx.onRunShellCommand}
-            text={messageText}
-            cwd={ctx.markdownCwd}
+        <div data-thread-find-text="true">
+          <AssistantCitationSource
+            messageId={row.message.id}
             threadRef={ctx.threadRef ?? undefined}
-            isStreaming={Boolean(row.message.streaming)}
-            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-            skills={ctx.skills}
-            headingLevelOffset={MESSAGE_HEADING_LEVEL}
-          />
-        </AssistantCitationSource>
+            itemKey={row.id}
+            request={ctx.citationRequest}
+            listRef={ctx.listRef}
+          >
+            <ChatMarkdown
+              onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+              onRunShellCommand={ctx.onRunShellCommand}
+              text={messageText}
+              cwd={ctx.markdownCwd}
+              threadRef={ctx.threadRef ?? undefined}
+              isStreaming={Boolean(row.message.streaming)}
+              lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+              skills={ctx.skills}
+              headingLevelOffset={MESSAGE_HEADING_LEVEL}
+            />
+          </AssistantCitationSource>
+        </div>
         {attachments.length > 0 ? <AssistantMessageAttachments attachments={attachments} /> : null}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
@@ -1820,10 +2021,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         />
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-60 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
+            <AssistantCopyButton row={row} />
             {row.projectedItem?.item.type === "assistant_message" ? (
               <AssistantForkButton projectedItem={row.projectedItem} />
             ) : null}
-            <AssistantCopyButton row={row} />
             {row.projectedItem && row.projectedItem.item.status !== "completed" ? (
               <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                 {row.projectedItem.item.status}
@@ -2108,6 +2309,7 @@ function ProposedPlanTimelineRow({
         threadRef={ctx.threadRef ?? undefined}
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
+        findActive={ctx.findActive}
       />
     </div>
   );
@@ -2972,7 +3174,12 @@ const UserMessageTerminalContextInlineLabel = memo(
         ? `${props.context.header}\n${props.context.body}`
         : props.context.header;
 
-    return <TerminalContextInlineChip label={props.context.header} tooltipText={tooltipText} />;
+    // Find indexes the prose around the chip, not its label.
+    return (
+      <span data-thread-find-ignore>
+        <TerminalContextInlineChip label={props.context.header} tooltipText={tooltipText} />
+      </span>
+    );
   },
 );
 
@@ -3062,6 +3269,9 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   footer?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Find opens the body only when it selects a match in the clipped part.
+  const revealForFind = useCallback(() => setExpanded(true), []);
+  const findRevealRef = useFindRevealRef(revealForFind);
   const hasVisibleBody = props.text.trim().length > 0 || props.terminalContexts.length > 0;
   const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
   const isCollapsed = canCollapse && !expanded;
@@ -3070,8 +3280,11 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
     <div>
       {hasVisibleBody ? (
         <div
+          ref={findRevealRef}
           className={cn("relative", isCollapsed && "max-h-44 overflow-hidden")}
           data-user-message-body="true"
+          data-thread-find-text="true"
+          data-thread-find-fold={isCollapsed ? "" : undefined}
           data-user-message-collapsed={isCollapsed ? "true" : "false"}
           data-user-message-collapsible={canCollapse ? "true" : "false"}
           data-user-message-fade={isCollapsed ? "true" : "false"}
@@ -3306,7 +3519,11 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
   );
 
   return (
-    <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
+    <div
+      className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3"
+      // Find indexes the prompt around review cards, not the attached comments.
+      data-thread-find-ignore
+    >
       <div className="space-y-1">
         <div className="text-xs font-medium text-foreground">
           {formatWorkspaceRelativePath(comment.filePath, ctx.workspaceRoot)}

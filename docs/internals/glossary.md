@@ -127,7 +127,7 @@ A point-in-time view of state. The word is used in multiple layers, including or
 
 #### Model manifest
 
-The per-driver list of current model slugs that decides which models land in the model picker's legacy section. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.
+The per-driver model catalog whose `legacy` entries land in the model picker's legacy section, and whose `minVersion` gates name models a provider CLI update unlocks. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.
 
 #### MCP app
 

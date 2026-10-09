@@ -24,23 +24,13 @@ import {
   useState,
 } from "react";
 import {
-  AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
-  AuthSettingsWriteScope,
-  AuthProvidersManageScope,
-  AuthEnvironmentMaintainScope,
-  AuthPreviewOperateScope,
   AuthDiagnosticsReadScope,
-  AuthSourceControlWriteScope,
-  AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthFilesystemReadScope,
-  AuthFilesystemWriteScope,
   AuthStandardClientScopes,
-  AuthTerminalOperateScope,
   AuthTerminalReadScope,
   type AuthClientSession,
   type AuthEnvironmentScope,
@@ -184,6 +174,8 @@ import {
 } from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import { SessionPermissions } from "./SessionPermissions";
+import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
 import { usePreparedConnection } from "~/state/session";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
@@ -217,93 +209,6 @@ function formatAccessTimestamp(value: string): string {
 }
 
 const EMPTY_SCOPES: ReadonlyArray<AuthEnvironmentScope> = [];
-
-const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
-  readonly scope: AuthGrantScope;
-  readonly title: string;
-  readonly description: string;
-}> = [
-  {
-    scope: AuthOrchestrationReadScope,
-    title: "View environment",
-    description: "Read threads, status, checkpoints, and configuration.",
-  },
-  {
-    scope: AuthOrchestrationOperateScope,
-    title: "Operate tasks",
-    description: "Start, update, and stop tasks.",
-  },
-  {
-    scope: AuthSourceControlWriteScope,
-    title: "Change source control",
-    description: "Commit, push, manage branches and repositories, and change pull requests.",
-  },
-  {
-    scope: AuthSettingsWriteScope,
-    title: "Change environment settings",
-    description: "Edit environment preferences and keybindings.",
-  },
-  {
-    scope: AuthProvidersManageScope,
-    title: "Manage providers",
-    description: "Configure, install, sign in to, and update providers and usage sources.",
-  },
-  {
-    scope: AuthEnvironmentMaintainScope,
-    title: "Maintain environment",
-    description: "Update the server and control environment processes.",
-  },
-  {
-    scope: AuthPreviewOperateScope,
-    title: "Control previews",
-    description: "Open browser previews and host browser automation.",
-  },
-  {
-    scope: AuthDiagnosticsReadScope,
-    title: "View diagnostics and usage",
-    description: "Read process diagnostics, resource history, and usage totals.",
-  },
-  {
-    scope: AuthTerminalReadScope,
-    title: "View terminals",
-    description: "Read existing terminal output and status.",
-  },
-  {
-    scope: AuthTerminalOperateScope,
-    title: "Use terminals",
-    description: "Create terminals and send input to running shells.",
-  },
-  {
-    scope: AuthFilesystemReadScope,
-    title: "Read files",
-    description: "Browse host files, search workspaces, and inspect local changes.",
-  },
-  {
-    scope: AuthFilesystemWriteScope,
-    title: "Write files",
-    description: "Edit workspace files and save plans to disk.",
-  },
-  {
-    scope: AuthAccessReadScope,
-    title: "View access",
-    description: "Inspect pairing links and authorized clients.",
-  },
-  {
-    scope: AuthAccessWriteScope,
-    title: "Manage access",
-    description: "Issue and revoke credentials for other clients.",
-  },
-  {
-    scope: AuthRelayReadScope,
-    title: "View relay",
-    description: "Inspect managed relay connectivity.",
-  },
-  {
-    scope: AuthRelayWriteScope,
-    title: "Manage relay",
-    description: "Change managed tunnel connectivity.",
-  },
-];
 
 function AccessScopeSummary({
   scopes,
@@ -1487,6 +1392,7 @@ function SavedBackendListRow({
   onAddRoute,
 }: SavedBackendListRowProps) {
   const [routesOpen, setRoutesOpen] = useState(false);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
   const environmentId = environment.environmentId;
   // Discovery or a socket preflight found this server incompatible: it stays
   // switched off with its reason until compatibility changes.
@@ -1631,6 +1537,24 @@ function SavedBackendListRow({
       />
     </button>
   );
+  const permissionsToggle = (
+    <button
+      type="button"
+      aria-expanded={permissionsOpen}
+      aria-controls={`remote-permissions-${environmentId}`}
+      onClick={() => setPermissionsOpen((open) => !open)}
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      Permissions
+      <ChevronRightIcon
+        aria-hidden
+        className={cn(
+          "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+          permissionsOpen && "rotate-90",
+        )}
+      />
+    </button>
+  );
   // Only a connected, enabled machine can take a remote update; a switched-off
   // one keeps the "update available" note so the icon is not a surprise later.
   const showUpdateAction =
@@ -1661,19 +1585,23 @@ function SavedBackendListRow({
               {environment.label}
             </h3>
           </div>
-          {metadataBits.length > 0 || routesToggle !== null ? (
-            <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-              {metadataBits.length > 0 ? (
-                <span className="min-w-0 truncate">{metadataBits.join(" · ")}</span>
-              ) : null}
-              {metadataBits.length > 0 && routesToggle !== null ? (
-                <span aria-hidden className="shrink-0">
-                  ·
-                </span>
-              ) : null}
-              {routesToggle}
-            </p>
-          ) : null}
+          <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            {metadataBits.length > 0 ? (
+              <span className="min-w-0 truncate">{metadataBits.join(" · ")}</span>
+            ) : null}
+            {metadataBits.length > 0 && routesToggle !== null ? (
+              <span aria-hidden className="shrink-0">
+                ·
+              </span>
+            ) : null}
+            {routesToggle}
+            {metadataBits.length > 0 || routesToggle !== null ? (
+              <span aria-hidden className="shrink-0">
+                ·
+              </span>
+            ) : null}
+            {permissionsToggle}
+          </p>
           {isConnected && (
             <div className="pt-1">
               <EnvironmentIconPicker
@@ -1821,6 +1749,18 @@ function SavedBackendListRow({
           <EnvironmentRoutesList
             environment={environment}
             onAddRoute={() => onAddRoute(environment)}
+          />
+        </div>
+      ) : null}
+      {permissionsOpen ? (
+        <div
+          id={`remote-permissions-${environmentId}`}
+          className="mt-2 min-w-0 border-t border-border/50"
+        >
+          <SessionPermissions
+            environmentId={environmentId}
+            connected={isConnected}
+            routeContext={!isWslEnvironment}
           />
         </div>
       ) : null}
@@ -3488,6 +3428,23 @@ export function ConnectionsSettings() {
     />
   );
 
+  // What this client's own session may do on the primary environment.
+  const primaryPermissions = primaryEnvironment ? (
+    <details className="group px-3 sm:px-4">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        Permissions
+        <ChevronRightIcon
+          aria-hidden
+          className="size-3 text-muted-foreground group-open:rotate-90"
+        />
+      </summary>
+      <SessionPermissions
+        environmentId={primaryEnvironment.environmentId}
+        connected={primaryEnvironment.connection.phase === "connected"}
+      />
+    </details>
+  ) : null;
+
   return (
     <SettingsPageContainer>
       {canManageLocalBackend ? (
@@ -3568,6 +3525,7 @@ export function ConnectionsSettings() {
                 <CloudLinkRow canManageRelay={canManageRelay} />
               </>
             )}
+            {primaryPermissions}
           </SettingsSection>
 
           {isLocalBackendRemotelyReachable ? (
@@ -3867,6 +3825,7 @@ export function ConnectionsSettings() {
             description="Pairing links and client-session management require the access:write scope for this backend."
           />
           <CloudLinkRow canManageRelay={canManageRelay} />
+          {primaryPermissions}
         </SettingsSection>
       )}
 

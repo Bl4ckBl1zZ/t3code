@@ -152,6 +152,11 @@ it.effect("lists change request history through the batched head lookup", () =>
       state: "all",
       limit: 10,
       host: "enterprise.test",
+      context: {
+        provider: { kind: "github", name: "GitHub Enterprise", baseUrl: "https://enterprise.test" },
+        remoteName: "origin",
+        remoteUrl: "https://enterprise.test/acme/web.git",
+      },
     });
     assert.strictEqual(changeRequests[0]?.provider, "github");
     assert.strictEqual(changeRequests[0]?.state, "merged");

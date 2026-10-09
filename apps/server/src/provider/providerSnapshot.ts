@@ -8,6 +8,7 @@ import type {
   ServerProviderSkill,
   ServerProviderSlashCommand,
   ServerProviderModel,
+  ServerProviderUpdateRequiredModel,
   ServerProviderState,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -239,6 +240,7 @@ export function buildServerProvider(input: {
   enabled: boolean;
   checkedAt: string;
   models: ReadonlyArray<ServerProviderModel>;
+  updateRequiredModels?: ReadonlyArray<ServerProviderUpdateRequiredModel>;
   slashCommands?: ReadonlyArray<ServerProviderSlashCommand>;
   skills?: ReadonlyArray<ServerProviderSkill>;
   probe: ProviderProbeResult;
@@ -274,6 +276,9 @@ export function buildServerProvider(input: {
     checkedAt: input.checkedAt,
     ...(input.probe.message ? { message: input.probe.message } : {}),
     models: input.models,
+    ...(input.updateRequiredModels?.length
+      ? { updateRequiredModels: input.updateRequiredModels }
+      : {}),
     slashCommands: [...(input.slashCommands ?? [])],
     skills: [...(input.skills ?? [])],
     ...(versionAdvisory ? { versionAdvisory } : {}),

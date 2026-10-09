@@ -467,15 +467,17 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                           },
                         ]
                       : []),
-                    ...(payload?.includeImage === false
-                      ? []
-                      : [
+                    // Images stay out of tool history unless asked for: providers replay
+                    // them on every later request, and some reject inline images outright.
+                    ...(payload?.includeImage === true
+                      ? [
                           {
                             type: "image" as const,
                             data: new Uint8Array(Buffer.from(screenshot.data, "base64")),
                             mimeType: screenshot.mimeType,
                           },
-                        ]),
+                        ]
+                      : []),
                   ],
                 }),
               );

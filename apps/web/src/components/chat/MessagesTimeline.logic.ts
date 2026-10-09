@@ -240,10 +240,6 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
       : `${sentenceLabels.slice(0, -1).join(", ")}, and ${sentenceLabels.at(-1)}`;
 }
 
-export function shouldPreserveAssistantLineBreaks(text: string): boolean {
-  return /^★ Insight(?:\s|─)/mu.test(text);
-}
-
 export function resolveTimelineMinimapHeightStyle(itemCount: number): string {
   const naturalHeight = Math.max(1, (itemCount - 1) * TIMELINE_MINIMAP_ITEM_SPACING);
   return `min(${naturalHeight}px, ${TIMELINE_MINIMAP_MAX_HEIGHT_CSS})`;
@@ -910,6 +906,63 @@ function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
   });
 }
 
+type TimelineTurnFoldInput = Pick<
+  Parameters<typeof deriveMessagesTimelineRows>[0],
+  | "timelineEntries"
+  | "timelineClearedAt"
+  | "latestRun"
+  | "alwaysExpandActivity"
+  | "isWorking"
+  | "runlessWorkActive"
+>;
+
+/** The entries the timeline draws: after a cleared-chat cutoff, without delegation rows. */
+function timelineRowEntries(input: TimelineTurnFoldInput) {
+  const timelineClearedAtMs =
+    input.timelineClearedAt === null || input.timelineClearedAt === undefined
+      ? Number.NaN
+      : Date.parse(input.timelineClearedAt);
+  return withoutSubagentDelegationRows(
+    Number.isFinite(timelineClearedAtMs)
+      ? input.timelineEntries.filter((entry) => Date.parse(entry.createdAt) > timelineClearedAtMs)
+      : input.timelineEntries,
+  );
+}
+
+/** The turn folds the timeline would draw, before applying expansion state. */
+function deriveTimelineTurnFolds(
+  input: TimelineTurnFoldInput,
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  failedRunIds: ReadonlySet<RunId>,
+): ReadonlyMap<string, TurnFold> {
+  if (input.alwaysExpandActivity) return new Map();
+  return deriveTurnFolds({
+    timelineEntries,
+    terminalAssistantMessageIds: deriveTerminalAssistantMessageIds(timelineEntries),
+    latestRun: input.latestRun ?? null,
+    unsettledRunId: deriveUnsettledRunId(input.latestRun ?? null),
+    failedRunIds,
+    runlessWorkActive: input.isWorking && input.runlessWorkActive === true,
+  });
+}
+
+/**
+ * Every folded entry's fold key, keyed as `expandedRunIds` expects. Runless
+ * (imported) turns fold under a synthetic key, so an entry's own run id is not
+ * enough for find to open them.
+ */
+export function timelineTurnFoldRunIdsByEntryId(
+  input: TimelineTurnFoldInput,
+): ReadonlyMap<string, RunId> {
+  const timelineEntries = timelineRowEntries(input);
+  const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
+  const byEntryId = new Map<string, RunId>();
+  for (const fold of deriveTimelineTurnFolds(input, timelineEntries, failedRunIds).values()) {
+    for (const entryId of fold.hiddenEntryIds) byEntryId.set(entryId, fold.runId);
+  }
+  return byEntryId;
+}
+
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   timelineClearedAt?: string | null;
@@ -934,16 +987,8 @@ export function deriveMessagesTimelineRows(input: {
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
-  const timelineClearedAtMs =
-    input.timelineClearedAt === null || input.timelineClearedAt === undefined
-      ? Number.NaN
-      : Date.parse(input.timelineClearedAt);
-  const timelineEntries = withoutSubagentDelegationRows(
-    Number.isFinite(timelineClearedAtMs)
-      ? input.timelineEntries.filter((entry) => Date.parse(entry.createdAt) > timelineClearedAtMs)
-      : input.timelineEntries,
-  );
-  if (Number.isFinite(timelineClearedAtMs) && input.timelineClearedAt) {
+  const timelineEntries = timelineRowEntries(input);
+  if (input.timelineClearedAt && Number.isFinite(Date.parse(input.timelineClearedAt))) {
     nextRows.push({
       kind: "chat-cleared",
       id: `chat-cleared:${input.timelineClearedAt}`,
@@ -961,16 +1006,7 @@ export function deriveMessagesTimelineRows(input: {
     failedRunIds,
   );
   const runlessWorkActive = input.isWorking && input.runlessWorkActive === true;
-  const foldsByAnchorEntryId = input.alwaysExpandActivity
-    ? new Map<string, TurnFold>()
-    : deriveTurnFolds({
-        timelineEntries,
-        terminalAssistantMessageIds,
-        latestRun: input.latestRun ?? null,
-        unsettledRunId,
-        failedRunIds,
-        runlessWorkActive,
-      });
+  const foldsByAnchorEntryId = deriveTimelineTurnFolds(input, timelineEntries, failedRunIds);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
     if (!input.expandedRunIds?.has(fold.runId)) {

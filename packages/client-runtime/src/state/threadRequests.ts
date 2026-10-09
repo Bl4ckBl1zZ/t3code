@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2RuntimeRequest,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2UserInputQuestion,
   ProviderRequestKind,
   ProviderApprovalOption,
   RuntimeRequestId,
@@ -21,6 +22,8 @@ export interface ThreadPendingApproval {
 
 export interface ThreadUserInputQuestion {
   readonly allowCustomAnswer?: boolean | undefined;
+  /** Editable initial text; answers keep it verbatim, including an empty string. */
+  readonly initialAnswer?: string | undefined;
   readonly required?: boolean | undefined;
   readonly id: string;
   readonly header: string;
@@ -46,6 +49,27 @@ export interface ThreadPendingUserInput {
 export interface PendingThreadRequests {
   readonly approvals: ReadonlyArray<ThreadPendingApproval>;
   readonly userInputs: ReadonlyArray<ThreadPendingUserInput>;
+}
+
+/** Seed each question once. Existing edits, cleared answers, and option selections win. */
+export function seedUserInputDraftAnswers<Draft extends { readonly customAnswer?: string }>(
+  questions: ReadonlyArray<
+    Pick<OrchestrationV2UserInputQuestion, "id" | "allowCustomAnswer" | "initialAnswer">
+  >,
+  drafts: Record<string, Draft>,
+): Record<string, Draft | { customAnswer: string }> {
+  let seeded: Record<string, Draft | { customAnswer: string }> = drafts;
+  for (const question of questions) {
+    if (
+      question.initialAnswer === undefined ||
+      question.allowCustomAnswer === false ||
+      seeded[question.id] !== undefined
+    )
+      continue;
+    if (seeded === drafts) seeded = { ...drafts };
+    seeded[question.id] = { customAnswer: question.initialAnswer };
+  }
+  return seeded;
 }
 
 /** Joins pending request entities to the request items that carry display data. */

@@ -100,6 +100,9 @@ If `gh` is signed in to several accounts or hosts, expand **GitHub** in the same
 the account each host uses or turn a host off. A saved token or `GH_TOKEN` takes precedence
 over that choice; a host turned off stays off either way.
 
+For GitHub Enterprise, sign in with `gh auth login --hostname YOUR_HOST`. T3 Code treats a
+custom server name as GitHub once it has a credential for that host.
+
 In the native iOS app, open **Settings → Servers**, then a server's details and **Source Control**,
 to make the same choices per host or to save or remove a token. Saved tokens can't be viewed again
 there either. **Add GitHub Host…** lists a GitHub Enterprise Server host, optionally with its token;
@@ -187,8 +190,9 @@ On web and desktop, sidebar search and the command palette match the linked PR n
 (such as **#287**), repository plus number, or URL. This searches links already attached to
 threads; it does not query the source-control host.
 
-Remote **Open in editor** also supports Zed over SSH when the environment advertises an
-SSH target and Zed is installed on the client machine.
+Remote **Open in editor** also supports Zed and JetBrains IDEs over SSH when the environment
+advertises an SSH target and the editor is installed on the client machine. JetBrains IDEs open
+the project through the JetBrains Toolbox App.
 
 Enable **Proactive panels** in Settings → General to open linked pull requests and completed-run
 changes automatically on desktop-sized layouts. Changes open only when a ready checkpoint contains
