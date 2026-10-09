@@ -814,6 +814,9 @@ public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable,
     public var question: String
     public var options: [FeatureInputOption]
     public var allowsMultiple: Bool
+    /// Seeds the custom answer once per request. Its presence also means the
+    /// answer is sent exactly as typed, and an empty answer is a valid one.
+    public var initialAnswer: String? = nil
 
     public init(
         id: String,
@@ -821,9 +824,11 @@ public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable,
         question: String,
         options: [FeatureInputOption] = [],
         allowsMultiple: Bool = false,
-        allowCustomAnswer: Bool? = nil
+        allowCustomAnswer: Bool? = nil,
+        initialAnswer: String? = nil
     ) {
         self.allowCustomAnswer = allowCustomAnswer
+        self.initialAnswer = initialAnswer
         self.id = id
         self.header = header
         self.question = question

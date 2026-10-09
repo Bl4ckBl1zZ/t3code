@@ -99,6 +99,9 @@ public struct OrchestrationV2UserInputQuestion: Codable, Equatable, Sendable {
     public let header: String
     public let question: String
     public let options: [OrchestrationV2UserInputOption]
+    /// Editable initial text (a Pi editor dialog's prefill). When present the
+    /// answer is sent verbatim, whitespace included, and may be empty.
+    public var initialAnswer: String? = nil
 }
 
 public struct OrchestrationV2PlanStep: Codable, Equatable, Sendable {

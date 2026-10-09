@@ -5875,7 +5875,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                                     FeatureInputOption(label: $0.label, detail: $0.description, value: $0.value)
                                 },
                                 allowsMultiple: $0.multiSelect ?? false,
-                                allowCustomAnswer: $0.allowCustomAnswer
+                                allowCustomAnswer: $0.allowCustomAnswer,
+                                initialAnswer: $0.initialAnswer
                             )
                         }
                     )
