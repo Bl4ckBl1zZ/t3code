@@ -338,9 +338,11 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
  * their real backdrops (canvas, or the sidebar for its rows) because theme
  * colors are stored as opaque OKLCH tokens.
  */
+// Search uses amber across built-ins to separate matches from accent-tinted
+// inline code. The current match uses a stronger gold with dark text.
 const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
-  searchMatchBackground: "#fce8c0",
-  searchMatchForeground: "#27272a",
+  searchMatchBackground: "#ffde8b",
+  searchMatchForeground: "#21180a",
   searchMatchActiveBackground: "#eea52b",
   searchMatchActiveForeground: "#21180a",
   canvas: "#fcfcfc",
@@ -403,7 +405,7 @@ const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
 };
 
 const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
-  searchMatchBackground: "#533e16",
+  searchMatchBackground: "#8c6c1f",
   searchMatchForeground: "#f5f5f5",
   searchMatchActiveBackground: "#eea52b",
   searchMatchActiveForeground: "#21180a",
