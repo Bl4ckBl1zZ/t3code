@@ -28,6 +28,7 @@ import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts"
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import * as PreviewManager from "./Manager.ts";
+import * as PreviewPasskeys from "./Passkeys.ts";
 
 describe("fitPictureInPictureContentSize", () => {
   it("preserves the PiP content area across aspect-ratio changes", () => {
@@ -289,6 +290,13 @@ const managerLayer = (platform: NodeJS.Platform = "darwin") =>
       }),
     ),
     Layer.provideMerge(browserSessionLayer),
+    Layer.provideMerge(
+      Layer.mock(PreviewPasskeys.PreviewPasskeys)({
+        bridgeEnabled: false,
+        installSessionHandlers: () => {},
+        attachGuest: () => () => {},
+      }),
+    ),
     Layer.provideMerge(environmentLayer),
     Layer.provideMerge(fileSystemLayer),
     Layer.provideMerge(Path.layer),
