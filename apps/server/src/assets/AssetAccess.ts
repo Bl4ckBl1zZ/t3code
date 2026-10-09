@@ -440,6 +440,9 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileName = path.basename(canonicalFile);
       break;
     }
+    // A draft's file is confined to the root it names, like a thread's
+    // workspace file; drafts never reach host files outside it.
+    case "draft-workspace-file":
     case "workspace-file": {
       if (!input.workspaceRoot) {
         return yield* new AssetWorkspaceContextNotFoundError({

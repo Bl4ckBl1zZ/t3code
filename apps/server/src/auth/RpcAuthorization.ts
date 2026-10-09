@@ -226,7 +226,9 @@ const requiredScopesForRpcCall = (
     // confined to a server-owned directory.
     const { resource } = decodeAssetCreateUrl(payload);
     return [
-      resource._tag === "workspace-file" || resource._tag === "media-file"
+      resource._tag === "workspace-file" ||
+      resource._tag === "media-file" ||
+      resource._tag === "draft-workspace-file"
         ? AuthFilesystemReadScope
         : AuthOrchestrationReadScope,
     ];

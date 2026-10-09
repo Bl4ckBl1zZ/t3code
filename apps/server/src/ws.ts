@@ -2084,6 +2084,14 @@ const makeWsRpcLayer = (
                   : {}),
               });
             }
+            if (input.resource._tag === "draft-workspace-file") {
+              // A draft names its workspace directly; there is no thread to
+              // resolve one from. Asset access confines the file to that root.
+              return yield* issueAssetUrl({
+                resource: input.resource,
+                workspaceRoot: input.resource.cwd,
+              });
+            }
             if (input.resource._tag !== "workspace-file" && input.resource._tag !== "media-file") {
               return yield* issueAssetUrl({ resource: input.resource });
             }

@@ -711,6 +711,41 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("issues draft workspace URLs confined to the root the draft names", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-asset-draft-" });
+      const outside = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-asset-outside-" });
+      const htmlPath = path.join(root, "docs", "index.html");
+      yield* fileSystem.makeDirectory(path.join(root, "docs"), { recursive: true });
+      yield* fileSystem.writeFileString(htmlPath, "<h1>Draft</h1>");
+      yield* fileSystem.writeFileString(path.join(outside, "secret.html"), "<h1>Secret</h1>");
+      const canonicalHtmlPath = yield* fileSystem.realPath(htmlPath);
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "draft-workspace-file", cwd: root, path: htmlPath },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+      expect(yield* resolveAsset(token, "index.html")).toEqual({
+        kind: "file",
+        path: canonicalHtmlPath,
+      });
+
+      const escaped = yield* issueAssetUrl({
+        resource: {
+          _tag: "draft-workspace-file",
+          cwd: root,
+          path: path.join(outside, "secret.html"),
+        },
+        workspaceRoot: root,
+      }).pipe(Effect.flip);
+      expect(escaped._tag).toBe("AssetWorkspacePathValidationError");
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues exact-file workspace URLs for video files", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
