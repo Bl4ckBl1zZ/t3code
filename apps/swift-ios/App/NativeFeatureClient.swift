@@ -129,6 +129,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var detailResyncBackoff = NativeDetailStreamBackoff(base: .milliseconds(500))
     private var activeThreadPage: FeatureThreadPage?
     private var threadHistoryEpoch = 0
+    /// Advances with every `loadThread`, so only a newer open supersedes one.
+    /// The history epoch also moves when a refresh adopts a snapshot, which
+    /// is no reason to abandon an open.
+    private var threadOpenGeneration = 0
     /// Last-known shells and thread projections on disk. Nil keeps every open,
     /// launch and cold start on the network path.
     private let syncCache: SyncSnapshotCache?
@@ -2075,10 +2079,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         resetDetailStream()
         passiveDetailPollingTask?.cancel()
         passiveDetailPollingTask = nil
+        // The previous thread's projection, saved above. A refresh landing
+        // mid-open starts clean rather than measuring against it.
+        activeDetail = nil
         activeThreadID = route.uiID
         activeThreadEnvironmentID = environment.id
         threadHistoryEpoch &+= 1
         let historyEpoch = threadHistoryEpoch
+        threadOpenGeneration &+= 1
+        let openGeneration = threadOpenGeneration
         activeThreadPage = nil
         let trace = ThreadOpenTrace(threadID: route.wireID)
         threadOpenTrace = trace
@@ -2086,9 +2095,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if !isReload,
            let cached = await syncCache?.thread(environmentID: environment.id, threadID: route.wireID) {
             guard isKnownClient(client, environmentID: environment.id, generation: generation),
-                  threadHistoryEpoch == historyEpoch,
+                  threadOpenGeneration == openGeneration,
                   activeThreadID == route.uiID else {
                 throw CancellationError()
+            }
+            if threadHistoryEpoch != historyEpoch,
+               let detail = continueOpenFromAdoptedSnapshot(route, snapshotMaxVisibleItems: window) {
+                return detail
             }
             trace.mark(cached.sequence == nil ? .seeded : .cacheHit)
             // The cached projection paints now; the stream resumes after its
@@ -2117,10 +2130,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             maxVisibleItems: window
         )
         guard isKnownClient(client, environmentID: environment.id, generation: generation),
-              threadHistoryEpoch == historyEpoch,
+              threadOpenGeneration == openGeneration,
               activeThreadID == route.uiID,
               activeThreadEnvironmentID == environment.id else {
             throw CancellationError()
+        }
+        if threadHistoryEpoch != historyEpoch {
+            // Ours may still be the newer of the two; adoption keeps whichever is.
+            adoptDetailSnapshot(snapshot, route: route)
+            if let detail = continueOpenFromAdoptedSnapshot(route, snapshotMaxVisibleItems: window) {
+                return detail
+            }
         }
         let detail = adoptActiveProjection(
             snapshot.projection,
@@ -2134,6 +2154,30 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             after: snapshot.snapshotSequence,
             snapshotMaxVisibleItems: window
         )
+        return detail
+    }
+
+    /// Finishes an open after a shell-driven refresh adopted a snapshot of the
+    /// thread while the open was waiting on its own source. Nothing streams
+    /// during an open, so a busy thread — a new one above all — routinely gets
+    /// one. That projection is current: the open keeps it and subscribes from
+    /// its sequence, so the thread never ends up open without a stream.
+    private func continueOpenFromAdoptedSnapshot(
+        _ route: NativeThreadRoute,
+        snapshotMaxVisibleItems: Int?
+    ) -> FeatureThreadDetail? {
+        guard let projection = activeRawThread,
+              projection.thread.id == route.wireID,
+              let sequence = activeThreadSequence else { return nil }
+        let detail = mapDetail(
+            projection,
+            environment: route.client.environment,
+            page: activeThreadPage
+        )
+        latestDetails[route.uiID] = detail
+        threadOpenTrace?.mark(.firstPaint)
+        persistActiveThread()
+        startDetailStream(route, after: sequence, snapshotMaxVisibleItems: snapshotMaxVisibleItems)
         return detail
     }
 
