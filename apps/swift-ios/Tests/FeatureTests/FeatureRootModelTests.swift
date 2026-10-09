@@ -759,6 +759,44 @@ struct FeatureRootModelTests {
         #expect(detail?.messages.map(\.text) == ["Ship the icons", "On it"])
     }
 
+    /// The new thread's own first turn is what makes it working, so delivery
+    /// must not read the prompt as queued behind a turn and drop it.
+    @Test
+    func testDeliveredThreadCreationKeepsItsPromptWhileTheTurnRuns() async {
+        let client = FeatureClientStub()
+        client.snapshot = disconnectedProjectSnapshot()
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        guard let pending = await model.startTask(
+            NewTaskRequest(
+                projectID: "project-1",
+                prompt: "Ship the icons",
+                selection: .init(providerID: "codex", modelID: "gpt-5.6-sol"),
+                runtimeMode: .fullAccess,
+                interactionMode: .standard
+            )
+        ) else {
+            Issue.record("The queued creation did not produce a thread")
+            return
+        }
+        await model.waitForCurrentOutboxDelivery()
+        client.createdThread = FeatureThread(
+            id: pending.id,
+            projectID: "project-1",
+            environmentID: "environment-1",
+            title: "Ship the icons",
+            state: .working
+        )
+        client.snapshot = connectedProjectSnapshot()
+
+        await model.reload()
+        await model.waitForCurrentOutboxDelivery()
+
+        #expect(!model.isAwaitingCreation(pending.id))
+        #expect(model.details[pending.id]?.messages.map(\.text) == ["Ship the icons"])
+    }
+
     @Test
     func testNewTaskStartsThreadAndFirstTurnAtomically() async {
         let client = FeatureClientStub()

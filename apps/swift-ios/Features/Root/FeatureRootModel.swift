@@ -1408,10 +1408,11 @@ public final class FeatureRootModel {
     /// A delivered message that landed behind a running turn now lives in the
     /// server's queue, so its local row leaves the transcript rather than
     /// sitting there until the next reload drops it. Only the local row: a
-    /// server row with the same id is the real message.
+    /// server row with the same id is the real message. A new thread's first
+    /// message is never behind a turn: the running turn is the one it started.
     private func markQueuedMessageDelivered(_ submission: FeatureQueuedSubmission) {
         let messageID = submission.identity.messageID
-        if queuesBehindRunningTurn(submission.threadID) {
+        if submission.creation == nil, queuesBehindRunningTurn(submission.threadID) {
             mutateDetail(id: submission.threadID) { detail in
                 detail.messages.removeAll { $0.id == messageID && $0.state == .queued }
             }
