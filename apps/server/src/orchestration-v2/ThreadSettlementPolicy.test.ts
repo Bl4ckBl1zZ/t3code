@@ -62,6 +62,24 @@ const link = (state: "open" | "merged" | "closed", number = 1): ThreadPullReques
 });
 
 describe("V2 automatic settlement policy", () => {
+  it.each(["manual", "timer"])("restarts inactivity on a %s snooze wake", (wake) => {
+    const wokeAt = date("2026-09-11T11:59:59Z");
+    const overrides: Partial<SettlementThread> =
+      wake === "manual"
+        ? { lastSnoozeWakeAt: wokeAt }
+        : { snoozedAt: date("2026-09-08T12:00:00Z"), snoozedUntil: wokeAt };
+    const input = {
+      thread: thread(overrides),
+      pullRequest: null,
+      now,
+      autoSettleAfterDays: 1,
+      autoSettleOnMerge: false,
+    };
+    expect(resolveAutoSettlementAt(input)).toBeNull();
+    expect(resolveAutoSettlementAt({ ...input, now: date("2026-09-12T12:00:00Z") })).toEqual(
+      wokeAt,
+    );
+  });
   it("persists actual activity time and keeps never-used threads active", () => {
     expect(decide()).toEqual(before);
     expect(

@@ -38,7 +38,13 @@ export type SettlementThread = Pick<
   | "pendingBackgroundTasks"
   | "pullRequests"
   | "latestUserAuthoredMessageAt"
->;
+> & {
+  /**
+   * When the user last woke the thread from a snooze. Lives on the app thread
+   * rather than the shell; callers without it fall back to plain activity.
+   */
+  readonly lastSnoozeWakeAt?: DateTime.Utc | null | undefined;
+};
 
 const DAY_MS = 86_400_000;
 const QUEUED_GRACE_MS = 120_000;
@@ -175,9 +181,13 @@ export function resolveAutoSettlementAt(input: {
     if (Number.isFinite(terminalAt) && anchor !== null && terminalAt >= millis(anchor))
       return activity ?? thread.createdAt;
   }
-  return input.autoSettleAfterDays !== null &&
-    activity !== null &&
-    millis(activity) < DateTime.toEpochMillis(input.now) - input.autoSettleAfterDays * DAY_MS
-    ? activity
-    : null;
+  if (input.autoSettleAfterDays === null || activity === null) return null;
+  // A passed wake timer restarts inactivity. An earlier wake can only delay settlement.
+  const nowMs = DateTime.toEpochMillis(input.now);
+  const timerWake =
+    thread.snoozedUntil != null && millis(thread.snoozedUntil) <= nowMs
+      ? thread.snoozedUntil
+      : null;
+  const inactivity = latest([activity, thread.lastSnoozeWakeAt, timerWake]) ?? activity;
+  return millis(inactivity) < nowMs - input.autoSettleAfterDays * DAY_MS ? inactivity : null;
 }

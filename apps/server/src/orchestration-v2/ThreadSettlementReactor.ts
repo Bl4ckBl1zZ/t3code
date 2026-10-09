@@ -32,6 +32,7 @@ import {
   isAutoSettlementCandidate,
   resolveAutoSettlementAt,
   type SettlementPullRequest,
+  type SettlementThread,
 } from "./ThreadSettlementPolicy.ts";
 
 export class ThreadSettlementReactor extends Context.Service<
@@ -66,7 +67,7 @@ export const make = Effect.gen(function* () {
   // The shell carries the last message the user wrote, so wakes the agent
   // started on its own cannot hold a merged thread open.
   const resolveSettledAt = Effect.fn("ThreadSettlementReactor.resolveSettledAt")(function* (
-    thread: OrchestrationV2ThreadShell,
+    thread: SettlementThread,
     pullRequest: SettlementPullRequest | null,
   ) {
     const current = yield* settingsService.getSettings;
@@ -160,9 +161,10 @@ export const make = Effect.gen(function* () {
       (candidate) =>
         Effect.gen(function* () {
           const expectedSequence = yield* engine.getThreadEventSequence(candidate.id);
-          const thread = yield* engine.getThreadShell(candidate.id);
-          if (thread === null || !isAutoSettlementCandidate(thread, yield* DateTime.now))
-            return null;
+          const shell = yield* engine.getThreadShell(candidate.id);
+          if (shell === null || !isAutoSettlementCandidate(shell, yield* DateTime.now)) return null;
+          // The wake time lives on the app thread, not the shell.
+          const thread = { ...shell, lastSnoozeWakeAt: candidate.lastSnoozeWakeAt ?? null };
           if (yield* settle(thread, expectedSequence, null)) return null;
           if (visibleThreadPullRequests(thread.pullRequests ?? []).length > 0) return null;
           return { thread, expectedSequence };
