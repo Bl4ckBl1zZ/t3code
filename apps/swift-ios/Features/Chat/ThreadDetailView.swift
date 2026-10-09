@@ -230,9 +230,12 @@ public struct ThreadDetailView: View {
             if failed { PlatformHapticEngine.shared.play(.error) }
         }
         .onChange(of: composerFocused) { if composerFocused { readingHistoryThreadID = nil } }
-        .onChange(of: thread.id) { find.close() }
-        .onChange(of: isFindAvailable) { if !isFindAvailable { find.close() } }
-        .onChange(of: model.detailRenderUpdates[thread.id]?.revision) { find.contentChanged() }
+        .modifier(ThreadFindLifecycle(
+            find: find,
+            threadID: thread.id,
+            isAvailable: isFindAvailable,
+            contentRevision: model.detailRenderUpdates[thread.id]?.revision
+        ))
         .onChange(of: draft) { scheduleDraftSave() }
         .onChange(of: attachments) { scheduleDraftSave() }
         .onDisappear {
@@ -253,13 +256,13 @@ public struct ThreadDetailView: View {
         ) {
             ThreadMessageActionsStore.Handlers(
                 restore: { restoreRequest = $0 },
-                fork: { [model, thread] point in
+                fork: { [model, thread, forkTitle] point in
                     try await model.client.forkThread(
                         threadID: thread.id,
                         sourceThreadID: point.sourceThreadID,
                         runID: point.runID,
                         latestOnly: point.latestOnly,
-                        title: "\(model.details[thread.id]?.thread.title ?? thread.title) fork"
+                        title: forkTitle
                     )
                 },
                 isThreadReady: { [model] id in model.snapshot.threads.contains { $0.id == id } },
@@ -554,6 +557,12 @@ public struct ThreadDetailView: View {
 
     private func setPinned(_ pinned: Bool) {
         Task { _ = await model.setPinned(thread.id, pinned: pinned) }
+    }
+
+    /// The title a message fork gets: the thread's latest title plus "fork".
+    private var forkTitle: String {
+        let title = model.details[thread.id]?.thread.title ?? thread.title
+        return title + " fork"
     }
 
     // MARK: - Find
@@ -4339,5 +4348,22 @@ private struct ThreadMcpAppsModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// Closes or refreshes Find in Thread as the thread, the server's support for
+/// it, or the transcript changes. A modifier of its own keeps the thread
+/// view's modifier chain small enough for the type checker.
+private struct ThreadFindLifecycle: ViewModifier {
+    let find: ThreadFindModel
+    let threadID: String
+    let isAvailable: Bool
+    let contentRevision: UInt64?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: threadID) { find.close() }
+            .onChange(of: isAvailable) { if !isAvailable { find.close() } }
+            .onChange(of: contentRevision) { find.contentChanged() }
     }
 }
