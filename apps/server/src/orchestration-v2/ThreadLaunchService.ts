@@ -71,6 +71,8 @@ export interface ThreadLaunchInput {
   readonly reuseExistingThread?: boolean;
   readonly projectId: ProjectId;
   readonly title: string;
+  /** Replace the placeholder title with one generated from the initial message. */
+  readonly generateTitle?: boolean;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -243,7 +245,8 @@ export const make = Effect.gen(function* () {
 
   const scheduleTitleGeneration = Effect.fn("ThreadLaunchService.scheduleTitleGeneration")(
     function* (input: ThreadLaunchInput, threadId: ThreadId, workspaceRoot: string) {
-      if (input.title !== "New thread" || input.initialMessage === undefined) return;
+      if (input.initialMessage === undefined) return;
+      if (input.generateTitle !== true && input.title !== "New thread") return;
       yield* textGeneration
         .generateThreadTitle({
           cwd: workspaceRoot,

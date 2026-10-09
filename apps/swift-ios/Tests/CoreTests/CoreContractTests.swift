@@ -438,6 +438,7 @@ final class CoreContractTests: XCTestCase {
         XCTAssertEqual(input["threadId"]?.stringValue, "thread-first-send")
         XCTAssertEqual(input["projectId"]?.stringValue, "project-1")
         XCTAssertEqual(input["title"]?.stringValue, "Build the native app")
+        XCTAssertEqual(input["generateTitle"], .bool(true))
         XCTAssertEqual(input["modelSelection"]?["model"]?.stringValue, "gpt-5.4")
         XCTAssertEqual(input["runtimeMode"]?.stringValue, "full-access")
         XCTAssertEqual(input["interactionMode"]?.stringValue, "default")

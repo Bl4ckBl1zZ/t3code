@@ -3324,6 +3324,9 @@ public enum OrchestrationCommands {
             "threadId": .string(threadID),
             "projectId": .string(projectID),
             "title": .string(title),
+            // The title is derived from the prompt; ask the server to replace
+            // it with a generated one.
+            "generateTitle": .bool(true),
             "modelSelection": try .encode(model),
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),

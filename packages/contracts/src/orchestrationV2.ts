@@ -3545,6 +3545,11 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   reuseExistingThread: Schema.optional(Schema.Boolean),
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  /**
+   * The title is a placeholder derived from the first message; replace it with
+   * a generated one. Explicit titles (MCP, scheduled tasks) leave this off.
+   */
+  generateTitle: Schema.optional(Schema.Boolean),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
