@@ -2670,7 +2670,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         collectionView.isPrefetchingEnabled = true
         collectionView.accessibilityIdentifier = "thread-transcript"
         if #available(iOS 26, *) {
-            collectionView.topEdgeEffect.style = .soft
+            // Hard, not soft: the title and subtitle sit over scrolling
+            // message text, and only the stronger blur keeps them legible.
+            collectionView.topEdgeEffect.style = .hard
         }
         context.coordinator.connect(to: collectionView)
         // Assigns the background now and again on every palette change; the
@@ -3716,7 +3718,11 @@ struct TranscriptViewportGeometry: Equatable {
         }
 
         let contentChanged = abs(contentHeight - previous.contentHeight) > 0.5
+        // The top inset counts too: a new thread's first message can land
+        // before the glass bar's inset settles, and a short transcript pinned
+        // at the old inset would sit under the bar.
         let viewportChanged = abs(viewportHeight - previous.viewportHeight) > 0.5
+            || abs(topInset - previous.topInset) > 0.5
             || abs(bottomInset - previous.bottomInset) > 0.5
         guard contentChanged || viewportChanged else { return nil }
 

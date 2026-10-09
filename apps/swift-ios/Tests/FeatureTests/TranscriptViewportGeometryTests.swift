@@ -137,6 +137,32 @@ struct TranscriptViewportGeometryTests {
         )
     }
 
+    /// A new thread's first message lands before the glass bar's inset does;
+    /// the short transcript has to move down from under the bar once it does.
+    @Test
+    func lateTopInsetMovesShortTranscriptBelowTheBar() {
+        let beforeBar = TranscriptViewportGeometry(
+            contentHeight: 300,
+            viewportHeight: 700,
+            topInset: 0,
+            bottomInset: 120
+        )
+        let afterBar = TranscriptViewportGeometry(
+            contentHeight: 300,
+            viewportHeight: 700,
+            topInset: 110,
+            bottomInset: 120
+        )
+
+        #expect(
+            afterBar.restoredBottomOffset(
+                after: beforeBar,
+                maintainsBottomAnchor: true,
+                isInteracting: false
+            ) == -110
+        )
+    }
+
     @Test
     func activeTranscriptGestureOwnsItsScrollPosition() {
         let before = TranscriptViewportGeometry(
