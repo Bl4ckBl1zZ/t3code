@@ -8226,6 +8226,19 @@ extension NativeFeatureClient: FeatureMcpAccessProbing {
     }
 }
 
+extension NativeFeatureClient: FeatureSessionPermissionsReading {
+    func connectionSession(environmentID: String) async -> AuthSessionState? {
+        guard let client = try? await environmentClient(id: environmentID) else { return nil }
+        // The cached read may predate a route change, and routes hold separate
+        // sessions. Reading again also refreshes the permission gates.
+        authSessions[environmentID] = nil
+        guard let session = try? await authSession(for: client), session.authenticated else {
+            return nil
+        }
+        return session
+    }
+}
+
 extension NativeFeatureClient: FeatureGitHubSettingsManaging {
     func supportsGitHubSettings(environmentID: String) async -> Bool {
         if let known = gitHubSettingsSupport[environmentID] { return known }
