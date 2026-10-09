@@ -2999,7 +2999,7 @@ function ChatViewContent(props: ChatViewProps) {
       isRevertingCheckpoint,
     }) || runlessWorkStartedAt !== null;
   // Background work can outlive its turn. Once the turn settles the composer's
-  // Stop is gone, so Stop moves to the background pills and the keybinding.
+  // Stop is gone, so the Stop keybinding ends it instead.
   const canStopBackgroundWork = useMemo(
     () =>
       !isWorking &&
@@ -9322,7 +9322,6 @@ function ChatViewContent(props: ChatViewProps) {
                         backgroundProcesses={backgroundProcesses}
                         turnInProgress={isWorking || !latestRunSettled}
                         onOpenThread={onOpenRelatedThread}
-                        {...(canStopBackgroundWork ? { onStop: onInterrupt } : {})}
                       />
                     </div>
                   )}
