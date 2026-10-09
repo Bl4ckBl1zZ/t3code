@@ -372,6 +372,15 @@ struct ModelPickerList: View {
                     .listRowBackground(Color.clear)
             }
 
+            // Not rows: these models cannot be picked until the CLI updates.
+            ForEach(updateRequiredNotices) { notice in
+                Section {
+                    EmptyView()
+                } footer: {
+                    Label(notice.text, systemImage: "arrow.down.circle")
+                }
+            }
+
             if let setupContext, !isSearching {
                 Section {
                     NavigationLink {
@@ -385,6 +394,27 @@ struct ModelPickerList: View {
         }
         .listStyle(.insetGrouped)
         .t3SheetListBackground()
+    }
+
+    private struct UpdateRequiredNotice: Identifiable {
+        let id: String
+        let text: String
+    }
+
+    /// Web's `updateRequiredNotices`: models the manifest announces that a
+    /// provider's installed CLI is too old to run, so a new model does not just
+    /// seem missing. Every listed provider speaks, as every provider's models
+    /// are on screen here; a search narrows each notice to the gated models it
+    /// matches, and a locked thread only hears about its own provider.
+    private var updateRequiredNotices: [UpdateRequiredNotice] {
+        let lockedProviderID = modelChangesAreLocked ? threadSelection?.providerID : nil
+        return providers
+            .filter { $0.isAvailable && (lockedProviderID == nil || $0.id == lockedProviderID) }
+            .compactMap { provider in
+                provider.updateRequiredNotice(searchQuery: query).map {
+                    UpdateRequiredNotice(id: provider.id, text: $0)
+                }
+            }
     }
 
     private var availableModelCount: Int {

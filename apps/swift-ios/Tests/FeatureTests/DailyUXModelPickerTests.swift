@@ -567,4 +567,79 @@ struct DailyUXModelPickerTests {
             )
         )
     }
+
+    /// Ports packages/client-runtime/src/providerUpdateRequiredModels.test.ts.
+    @Test
+    func updateRequiredNoticeNamesTheCLIAndTheVersionThatUnlocksEveryModel() {
+        let models = [
+            ServerProviderUpdateRequiredModel(slug: "a", name: "Model A", minVersion: "2.1.9"),
+            ServerProviderUpdateRequiredModel(slug: "b", name: "Model B", minVersion: "2.1.10"),
+        ]
+        #expect(
+            ProviderUpdateRequiredNotice.format(driver: "claudeAgent", models: models)
+                == "Update Claude Code to v2.1.10 or newer to use Model A and Model B."
+        )
+        #expect(ProviderUpdateRequiredNotice.format(driver: "codex", models: nil) == nil)
+        #expect(
+            ProviderUpdateRequiredNotice.format(
+                driver: "muse",
+                models: models + [.init(slug: "c", name: "Model C", minVersion: "v3.0")]
+            ) == "Update Muse Code to v3.0 or newer to use Model A, Model B, and Model C."
+        )
+    }
+
+    @Test
+    func updateRequiredNoticeNamesOnlyTheGatedModelsASearchMatches() {
+        var provider = FeatureProvider(id: "claude", name: "Claude", driver: "claudeAgent")
+        provider.updateRequiredModels = [
+            .init(slug: "claude-a", name: "Model A", minVersion: "2.1.9"),
+            .init(slug: "claude-b", name: "Model B", minVersion: "2.1.10"),
+        ]
+        #expect(
+            provider.updateRequiredNotice(searchQuery: " model a ")
+                == "Update Claude Code to v2.1.9 or newer to use Model A."
+        )
+        #expect(provider.updateRequiredNotice(searchQuery: "gpt") == nil)
+    }
+
+    @Test
+    func updateRequiredNoticeNamesTheReleaseNotAPrereleaseOfIt() {
+        #expect(
+            ProviderUpdateRequiredNotice.format(
+                driver: "codex",
+                models: [
+                    .init(slug: "a", name: "A", minVersion: "2.1.0-beta"),
+                    .init(slug: "b", name: "B", minVersion: "2.1.0"),
+                ]
+            ) == "Update the Codex CLI to v2.1.0 or newer to use A and B."
+        )
+        #expect(ProviderUpdateRequiredNotice.compareSemver("2.1.0-beta.2", "2.1.0-beta.10") < 0)
+        #expect(ProviderUpdateRequiredNotice.compareSemver("v2.2", "2.1.9") > 0)
+    }
+
+    @Test
+    func updateRequiredModelsDecodeAsOptional() throws {
+        var object: [String: Any] = [
+            "instanceId": "claudeAgent", "driver": "claudeAgent", "enabled": true, "installed": true,
+            "status": "ready", "auth": ["status": "authenticated"],
+            "checkedAt": "2026-10-09T00:00:00.000Z", "models": [],
+        ]
+        let legacy = try JSONDecoder().decode(
+            ServerProviderSnapshot.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(legacy.updateRequiredModels == nil)
+
+        object["updateRequiredModels"] = [
+            ["slug": "claude-opus-6", "name": "Claude Opus 6", "badge": "new", "minVersion": "2.1.300"],
+        ]
+        let current = try JSONDecoder().decode(
+            ServerProviderSnapshot.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(
+            current.updateRequiredModels
+                == [.init(slug: "claude-opus-6", name: "Claude Opus 6", badge: "new", minVersion: "2.1.300")]
+        )
+    }
 }

@@ -195,6 +195,129 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public let models: [ServerProviderModelSnapshot]
     public let slashCommands: [ServerProviderSlashCommandSnapshot]?
     public let skills: [ServerProviderSkillSnapshot]?
+    /// Models the manifest announces that this installed CLI is too old to
+    /// run. Never selectable; the model picker names them so the user learns an
+    /// update unlocks them. Absent on older servers.
+    public var updateRequiredModels: [ServerProviderUpdateRequiredModel]? = nil
+}
+
+/// `ServerProviderUpdateRequiredModel` in packages/contracts/src/server.ts.
+public struct ServerProviderUpdateRequiredModel: Codable, Equatable, Hashable, Sendable {
+    public let slug: String
+    public let name: String
+    /// `"new"` when present.
+    public var badge: String? = nil
+    public let minVersion: String
+
+    public init(slug: String, name: String, badge: String? = nil, minVersion: String) {
+        self.slug = slug
+        self.name = name
+        self.badge = badge
+        self.minVersion = minVersion
+    }
+}
+
+/// Ports `formatProviderUpdateRequiredNotice` from
+/// packages/client-runtime/src/providerUpdateRequiredModels.ts.
+public enum ProviderUpdateRequiredNotice {
+    /// Name the thing the user updates; "Claude" alone reads like the app or model.
+    private static let runtimeNames: [String: String] = [
+        "claudeAgent": "Claude Code",
+        "codex": "the Codex CLI",
+    ]
+
+    /// `PROVIDER_DISPLAY_NAMES` in packages/contracts/src/model.ts.
+    private static let displayNames: [String: String] = [
+        "antigravity": "Antigravity",
+        "codex": "Codex",
+        "claudeAgent": "Claude",
+        "cursor": "Cursor",
+        "grok": "Grok",
+        "muse": "Muse Code",
+        "acpRegistry": "ACP Registry",
+        "hermesAcp": "Hermes in Code",
+        "openclaw": "OpenClaw",
+        "pi": "Pi",
+        "opencode": "OpenCode",
+        "hermes": "Hermes",
+    ]
+
+    /// "Update Claude Code to v2.1.300 or newer to use Claude Opus 6." With a
+    /// search query, only the gated models it matches are named, so searching
+    /// for one explains why it is missing. Nil when nothing gated matches.
+    public static func format(
+        driver: String,
+        models: [ServerProviderUpdateRequiredModel]?,
+        searchQuery: String = ""
+    ) -> String? {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let matches = (models ?? []).filter {
+            query.isEmpty
+                || $0.name.lowercased().contains(query)
+                || $0.slug.lowercased().contains(query)
+        }
+        guard let first = matches.first else { return nil }
+        // The highest bar unlocks every listed model.
+        let minVersion = matches.dropFirst().reduce(first.minVersion) { highest, model in
+            compareSemver(model.minVersion, highest) > 0 ? model.minVersion : highest
+        }
+        let providerName = runtimeNames[driver] ?? displayNames[driver] ?? driver
+        let version = minVersion.hasPrefix("v") ? minVersion : "v\(minVersion)"
+        return "Update \(providerName) to \(version) or newer to use \(list(matches.map(\.name)))."
+    }
+
+    private static func list(_ names: [String]) -> String {
+        if names.count <= 2 { return names.joined(separator: " and ") }
+        return "\(names.dropLast().joined(separator: ", ")), and \(names[names.count - 1])"
+    }
+
+    /// `compareSemverVersions` from packages/shared/src/semver.ts: a release
+    /// outranks its prereleases, and unparseable input compares as text.
+    static func compareSemver(_ left: String, _ right: String) -> Int {
+        guard let lhs = parseSemver(left), let rhs = parseSemver(right) else {
+            return left < right ? -1 : (left == right ? 0 : 1)
+        }
+        for (l, r) in zip(lhs.core, rhs.core) where l != r { return l < r ? -1 : 1 }
+        switch (lhs.prerelease.isEmpty, rhs.prerelease.isEmpty) {
+        case (true, true): return 0
+        case (true, false): return 1
+        case (false, true): return -1
+        case (false, false): break
+        }
+        for index in 0..<max(lhs.prerelease.count, rhs.prerelease.count) {
+            guard index < lhs.prerelease.count else { return -1 }
+            guard index < rhs.prerelease.count else { return 1 }
+            let l = lhs.prerelease[index], r = rhs.prerelease[index]
+            switch (Int(l), Int(r)) {
+            case let (ln?, rn?) where ln != rn: return ln < rn ? -1 : 1
+            case (.some, .none): return -1
+            case (.none, .some): return 1
+            case (.none, .none) where l != r: return l < r ? -1 : 1
+            default: continue
+            }
+        }
+        return 0
+    }
+
+    private static func parseSemver(_ value: String) -> (core: [Int], prerelease: [String])? {
+        var trimmed = Substring(value.trimmingCharacters(in: .whitespaces))
+        if trimmed.hasPrefix("v") { trimmed = trimmed.dropFirst() }
+        let parts = trimmed.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        var core = (parts.first ?? "").split(separator: ".").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }.filter { !$0.isEmpty }
+        // Shorthand "20" or "20.1" pads to three segments, as normalizeSemverVersion does.
+        while !core.isEmpty, core.count < 3 { core.append("0") }
+        guard core.count == 3, core.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }) else {
+            return nil
+        }
+        let numbers = core.compactMap { Int($0) }
+        guard numbers.count == 3 else { return nil }
+        let prerelease = parts.count > 1
+            ? parts[1].split(separator: ".").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            : []
+        return (numbers, prerelease)
+    }
 }
 
 /// When a composer asks the server to scan a workspace's skills and commands

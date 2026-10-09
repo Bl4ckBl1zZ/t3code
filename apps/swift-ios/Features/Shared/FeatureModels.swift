@@ -1303,6 +1303,18 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     public var workspaceSnapshots: [FeatureProviderWorkspace]? = nil
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?
+    /// Models this installed CLI is too old to run. Never selectable; the model
+    /// picker turns them into an "Update … to use …" notice.
+    public var updateRequiredModels: [ServerProviderUpdateRequiredModel]? = nil
+
+    /// The picker's notice for gated models matching `searchQuery`, or nil.
+    public func updateRequiredNotice(searchQuery: String = "") -> String? {
+        ProviderUpdateRequiredNotice.format(
+            driver: driver,
+            models: updateRequiredModels,
+            searchQuery: searchQuery
+        )
+    }
 
     /// Whether the server holds a scan of `cwd` that needs no retry; a key for
     /// re-running the scan when an instance installs or drops its entries.

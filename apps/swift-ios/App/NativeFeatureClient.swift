@@ -6813,6 +6813,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     }
                 )
                 mapped.incompatibleVersionWarning = provider.incompatibleVersionWarning
+                mapped.updateRequiredModels = provider.updateRequiredModels
                 mapped.accentColor = ProviderAccountBadge.normalizedAccent(provider.accentColor)
                 mapped.workspaceSnapshots = provider.workspaceSnapshots?.map { workspace in
                     FeatureProviderWorkspace(cwd: workspace.cwd,
