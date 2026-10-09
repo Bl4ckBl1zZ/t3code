@@ -118,7 +118,11 @@ function imageSizeStyle(
 
 function MediaUnavailable({ name }: { name: string }) {
   return (
-    <span className="my-1 inline-flex max-w-full items-baseline gap-1 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
+    // Find indexes no media text, so this fallback must not highlight either.
+    <span
+      data-thread-find-ignore
+      className="my-1 inline-flex max-w-full items-baseline gap-1 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
+    >
       Media unavailable:
       <span className="truncate font-mono">{name}</span>
     </span>

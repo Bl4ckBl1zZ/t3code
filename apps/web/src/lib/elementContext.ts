@@ -1,12 +1,15 @@
 import { type ThreadId } from "@t3tools/contracts";
 import type { PickedElementPayload, PickedElementStackFrame } from "@t3tools/contracts";
 
+export {
+  extractTrailingElementContexts,
+  type ExtractedElementContexts,
+  type ParsedElementContextEntry,
+} from "@t3tools/shared/userMessageDisplay";
+
 const ELEMENT_CONTEXT_HTML_PREVIEW_LIMIT = 4000;
 const ELEMENT_CONTEXT_STYLES_LIMIT = 4000;
 const ELEMENT_CONTEXT_LABEL_TAG_MAX = 24;
-
-const TRAILING_ELEMENT_CONTEXT_BLOCK_PATTERN =
-  /\n*<element_context>\n([\s\S]*?)\n<\/element_context>\s*$/;
 
 /**
  * Stable, persistable element selection captured from the in-app preview
@@ -39,17 +42,6 @@ export interface ElementContextDraft extends ElementContextSelection {
   threadId: ThreadId;
   /** ISO-8601 wall clock pick time. */
   pickedAt: string;
-}
-
-export interface ParsedElementContextEntry {
-  header: string;
-  body: string;
-}
-
-export interface ExtractedElementContexts {
-  promptText: string;
-  contextCount: number;
-  contexts: ParsedElementContextEntry[];
 }
 
 function truncateString(value: string, limit: number): string {
@@ -203,42 +195,4 @@ let nextElementContextSequence = 0;
 export function newElementContextId(): string {
   nextElementContextSequence += 1;
   return `${ELEMENT_CONTEXT_ID_PREFIX}${nextElementContextSequence.toString(36)}`;
-}
-
-/**
- * Mirror image of `appendElementContextsToPrompt` for transcript display:
- * detects (and strips) a trailing `<element_context>` block so we can render
- * the original prompt body and chips separately in user-message bubbles.
- */
-export function extractTrailingElementContexts(prompt: string): ExtractedElementContexts {
-  const match = TRAILING_ELEMENT_CONTEXT_BLOCK_PATTERN.exec(prompt);
-  if (!match) {
-    return { promptText: prompt, contextCount: 0, contexts: [] };
-  }
-  const promptText = prompt.slice(0, match.index).replace(/\n+$/, "");
-  const contexts = parseElementContextEntries(match[1] ?? "");
-  return { promptText, contextCount: contexts.length, contexts };
-}
-
-function parseElementContextEntries(block: string): ParsedElementContextEntry[] {
-  const entries: ParsedElementContextEntry[] = [];
-  let current: { header: string; bodyLines: string[] } | null = null;
-  const commit = () => {
-    if (!current) return;
-    entries.push({ header: current.header, body: current.bodyLines.join("\n").trimEnd() });
-    current = null;
-  };
-  for (const line of block.split("\n")) {
-    const headerMatch = /^- (.+):$/.exec(line);
-    if (headerMatch) {
-      commit();
-      current = { header: headerMatch[1]!, bodyLines: [] };
-      continue;
-    }
-    if (!current) continue;
-    if (line.startsWith("  ")) current.bodyLines.push(line.slice(2));
-    else if (line.length === 0) current.bodyLines.push("");
-  }
-  commit();
-  return entries;
 }

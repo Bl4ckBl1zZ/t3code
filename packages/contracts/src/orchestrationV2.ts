@@ -3498,6 +3498,8 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
+  searchThread: "orchestration.searchThread",
+  searchThreadStream: "orchestration.searchThreadStream",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
   launchThread: "orchestration.launchThread",
@@ -3854,6 +3856,69 @@ export const OrchestrationV2GetTurnItemResult = Schema.Struct({
 });
 export type OrchestrationV2GetTurnItemResult = typeof OrchestrationV2GetTurnItemResult.Type;
 
+/**
+ * Find in one thread: counts matches of `query` in the text the timeline shows
+ * for user and assistant messages and proposed plans, then selects one match.
+ * `index` selects an absolute ordinal; otherwise the selection is `start`
+ * (an entry identity and the occurrence within it) moved by `offset`.
+ */
+export const OrchestrationV2SearchThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  // Match the skill labels displayed by this client, including custom display names.
+  skills: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String.check(Schema.isMaxLength(200)),
+        displayName: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
+      }),
+    ).check(Schema.isMaxLength(1_000)),
+  ),
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  index: Schema.optionalKey(NonNegativeInt),
+  // Select relative to an entry identity so updates before it do not shift navigation.
+  offset: Schema.optionalKey(Schema.Int),
+  start: Schema.optionalKey(
+    Schema.Struct({ entryId: TrimmedNonEmptyString, occurrence: NonNegativeInt }),
+  ),
+});
+export type OrchestrationV2SearchThreadInput = typeof OrchestrationV2SearchThreadInput.Type;
+
+/** A message id for messages, the turn item id for plans; occurrence is within that entry. */
+export const OrchestrationV2ThreadFindMatch = Schema.Struct({
+  entryId: TrimmedNonEmptyString,
+  runId: Schema.NullOr(RunId),
+  occurrence: NonNegativeInt,
+});
+export const OrchestrationV2SearchThreadResult = Schema.Struct({
+  // Omitted by older servers. An early match has no final ordinal or total yet.
+  complete: Schema.optionalKey(Schema.Boolean),
+  snapshotSequence: NonNegativeInt,
+  totalMatches: NonNegativeInt,
+  activeIndex: NonNegativeInt,
+  match: Schema.NullOr(OrchestrationV2ThreadFindMatch),
+  // Counts and identities around the selection let clients step without another round trip.
+  navigation: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        entryId: TrimmedNonEmptyString,
+        runId: Schema.NullOr(RunId),
+        startIndex: NonNegativeInt,
+        count: NonNegativeInt,
+      }),
+    ).check(Schema.isMaxLength(17)),
+  ),
+});
+export type OrchestrationV2SearchThreadResult = typeof OrchestrationV2SearchThreadResult.Type;
+
+export class OrchestrationV2SearchThreadError extends Schema.TaggedErrorClass<OrchestrationV2SearchThreadError>()(
+  "OrchestrationV2SearchThreadError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not search this thread. Please retry.";
+  }
+}
+
 export const OrchestrationV2RpcError = Schema.Union([
   OrchestrationV2GenerateHandoffScriptError,
   OrchestrationV2DispatchCommandError,
@@ -3865,6 +3930,10 @@ export const OrchestrationV2RpcError = Schema.Union([
 export type OrchestrationV2RpcError = typeof OrchestrationV2RpcError.Type;
 
 export const OrchestrationV2RpcSchemas = {
+  searchThread: {
+    input: OrchestrationV2SearchThreadInput,
+    output: OrchestrationV2SearchThreadResult,
+  },
   dispatchCommand: {
     input: OrchestrationV2Command,
     output: OrchestrationV2DispatchCommandResult,

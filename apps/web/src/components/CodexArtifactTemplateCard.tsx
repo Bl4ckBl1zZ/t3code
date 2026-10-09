@@ -13,7 +13,7 @@ import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
   type CodexArtifactTemplateKind,
-} from "@t3tools/client-runtime/codex-artifact-templates";
+} from "@t3tools/shared/codexArtifactTemplates";
 import { Button } from "./ui/button";
 const ARTIFACT_TEMPLATE_ICON_BY_KIND = {
   document: FileTextIcon,
@@ -52,12 +52,13 @@ export function CodexArtifactTemplateCard(props: {
             <SparklesIcon aria-hidden className="size-2.5" />
           </span>
         </span>
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-foreground">
+        {/* Block elements keep the name and label separate thread-find segments. */}
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-foreground">
             {props.template.displayName}
-          </span>
-          <span className="block text-xs text-muted-foreground">{presentationLabel}</span>
-        </span>
+          </div>
+          <div className="text-xs text-muted-foreground">{presentationLabel}</div>
+        </div>
       </div>
       {props.onUse ? (
         <Button
@@ -65,6 +66,7 @@ export function CodexArtifactTemplateCard(props: {
           size="sm"
           variant="outline"
           className="shrink-0"
+          data-thread-find-ignore
           onClick={() => props.onUse?.(props.template)}
         >
           Use template

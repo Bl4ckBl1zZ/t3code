@@ -218,6 +218,8 @@ it.effect(
         ProjectionStoreV2.of({
           apply: () => Effect.void,
           getThreadAttachmentIds: () => Effect.die("unused attachment lookup"),
+          searchThread: () => Effect.die("unused"),
+          searchThreadStream: () => Stream.empty,
           getMessageCount: () => Effect.die("unused message count"),
           getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
           getTurnItem: () => Effect.die("unused turn item read"),

@@ -14,6 +14,8 @@ import type {
   OrchestrationV2ProviderTurn,
   OrchestrationV2Run,
   OrchestrationV2RunAttempt,
+  OrchestrationV2SearchThreadInput,
+  OrchestrationV2SearchThreadResult,
   OrchestrationV2Subagent,
   OrchestrationV2ThreadShellSnapshot,
   OrchestrationV2ShellThreadStatus,
@@ -72,10 +74,12 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type * as Statement from "effect/unstable/sql/Statement";
 
 import { threadMcpAppAttachmentIds } from "../attachmentStore.ts";
+import { findProjectedThreadItems, makeThreadFind } from "./ThreadFind.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedErrorClass<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -362,6 +366,14 @@ export interface ProjectionStoreV2Shape {
     },
     ProjectionStoreV2Error
   >;
+  /** Find in the thread's visible messages and plans; see `ThreadFind.ts`. */
+  readonly searchThread: (
+    input: OrchestrationV2SearchThreadInput,
+  ) => Effect.Effect<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
+  /** `searchThread`, with an early first-match frame (`complete: false`) before the final one. */
+  readonly searchThreadStream: (
+    input: OrchestrationV2SearchThreadInput,
+  ) => Stream.Stream<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
 }
 
 export interface ThreadSnapshotOptions {
@@ -4425,7 +4437,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
+    const threadFind = yield* makeThreadFind({
+      readIndex: (threadId) =>
+        readThreadKeys(threadId).pipe(
+          Effect.flatMap((keys) => readVisibleRowKeys(keys, new Set())),
+          Effect.map((rows) => rows.filter((row) => row.marker === null)),
+        ),
+      withReadTransaction,
+    });
+
     return {
+      searchThread: threadFind.searchThread,
+      searchThreadStream: threadFind.searchThreadStream,
       getMessageCount,
       getNextTurnItemOrdinal,
       getTurnItem,
@@ -4639,6 +4662,20 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             ),
           ),
         ),
+      searchThread: (input) =>
+        Effect.gen(function* () {
+          const projection = yield* service.getThreadProjection(input.threadId);
+          if (projection.thread.deletedAt !== null) {
+            return yield* new ProjectionStoreThreadNotFoundError({ threadId: input.threadId });
+          }
+          return findProjectedThreadItems(
+            projection.visibleTurnItems,
+            input,
+            yield* Ref.get(sequence),
+            projection.thread.worktreePath ?? undefined,
+          );
+        }),
+      searchThreadStream: (input) => Stream.fromEffect(service.searchThread(input)),
       getPlan: (threadId, planId) =>
         Effect.gen(function* () {
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);

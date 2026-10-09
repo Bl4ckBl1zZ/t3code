@@ -1,6 +1,6 @@
-import { formatInlineTerminalContextLabel as formatInlineTerminalContextSelectionLabel } from "~/lib/terminalContext";
+import { formatInlineTerminalContextLabel } from "@t3tools/shared/userMessageDisplay";
 
-const TERMINAL_CONTEXT_HEADER_PATTERN = /^(.*?)\s+line(?:s)?\s+(\d+)(?:-(\d+))?$/i;
+export { formatInlineTerminalContextLabel };
 
 export function buildInlineTerminalContextText(
   contexts: ReadonlyArray<{
@@ -15,26 +15,6 @@ export function buildInlineTerminalContextText(
     }
   }
   return labels.join(" ");
-}
-
-export function formatInlineTerminalContextLabel(header: string): string {
-  const trimmedHeader = header.trim();
-  const match = TERMINAL_CONTEXT_HEADER_PATTERN.exec(trimmedHeader);
-  if (!match) {
-    return `@${trimmedHeader.toLowerCase().replace(/\s+/g, "-")}`;
-  }
-
-  const lineStart = Number.parseInt(match[2] ?? "", 10);
-  const lineEnd = Number.parseInt(match[3] ?? match[2] ?? "", 10);
-  if (!Number.isFinite(lineStart) || !Number.isFinite(lineEnd)) {
-    return `@${trimmedHeader.toLowerCase().replace(/\s+/g, "-")}`;
-  }
-
-  return formatInlineTerminalContextSelectionLabel({
-    terminalLabel: match[1]?.trim() || "terminal",
-    lineStart,
-    lineEnd,
-  });
 }
 
 export function textContainsInlineTerminalContextLabels(

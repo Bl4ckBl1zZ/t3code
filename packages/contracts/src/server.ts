@@ -654,6 +654,10 @@ export const ServerConfig = Schema.Struct({
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Whether thread subscriptions honor `snapshotMaxVisibleItems` windowing. */
   threadSnapshotWindow: Schema.optionalKey(Schema.Boolean),
+  /** Whether `orchestration.searchThread` (find in one thread) is served. */
+  threadFind: Schema.optionalKey(Schema.Boolean),
+  /** Whether `orchestration.searchThreadStream` emits an early match before the count. */
+  threadFindProgressive: Schema.optionalKey(Schema.Boolean),
   /**
    * Folder behind this environment's Scratch project, for threads that need
    * no repository. Present only on servers that answer projects.ensureScratch

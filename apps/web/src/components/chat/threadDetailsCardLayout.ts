@@ -15,7 +15,8 @@ export function resolveThreadDetailsCardDensity(
   return "essential";
 }
 
-const GAP = 12;
+/** Inset of the card from the canvas edges; the find bar shares it to line up. */
+export const THREAD_DETAILS_CARD_GAP = 12;
 // Keep in sync with --thread-details-panel-width, which sizes the popover.
 const WIDTH = 280;
 const MIN_HEIGHT = 160;
@@ -28,13 +29,18 @@ const MIN_HEIGHT = 160;
 export function resolveThreadDetailsCardLayout({
   container,
   lane,
+  topInset = 0,
 }: {
   container: ChatCanvasSize;
   lane: { readonly padding: number; readonly minChatWidth: number };
+  /** Space taken above the card, such as the open find bar. */
+  topInset?: number;
 }) {
-  const x = container.width - WIDTH - GAP;
+  const gap = THREAD_DETAILS_CARD_GAP;
+  const x = container.width - WIDTH - gap;
   if (x - DETAILS_CARD_CLEARANCE - lane.padding < lane.minChatWidth) return null;
-  const height = container.height - GAP * 2;
+  const y = gap + topInset;
+  const height = container.height - y - gap;
   if (height < MIN_HEIGHT) return null;
-  return { x, y: GAP, width: WIDTH, height } as const;
+  return { x, y, width: WIDTH, height } as const;
 }

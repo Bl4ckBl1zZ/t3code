@@ -281,7 +281,12 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
   if (!isReady) {
     const building = phase === "building";
     return (
-      <div className="chat-markdown-codeblock my-2 overflow-hidden" data-language="t3-html">
+      <div
+        className="chat-markdown-codeblock my-2 overflow-hidden"
+        data-language="t3-html"
+        // Find skips embed sources, which render in a frame; its chrome is not indexed either.
+        data-thread-find-ignore
+      >
         <div className="chat-markdown-codeblock-header select-none">
           <span className="chat-markdown-codeblock-title">
             <span className="truncate">Interactive embed</span>
@@ -315,7 +320,12 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
   }
 
   return (
-    <div className="chat-markdown-codeblock my-2 overflow-hidden" data-language="t3-html">
+    <div
+      className="chat-markdown-codeblock my-2 overflow-hidden"
+      data-language="t3-html"
+      // Find skips embed sources, which render in a frame; its chrome is not indexed either.
+      data-thread-find-ignore
+    >
       <div className="chat-markdown-codeblock-header select-none">
         <span className="chat-markdown-codeblock-title">
           <span className="truncate">Interactive embed</span>

@@ -23,9 +23,12 @@ import {
  * over to make room for it.
  */
 export function ChatCanvas({
+  detailsCardTopInset = 0,
   children,
   ...props
-}: Omit<ComponentProps<"div">, "className" | "style" | "ref">) {
+}: Omit<ComponentProps<"div">, "className" | "style" | "ref"> & {
+  detailsCardTopInset?: number;
+}) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
   const [measurements, setMeasurements] = useState({
@@ -87,8 +90,9 @@ export function ChatCanvas({
       lane: { padding: measurements.padding, minChatWidth: MIN_DOCKED_CHAT_WIDTH },
       layout: resolveChatCanvasLayout({ ...measurements, container, detailsCard }),
       reportDetailsCard,
+      detailsCardTopInset,
     };
-  }, [measurements, detailsCard, reportDetailsCard]);
+  }, [measurements, detailsCard, reportDetailsCard, detailsCardTopInset]);
   return (
     <ChatCanvasContext value={context}>
       <div

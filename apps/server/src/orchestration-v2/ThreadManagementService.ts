@@ -302,6 +302,8 @@ export interface ThreadManagementServiceShape {
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
   readonly getThreadSnapshot: OrchestratorV2["Service"]["getThreadSnapshot"];
+  readonly searchThread: OrchestratorV2["Service"]["searchThread"];
+  readonly searchThreadStream: OrchestratorV2["Service"]["searchThreadStream"];
   readonly getProjectThreadRecords: <K extends ProjectionRecordField>(
     input: { readonly projectId: ProjectId; readonly threadId: ThreadId },
     fields: ReadonlyArray<K>,
@@ -883,6 +885,16 @@ const make = Effect.gen(function* () {
       ),
     getThreadProjection,
     getThreadSnapshot,
+    searchThread: (input) =>
+      ensureProjectionTranscript(input.threadId).pipe(
+        Effect.andThen(orchestrator.searchThread(input)),
+      ),
+    searchThreadStream: (input) =>
+      Stream.unwrap(
+        ensureProjectionTranscript(input.threadId).pipe(
+          Effect.as(orchestrator.searchThreadStream(input)),
+        ),
+      ),
     getProjectThreadRecords,
     getProjectThread,
     getShellSnapshot: orchestrator.getShellSnapshot,

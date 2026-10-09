@@ -48,6 +48,7 @@ import {
   type GitManagerServiceError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationSearchThreadsError,
+  OrchestrationV2SearchThreadError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2DispatchCommandError,
@@ -834,6 +835,8 @@ const makeWsRpcLayer = (
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
           threadSnapshotWindow: true,
+          threadFind: true,
+          threadFindProgressive: true,
           ...(scratchWorkspaceRoot === undefined ? {} : { scratchWorkspaceRoot }),
           newProjectsRoot,
         };
@@ -1480,6 +1483,14 @@ const makeWsRpcLayer = (
                 }),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.searchThread]: (input) =>
+          threadManagement
+            .searchThread(input)
+            .pipe(Effect.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
+        [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: (input) =>
+          threadManagement
+            .searchThreadStream(input)
+            .pipe(Stream.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
         [ORCHESTRATION_V2_WS_METHODS.searchThreads]: (input) =>
           threadSearchQuery.searchThreads(input).pipe(
             Effect.mapError(

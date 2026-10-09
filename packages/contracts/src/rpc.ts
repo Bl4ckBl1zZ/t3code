@@ -152,6 +152,9 @@ import {
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2GetWorkflowScriptError,
   OrchestrationV2RpcSchemas,
+  OrchestrationV2SearchThreadError,
+  OrchestrationV2SearchThreadInput,
+  OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
 import {
@@ -1300,6 +1303,22 @@ export const WsOrchestrationV2SearchThreadsRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationV2SearchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.searchThread, {
+  payload: OrchestrationV2SearchThreadInput,
+  success: OrchestrationV2SearchThreadResult,
+  error: Schema.Union([OrchestrationV2SearchThreadError, EnvironmentAuthorizationError]),
+});
+
+export const WsOrchestrationV2SearchThreadStreamRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.searchThreadStream,
+  {
+    payload: OrchestrationV2SearchThreadInput,
+    success: OrchestrationV2SearchThreadResult,
+    error: Schema.Union([OrchestrationV2SearchThreadError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
 export const WsOrchestrationV2GetArchivedShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
   {
@@ -1735,6 +1754,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetTurnDiffRpc,
   WsOrchestrationV2GetFullThreadDiffRpc,
   WsOrchestrationV2SearchThreadsRpc,
+  WsOrchestrationV2SearchThreadRpc,
+  WsOrchestrationV2SearchThreadStreamRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,

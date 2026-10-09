@@ -33,7 +33,7 @@ import { ComposerTasksBadge, ComposerTasksDrawer } from "./chat/ComposerTasksBad
 import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
-} from "@t3tools/client-runtime/codex-artifact-templates";
+} from "@t3tools/shared/codexArtifactTemplates";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import {
   DEFAULT_MODEL,
@@ -217,7 +217,8 @@ import {
   type ThreadPanelPresentation,
 } from "../rightPanelLayout";
 import { PopoverCreateHandle } from "./ui/popover";
-import { ChatCanvas } from "./chat/ChatCanvas";
+import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
+import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import {
   pullRequestSurface,
   selectActiveRightPanel,
@@ -6709,12 +6710,27 @@ function ChatViewContent(props: ChatViewProps) {
     terminalUiOpenByThreadRef.current[activeThreadKey] = current;
   }, [activeThreadKey, focusComposer, terminalUiState.terminalOpen]);
 
+  const timelineSkills = activeProviderStatus
+    ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
+    : EMPTY_PROVIDER_SKILLS;
+  const threadFindControlsRef = useRef<ThreadFindControls | null>(null);
+  const [isThreadFindActive, setIsThreadFindActive] = useState(false);
+  const openThreadFind = useCallback(() => threadFindControlsRef.current?.open(), []);
+  const closeThreadFind = useCallback(() => threadFindControlsRef.current?.close(), []);
+  // The details popover hangs off the header over the find bar; opening find dismisses it.
+  useEffect(() => {
+    if (!isThreadFindActive || threadPanelPresentation !== "popover" || !activeThreadRef) return;
+    useRightPanelStore.getState().setThreadPanelOpen(activeThreadRef, "popover", false);
+  }, [activeThreadRef, isThreadFindActive, threadPanelPresentation]);
+
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
       if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
         event.stopPropagation();
         return;
       }
+      // Let contextual controls claim Escape before the bubbling find handler.
+      if (isThreadFindActive && event.key === "Escape") return;
       // While a close confirmation is open, terminal focus has moved to the
       // dialog, so a deliberate second close shortcut would otherwise fall
       // through to the native window/tab close accelerator.
@@ -6783,6 +6799,20 @@ function ChatViewContent(props: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         toggleTerminalVisibility();
+        return;
+      }
+
+      // Drafts and servers without thread search leave Mod+F to the browser, and a
+      // focused diff keeps it for its own find.
+      if (
+        command === "chat.find" &&
+        isServerThread &&
+        serverConfig?.threadFind === true &&
+        !(event.target instanceof Element && event.target.closest(".diff-render-surface"))
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        openThreadFind();
         return;
       }
 
@@ -6923,8 +6953,32 @@ function ChatViewContent(props: ChatViewProps) {
       event.stopPropagation();
       void runProjectScript(script);
     };
+    const dismissFind = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        !isThreadFindActive ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        isCommandPaletteOpen()
+      )
+        return;
+      if (
+        getTerminalFocusOwner() !== null ||
+        isPreviewFocused() ||
+        composerRef.current?.isModelPickerOpen()
+      )
+        return;
+      event.preventDefault();
+      closeThreadFind();
+      focusComposer();
+    };
     window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
+    window.addEventListener("keydown", dismissFind);
+    return () => {
+      window.removeEventListener("keydown", handler, true);
+      window.removeEventListener("keydown", dismissFind);
+    };
   }, [
     activeProject,
     activeRightPanelSurface,
@@ -6944,6 +6998,11 @@ function ChatViewContent(props: ChatViewProps) {
     keybindings,
     handleUnsettleActiveThread,
     isServerThread,
+    serverConfig?.threadFind,
+    openThreadFind,
+    closeThreadFind,
+    isThreadFindActive,
+    focusComposer,
     onToggleDiff,
     onInterrupt,
     previewPanelOpen,
@@ -9122,13 +9181,24 @@ function ChatViewContent(props: ChatViewProps) {
         {/* Main content area with optional plan sidebar */}
         <div className="relative flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}
-          <ChatCanvas
+          <ThreadFindCanvas
+            findOptions={{
+              skills: timelineSkills,
+              progressive: serverConfig?.threadFindProgressive === true,
+              thread: activeThreadRef,
+              enabled: isServerThread && serverConfig?.threadFind === true,
+              content: serverProjection ?? undefined,
+            }}
+            controlsRef={threadFindControlsRef}
+            onOpenChange={setIsThreadFindActive}
+            detailsCardTopInset={isThreadFindActive ? THREAD_FIND_BAR_RESERVED_HEIGHT : 0}
             data-chat-workspace-drop-target="true"
             onDragEnter={workspaceFileDropHandlers.onDragEnter}
             onDragOver={workspaceFileDropHandlers.onDragOver}
             onDragLeave={workspaceFileDropHandlers.onDragLeave}
             onDrop={workspaceFileDropHandlers.onDrop}
           >
+            <ThreadFind onClose={focusComposer} />
             {isWorkspaceFileDragActive ? (
               <div
                 className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/[0.035]"
@@ -9206,11 +9276,7 @@ function ChatViewContent(props: ChatViewProps) {
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
                 alwaysExpandActivity={alwaysExpandActivity}
-                skills={
-                  activeProviderStatus
-                    ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
-                    : EMPTY_PROVIDER_SKILLS
-                }
+                skills={timelineSkills}
                 providerStatuses={providerStatuses}
                 runs={serverProjection?.runs ?? EMPTY_PROJECTION_RUNS}
                 anchorMessageId={timelineAnchorMessageId}
@@ -9226,12 +9292,12 @@ function ChatViewContent(props: ChatViewProps) {
               />
 
               {/* floating pills above the composer: scroll-to-end, working-tree status, working subagents, background commands */}
-              {(showStatusPills || showScrollToBottom) && (
+              {(showStatusPills || (showScrollToBottom && !isThreadFindActive)) && (
                 <div
                   className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex flex-col items-center gap-1.5 py-1.5"
                   style={{ bottom: composerOverlayHeight + 4 }}
                 >
-                  {showScrollToBottom && (
+                  {showScrollToBottom && !isThreadFindActive && (
                     <Button
                       aria-label="Scroll to end"
                       onClick={() => scrollToEnd(true)}
@@ -9613,7 +9679,7 @@ function ChatViewContent(props: ChatViewProps) {
             ) : null}
 
             <ThreadDetailsPanel {...threadDetailsPanelProps} />
-          </ChatCanvas>
+          </ThreadFindCanvas>
           {/* end chat column */}
         </div>
         {/* end horizontal flex container */}

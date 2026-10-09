@@ -1,14 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { type Options as ReactMarkdownOptions } from "react-markdown";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { describe, expect, it } from "vite-plus/test";
 
-import { remarkCodexDirectives } from "@t3tools/client-runtime/codex-markdown-directives";
-import { remarkGithubAlerts } from "./markdown-github-alerts";
+import { remarkCodexDirectives } from "@t3tools/shared/codexMarkdownDirectives";
+import { remarkGithubAlerts } from "@t3tools/shared/markdownGithubAlerts";
+import { remarkNormalizeListItemIndentation } from "@t3tools/shared/markdownListIndentation";
+import { CHAT_MARKDOWN_REHYPE_PLUGINS } from "@t3tools/shared/markdownPipeline";
 import { createIncrementalMarkdownPlugin } from "./markdown-incremental";
-import { remarkNormalizeListItemIndentation } from "./markdown-list-indentation";
 
 type RemarkPlugin = Extract<
   NonNullable<ReactMarkdownOptions["remarkPlugins"]>[number],
@@ -40,7 +39,7 @@ function render(source: string, incremental?: RemarkPlugin, parsedSources?: stri
         remarkCodexDirectives,
         ...(incremental ? [incremental] : []),
       ]}
-      rehypePlugins={[rehypeRaw, rehypeSanitize]}
+      rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
     >
       {source}
     </ReactMarkdown>,

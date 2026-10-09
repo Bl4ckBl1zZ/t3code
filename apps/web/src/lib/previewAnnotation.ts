@@ -2,22 +2,11 @@ import type { PreviewAnnotationPayload } from "@t3tools/contracts";
 import { buildElementContextBlock, normalizeElementContextSelection } from "./elementContext";
 import { dataUrlToFile } from "./imageCompression";
 
-const TRAILING_PREVIEW_ANNOTATION_BLOCK_PATTERN =
-  /\n*<preview_annotation>\n((?:(?!<preview_annotation>)[\s\S])*)\n<\/preview_annotation>\s*$/;
-
-export interface ParsedPreviewAnnotation {
-  id: string;
-  title: string;
-  comment: string;
-  targetSummary: string;
-  styleChanges: string[];
-  hasScreenshot: boolean;
-}
-
-export interface ExtractedPreviewAnnotation {
-  promptText: string;
-  annotation: ParsedPreviewAnnotation | null;
-}
+export {
+  extractTrailingPreviewAnnotation,
+  type ExtractedPreviewAnnotation,
+  type ParsedPreviewAnnotation,
+} from "@t3tools/shared/userMessageDisplay";
 
 export function buildPreviewAnnotationPrompt(annotation: PreviewAnnotationPayload): string {
   const lines = ["Preview annotation:"];
@@ -66,38 +55,6 @@ export function appendPreviewAnnotationPrompt(
   const annotationText = buildPreviewAnnotationPrompt(annotation);
   const trimmed = prompt.trim();
   return trimmed ? `${trimmed}\n\n${annotationText}` : annotationText;
-}
-
-export function extractTrailingPreviewAnnotation(prompt: string): ExtractedPreviewAnnotation {
-  const match = TRAILING_PREVIEW_ANNOTATION_BLOCK_PATTERN.exec(prompt);
-  if (!match) return { promptText: prompt, annotation: null };
-  const body = match[1] ?? "";
-  const lines = body.split("\n");
-  const pageLine = lines.find((line) => line.startsWith("Page: "));
-  const idLine = lines.find((line) => line.startsWith("Id: "));
-  const commentLine = lines.find((line) => line.startsWith("Comment: "));
-  const targetsLine = lines.find((line) => line.startsWith("Targets: "));
-  const styleHeadingIndex = lines.indexOf("Requested visual changes:");
-  const linesAfterStyleHeading = lines.slice(styleHeadingIndex + 1);
-  const elementContextIndex = linesAfterStyleHeading.indexOf("<element_context>");
-  const styleChanges =
-    styleHeadingIndex < 0
-      ? []
-      : linesAfterStyleHeading
-          .slice(0, elementContextIndex < 0 ? undefined : elementContextIndex)
-          .filter((line) => line.startsWith("- "))
-          .map((line) => line.slice(2));
-  return {
-    promptText: prompt.slice(0, match.index).replace(/\n+$/, ""),
-    annotation: {
-      id: idLine?.slice("Id: ".length).trim() || `${match.index}`,
-      title: pageLine?.slice("Page: ".length).trim() || "Preview annotation",
-      comment: commentLine?.slice("Comment: ".length).trim() || "",
-      targetSummary: targetsLine?.slice("Targets: ".length).trim() || "",
-      styleChanges,
-      hasScreenshot: body.includes("The attached screenshot is the annotated preview crop."),
-    },
-  };
 }
 
 export type PreviewAnnotationCapture =

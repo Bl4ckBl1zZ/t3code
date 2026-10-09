@@ -1,18 +1,24 @@
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
-import { parseThreadLinkHref, THREAD_LINK_PROTOCOL } from "@t3tools/shared/threadLinks";
+import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { CodexArtifactTemplateCard } from "./CodexArtifactTemplateCard";
-import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
 import { findOpenHtmlEmbedFence, htmlEmbedPhase } from "@t3tools/client-runtime/html-embed-fence";
 import {
-  CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
   artifactTemplateFromHastProperties,
-  remarkCodexDirectives,
   renderCodexFileCitationsAsMarkdown,
-} from "@t3tools/client-runtime/codex-markdown-directives";
+} from "@t3tools/shared/codexMarkdownDirectives";
+import {
+  CHAT_MARKDOWN_REHYPE_PLUGINS,
+  CHAT_MARKDOWN_REMARK_PLUGINS,
+  CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS,
+} from "@t3tools/shared/markdownPipeline";
+import { buildFileLinkParentSuffixByPath, fileLinkLabel } from "@t3tools/shared/fileLinks";
+import { extractInlineCodeSpans } from "@t3tools/shared/markdownLinks";
+import { MarkdownFindContext, useFindRevealRef } from "./chat/markdownFindContext";
 import { useAtomValue } from "@effect/atom-react";
 import {
   ChevronRightIcon,
@@ -35,7 +41,6 @@ import type {
   ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
-import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -58,20 +63,11 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
-import type {
-  Components,
-  ExtraProps as ReactMarkdownExtraProps,
-  Options as ReactMarkdownOptions,
-} from "react-markdown";
+import type { Components, ExtraProps as ReactMarkdownExtraProps } from "react-markdown";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import { defaultUrlTransform } from "react-markdown";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import remarkBreaks from "remark-breaks";
-import remarkGfm from "remark-gfm";
-import { remarkGithubAlerts } from "../markdown-github-alerts";
 import {
   HTML_EMBED_FENCE_LANGUAGE,
   HtmlEmbedBlock,
@@ -120,7 +116,6 @@ import {
   serializeTableElementToCsv,
   serializeTableElementToMarkdown,
 } from "../markdown-clipboard";
-import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
 import {
   extractMarkdownLinkHrefs,
   isMarkdownFileLinkLabel,
@@ -276,133 +271,6 @@ export function orderedListGutterStyle(
   return { "--list-gutter": `${markerWidth + 2}ch` };
 }
 
-const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
-  ...defaultSchema,
-  tagNames: [...(defaultSchema.tagNames ?? []), "video"],
-  attributes: {
-    ...defaultSchema.attributes,
-    "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
-    code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
-    video: ["src", "controls", "muted", "loop", "playsInline", "poster", "preload"],
-    blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
-    div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
-  },
-  protocols: {
-    ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file", "t3-citation", THREAD_LINK_PROTOCOL],
-    src: [...(defaultSchema.protocols?.src ?? []), "file"],
-  },
-} satisfies Parameters<typeof rehypeSanitize>[0];
-
-const CHAT_MARKDOWN_REMARK_PLUGINS = [
-  remarkGfm,
-  remarkKeepWindowsPathDestinations,
-  remarkGithubAlerts,
-  remarkNormalizeListItemIndentation,
-  remarkCodexDirectives,
-  remarkPreserveCodeMeta,
-  remarkNormalizeLinksAndTagInlineCode,
-] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
-
-const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
-  remarkGfm,
-  remarkKeepWindowsPathDestinations,
-  remarkGithubAlerts,
-  remarkNormalizeListItemIndentation,
-  remarkCodexDirectives,
-  remarkBreaks,
-  remarkPreserveCodeMeta,
-  remarkNormalizeLinksAndTagInlineCode,
-] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
-
-interface HastNodeLike {
-  readonly type: string;
-  readonly tagName?: string;
-  properties?: Record<string, unknown>;
-  children?: HastNodeLike[];
-}
-
-const WINDOWS_DRIVE_SRC_PATTERN = /^[A-Za-z]:[\\/]/;
-
-function rehypeEscapeWindowsDriveMediaSrc() {
-  const escapeNode = (node: HastNodeLike): void => {
-    if (
-      node.type === "element" &&
-      (node.tagName === "img" || node.tagName === "video") &&
-      node.properties &&
-      typeof node.properties.src === "string" &&
-      WINDOWS_DRIVE_SRC_PATTERN.test(node.properties.src)
-    ) {
-      node.properties.src = `/${node.properties.src}`;
-    }
-    for (const child of node.children ?? []) {
-      escapeNode(child);
-    }
-  };
-  return escapeNode;
-}
-
-interface RawHastNode {
-  type: string;
-  value?: string;
-  children?: RawHastNode[];
-}
-
-/** Keep unmatched inline `<A>` placeholders from opening an HTML link over later blocks. */
-function rehypePreserveBareAnchorPlaceholders() {
-  return (tree: RawHastNode) => {
-    const anchors: Array<RawHastNode | null> = [];
-    let rawTextTag: string | undefined;
-    const visit = (node: RawHastNode) => {
-      if (node.type === "raw" && typeof node.value === "string") {
-        // Raw blocks can contain several tags. Consume whole tags, quoted attributes,
-        // and comments so text resembling a closing anchor cannot pair a placeholder.
-        const tags = /<!--[\s\S]*?(?:-->|$)|<\/?[A-Za-z](?:[^"'<>]|"[^"]*"|'[^']*')*>/g;
-        let offset = 0;
-        while (rawTextTag !== "plaintext") {
-          // Raw text ends at its closing tag even inside comment-looking text.
-          const matcher = rawTextTag ? new RegExp(`</${rawTextTag}\\s*>`, "gi") : tags;
-          matcher.lastIndex = offset;
-          const match = matcher.exec(node.value);
-          if (!match) break;
-          const [tag] = match;
-          offset = matcher.lastIndex;
-          if (rawTextTag) {
-            rawTextTag = undefined;
-            continue;
-          }
-          if (tag.startsWith("<!--")) continue;
-          const closing = /^<\/([a-z]+)\s*>$/i.exec(tag)?.[1]?.toLowerCase();
-          const opening = /^<([a-z]+)(?:\s|\/?>)/i.exec(tag)?.[1]?.toLowerCase();
-          if (
-            opening &&
-            /^(?:script|style|textarea|title|xmp|iframe|noembed|noframes|plaintext)$/.test(opening)
-          ) {
-            rawTextTag = opening;
-          } else if (opening === "a") {
-            anchors.push(node.value === tag && /^<a\s*\/?>$/i.test(tag) ? node : null);
-          } else if (closing === "a") {
-            anchors.pop();
-          }
-        }
-      }
-      node.children?.forEach(visit);
-    };
-
-    visit(tree);
-    for (const anchor of anchors) {
-      if (anchor) anchor.type = "text";
-    }
-  };
-}
-
-const CHAT_MARKDOWN_REHYPE_PLUGINS = [
-  rehypePreserveBareAnchorPlaceholders,
-  rehypeRaw,
-  rehypeEscapeWindowsDriveMediaSrc,
-  [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
-] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
-
 /** GitHub's own five alert kinds, in its colors: the glyph names the urgency, the title says it. */
 const GITHUB_ALERT_PRESENTATIONS: Record<
   string,
@@ -475,99 +343,6 @@ function extractPreCodeMeta(node: unknown): string | undefined {
   const codeNode = children?.find((child) => child?.type === "element" && child.tagName === "code");
   const meta = codeNode?.properties?.dataCodeMeta ?? codeNode?.data?.meta;
   return typeof meta === "string" && meta.trim().length > 0 ? meta.trim() : undefined;
-}
-
-type MarkdownAstNode = {
-  type?: string;
-  meta?: unknown;
-  url?: string;
-  data?: {
-    hProperties?: Record<string, unknown>;
-  };
-  children?: MarkdownAstNode[];
-};
-
-function remarkPreserveCodeMeta() {
-  return (tree: MarkdownAstNode) => {
-    const visit = (node: MarkdownAstNode) => {
-      if (node.type === "code" && typeof node.meta === "string" && node.meta.trim().length > 0) {
-        node.data = {
-          ...node.data,
-          hProperties: {
-            ...node.data?.hProperties,
-            dataCodeMeta: node.meta.trim(),
-          },
-        };
-      }
-      node.children?.forEach(visit);
-    };
-
-    visit(tree);
-  };
-}
-
-interface DestinationCompileContext {
-  readonly stack: ReadonlyArray<{ readonly type: string; url?: string }>;
-  resume(): string;
-  sliceSerialize(token: unknown): string;
-}
-
-function keepWindowsPathDestination(this: DestinationCompileContext, token: unknown) {
-  const decoded = this.resume();
-  const authored = this.sliceSerialize(token);
-  const node = this.stack.at(-1);
-  // Character references still need decoding, so those destinations keep the parsed URL.
-  if (node)
-    node.url = isWindowsAbsolutePath(authored) && !authored.includes("&") ? authored : decoded;
-}
-
-/**
- * CommonMark reads the `\.` in `C:\me\.t3\shot.png` as an escape, even in a link
- * destination. Every backslash in a Windows path is a separator, so link, image, and
- * definition destinations that are Windows paths keep the text as written.
- */
-function remarkKeepWindowsPathDestinations(this: {
-  data(): { fromMarkdownExtensions?: Array<unknown> };
-}) {
-  const data = this.data();
-  (data.fromMarkdownExtensions ??= []).push({
-    exit: {
-      resourceDestinationString: keepWindowsPathDestination,
-      definitionDestinationString: keepWindowsPathDestination,
-    },
-  });
-}
-
-/**
- * Preserve Windows drive links as allowed `file:` URLs before sanitization.
- * The same traversal tags inline code while it can still be distinguished
- * from fenced code. Code inside links stays untagged to avoid nested anchors.
- */
-function remarkNormalizeLinksAndTagInlineCode() {
-  return (tree: MarkdownAstNode) => {
-    const visit = (node: MarkdownAstNode, insideLink: boolean) => {
-      if (
-        (node.type === "link" || node.type === "definition") &&
-        typeof node.url === "string" &&
-        WINDOWS_DRIVE_PATH_REGEX.test(node.url)
-      ) {
-        node.url = `file:///${node.url.replaceAll("\\", "/")}`;
-      }
-      if (node.type === "inlineCode" && !insideLink) {
-        node.data = {
-          ...node.data,
-          hProperties: {
-            ...node.data?.hProperties,
-            dataInlineCode: "",
-          },
-        };
-      }
-      const childInsideLink = insideLink || node.type === "link" || node.type === "linkReference";
-      node.children?.forEach((child) => visit(child, childInsideLink));
-    };
-
-    visit(tree, false);
-  };
 }
 
 function nodeToPlainText(node: ReactNode): string {
@@ -762,6 +537,11 @@ function MarkdownDetails({
   open = false,
 }: Pick<React.ComponentProps<"details">, "children" | "open">) {
   const [isOpen, setIsOpen] = useState(open);
+  const searching = use(MarkdownFindContext);
+  const revealForFind = useCallback(() => setIsOpen(true), []);
+  // Base UI only listens for `beforematch` on a panel mounted at its first
+  // render; a closed panel mounts later, when find starts, so listen here.
+  const findRevealRef = useFindRevealRef(revealForFind);
   const childNodes = Children.toArray(children);
   const summaryIndex = childNodes.findIndex(
     (child) => isValidElement(child) && child.type === "summary",
@@ -776,7 +556,7 @@ function MarkdownDetails({
   return (
     <div className="my-2 border-y border-border/60">
       <Collapsible
-        defaultOpen={open}
+        open={isOpen}
         onOpenChange={setIsOpen}
         data-markdown-details=""
         data-markdown-details-open={isOpen ? "true" : "false"}
@@ -791,7 +571,7 @@ function MarkdownDetails({
           />
           <span>{summary}</span>
         </CollapsibleTrigger>
-        <CollapsiblePanel>
+        <CollapsiblePanel ref={findRevealRef} hiddenUntilFound={searching}>
           <div
             className="pb-3 ps-6 text-foreground/[calc(80%+var(--appearance-contrast-boost)/5)]"
             data-markdown-details-content=""
@@ -978,7 +758,11 @@ function MarkdownCodeBlock({
       data-language={language}
       data-wrap={wrapped ? "true" : "false"}
     >
-      <div className="chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none">
+      <div
+        className="chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none"
+        // Find does not count the header, so it must not highlight it either.
+        data-thread-find-ignore
+      >
         <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-2xs">
           <MarkdownCodeBlockTitleContent
             fenceTitle={fenceTitle}
@@ -1052,6 +836,9 @@ function MarkdownMermaidCodeBlock({
 }) {
   const [showCode, setShowCode] = useState(false);
   const [expandedImageUrl, setExpandedImageUrl] = useState<string | null>(null);
+  const searching = use(MarkdownFindContext);
+  const revealSource = useCallback(() => setShowCode(true), []);
+  const sourceRevealRef = useFindRevealRef(revealSource);
   const showDiagram = !showCode && !isStreaming && code.trim().length > 0;
   const toggleLabel = showCode ? "Show diagram" : "Show code";
   return (
@@ -1097,6 +884,12 @@ function MarkdownMermaidCodeBlock({
             >
               <MermaidDiagram source={code} theme={theme} onExpand={setExpandedImageUrl} />
             </Suspense>
+            {/* Find counts the source; a selected match here switches to it. */}
+            {searching ? (
+              <pre ref={sourceRevealRef} hidden>
+                {code}
+              </pre>
+            ) : null}
           </RenderErrorBoundary>
         ) : (
           children
@@ -1226,79 +1019,6 @@ interface MarkdownFileLinkProps {
 
 const MARKDOWN_FILE_CHIP_CLASS_NAME = "chat-markdown-file-link";
 const MARKDOWN_FILE_LINK_CLASS_NAME = `${MARKDOWN_FILE_CHIP_CLASS_NAME} cursor-pointer transition-colors hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70`;
-
-function pathParentSegments(path: string): string[] {
-  const normalized = path.replaceAll("\\", "/");
-  const segments = normalized.split("/").filter((segment) => segment.length > 0);
-  return segments.slice(0, -1);
-}
-
-function buildFileLinkParentSuffixByPath(filePaths: ReadonlyArray<string>): Map<string, string> {
-  const groups = new Map<string, Set<string>>();
-  for (const filePath of filePaths) {
-    const normalizedPath = filePath.replaceAll("\\", "/");
-    const pathSegments = normalizedPath.split("/").filter((segment) => segment.length > 0);
-    const basename = pathSegments[pathSegments.length - 1];
-    if (!basename) continue;
-    const group = groups.get(basename) ?? new Set<string>();
-    group.add(normalizedPath);
-    groups.set(basename, group);
-  }
-
-  const suffixByPath = new Map<string, string>();
-  for (const group of groups.values()) {
-    const uniquePaths = [...group];
-    if (uniquePaths.length < 2) continue;
-
-    const parentSegmentsByPath = new Map(
-      uniquePaths.map((filePath) => [filePath, pathParentSegments(filePath)]),
-    );
-    const minUniqueDepthByPath = new Map<string, number>();
-
-    for (const filePath of uniquePaths) {
-      const segments = parentSegmentsByPath.get(filePath) ?? [];
-      let resolvedDepth = segments.length;
-      for (let depth = 1; depth <= segments.length; depth += 1) {
-        const candidate = segments.slice(-depth).join("/");
-        const collision = uniquePaths.some((otherPath) => {
-          if (otherPath === filePath) return false;
-          const otherSegments = parentSegmentsByPath.get(otherPath) ?? [];
-          return otherSegments.slice(-depth).join("/") === candidate;
-        });
-        if (!collision) {
-          resolvedDepth = depth;
-          break;
-        }
-      }
-      minUniqueDepthByPath.set(filePath, resolvedDepth);
-    }
-
-    for (const filePath of uniquePaths) {
-      const segments = parentSegmentsByPath.get(filePath) ?? [];
-      if (segments.length === 0) continue;
-      const minUniqueDepth = minUniqueDepthByPath.get(filePath) ?? 1;
-      const suffixDepth = Math.min(segments.length, Math.max(minUniqueDepth, 2));
-      suffixByPath.set(filePath, segments.slice(-suffixDepth).join("/"));
-    }
-  }
-
-  return suffixByPath;
-}
-
-const FENCED_CODE_SEGMENT_PATTERN = /(```[\s\S]*?(?:```|$))/;
-const INLINE_CODE_SPAN_PATTERN = /`([^`\n]+)`/g;
-
-function extractInlineCodeSpans(text: string): string[] {
-  const spans: string[] = [];
-  const segments = text.split(FENCED_CODE_SEGMENT_PATTERN);
-  for (let index = 0; index < segments.length; index += 2) {
-    for (const match of (segments[index] ?? "").matchAll(INLINE_CODE_SPAN_PATTERN)) {
-      const span = match[1]?.trim();
-      if (span) spans.push(span);
-    }
-  }
-  return spans;
-}
 
 function normalizeMarkdownLinkHrefKey(href: string): string {
   const normalizedHref = normalizeMarkdownLinkDestination(href);
@@ -2116,19 +1836,6 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
     copyMarkdown: string,
     className?: string,
   ) => {
-    const parentSuffix = fileLinkParentSuffixByPath.get(
-      fileLinkMeta.filePath.replaceAll("\\", "/"),
-    );
-    const labelParts = [fileLinkMeta.basename];
-    if (typeof parentSuffix === "string" && parentSuffix.length > 0) {
-      labelParts.push(parentSuffix);
-    }
-    if (fileLinkMeta.line) {
-      labelParts.push(
-        `L${fileLinkMeta.line}${fileLinkMeta.column ? `:C${fileLinkMeta.column}` : ""}`,
-      );
-    }
-
     return (
       <MarkdownFileLink
         href={fileLinkMeta.targetPath}
@@ -2139,7 +1846,14 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
           fileLinkMeta.workspaceRelativePath ?? (hostFilePreviews ? fileLinkMeta.filePath : null)
         }
         line={fileLinkMeta.line}
-        label={labelParts.join(" · ")}
+        label={fileLinkLabel(
+          {
+            path: fileLinkMeta.filePath,
+            ...(fileLinkMeta.line !== undefined ? { line: fileLinkMeta.line } : {}),
+            ...(fileLinkMeta.column !== undefined ? { column: fileLinkMeta.column } : {}),
+          },
+          fileLinkParentSuffixByPath,
+        )}
         copyMarkdown={copyMarkdown}
         theme={resolvedTheme}
         threadRef={threadRef}
@@ -2210,7 +1924,10 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
       // text under a colored title — which is how the host renders it.
       return (
         <div role="note" className={cn("my-1 border-l-2 pl-3", alert.borderClassName)}>
-          <p className={cn("flex items-center gap-1.5 font-medium", alert.titleClassName)}>
+          <p
+            data-thread-find-ignore="true"
+            className={cn("flex items-center gap-1.5 font-medium", alert.titleClassName)}
+          >
             <alert.Icon aria-hidden className="size-3.5 shrink-0" />
             {alert.label}
           </p>
