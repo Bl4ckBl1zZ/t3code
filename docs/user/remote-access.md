@@ -101,6 +101,10 @@ Depending on your Tailscale setup, this may include:
 - a MagicDNS name
 - an HTTPS MagicDNS endpoint when Tailscale Serve is configured for this backend
 
+Tailscale shares its `100.64.0.0/10` address range with other VPNs such as Cloudflare WARP, so a
+saved route on an address in that range shows as VPN rather than Tailscale unless the machine
+confirms the address is on its Tailscale interface.
+
 The Tailscale HTTPS endpoint uses the clean MagicDNS URL, such as
 `https://machine.tailnet.ts.net/`, and is off until you opt in. Turn on **Enable Tailscale HTTPS**
 on the **Tailscale HTTPS** row in **Settings** → **Connections**. The desktop app restarts the
