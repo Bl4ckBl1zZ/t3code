@@ -316,6 +316,9 @@ describe("UsageService", () => {
             NodePath.join(environmentHome, "projects"),
           );
         }).pipe(
+          // Scoped inside the state directory, so pending cache writes land
+          // before it is removed.
+          Effect.scoped,
           Effect.provide(
             serviceLayers({
               prefix: "usage-service-home-refresh-test",
@@ -421,6 +424,7 @@ describe("UsageService", () => {
         const restored = yield* service.readSummary(WINDOW);
         assert.deepStrictEqual(restored.buckets, original.buckets);
       }).pipe(
+        Effect.scoped,
         Effect.provide(
           serviceLayers({ prefix: "usage-service-price-overrides-test", home, settings }),
         ),
@@ -475,9 +479,11 @@ describe("UsageService", () => {
             appended.buckets.reduce((sum, bucket) => sum + bucket.totals.uncachedInputTokens, 0),
             20,
           );
+          yield* service.awaitPersisted;
           const restarted = yield* UsageService.make;
           const restored = yield* restarted.readSummary(WINDOW);
           assert.deepStrictEqual(restored.buckets, appended.buckets);
+          yield* restarted.awaitPersisted;
           yield* Effect.promise(() => NodeFSP.rm(transcript));
           const afterCleanup = yield* UsageService.make;
           assert.deepStrictEqual(
@@ -485,6 +491,7 @@ describe("UsageService", () => {
             appended.buckets,
           );
         }).pipe(
+          Effect.scoped,
           Effect.provide(
             serviceLayers({
               prefix: "usage-service-large-record-test",
@@ -539,7 +546,9 @@ describe("UsageService", () => {
           const { stateDir } = yield* ServerConfig.ServerConfig;
           const cachePath = NodePath.join(stateDir, "usage-scan-cache-v5.json");
           const legacyPath = NodePath.join(stateDir, "usage-scan-cache.json");
-          yield* (yield* UsageService.make).readSummary(WINDOW);
+          const first = yield* UsageService.make;
+          yield* first.readSummary(WINDOW);
+          yield* first.awaitPersisted;
 
           // Rewrite the cache as a v4 server left it: every Codex record at
           // speed 0 (standard), and no tier in the reducer state.
@@ -572,6 +581,7 @@ describe("UsageService", () => {
             legacy,
           );
         }).pipe(
+          Effect.scoped,
           Effect.provide(
             serviceLayers({
               prefix: "usage-service-v4-upgrade-test",
@@ -611,6 +621,7 @@ describe("UsageService", () => {
         assert.deepStrictEqual(deleted.buckets, first.buckets);
         assert.deepStrictEqual(deleted.sources, first.sources);
 
+        yield* service.awaitPersisted;
         const restarted = yield* UsageService.make;
         const restored = yield* restarted.readSummary(WINDOW);
         assert.deepStrictEqual(restored.buckets, first.buckets);
@@ -621,6 +632,7 @@ describe("UsageService", () => {
         const moved = yield* restarted.readSummary(WINDOW);
         assert.deepStrictEqual(moved.buckets, first.buckets);
         assert.strictEqual(moved.sources[0]?.distinctSessions, 1);
+        yield* restarted.awaitPersisted;
 
         const replacementProjects = NodePath.join(home, "replacement-projects");
         yield* Effect.promise(() => NodeFSP.mkdir(replacementProjects));
@@ -668,6 +680,7 @@ describe("UsageService", () => {
         assert.deepStrictEqual(outsideWindow.buckets, []);
         assert.strictEqual(outsideWindow.sources[0]?.distinctSessions, 0);
       }).pipe(
+        Effect.scoped,
         Effect.provide(
           serviceLayers({
             prefix: "usage-service-cleanup-test",
@@ -713,9 +726,11 @@ describe("UsageService", () => {
         const saved = yield* service.readSummary(WINDOW);
         assert.deepStrictEqual(saved.buckets, live.buckets);
         assert.deepStrictEqual(saved.sources, live.sources);
+        yield* service.awaitPersisted;
         const restored = yield* (yield* UsageService.make).readSummary(WINDOW);
         assert.deepStrictEqual(restored.buckets, live.buckets);
       }).pipe(
+        Effect.scoped,
         Effect.provide(serviceLayers({ prefix: "usage-service-copy-order-test", home, settings })),
       );
     }).pipe(Effect.scoped),
@@ -747,6 +762,7 @@ describe("UsageService", () => {
           );
           assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 12);
         }).pipe(
+          Effect.scoped,
           Effect.provide(
             serviceLayers({ prefix: "usage-service-stale-read-test", home, settings }),
           ),
@@ -793,6 +809,7 @@ describe("UsageService", () => {
           );
           assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 12);
         }).pipe(
+          Effect.scoped,
           Effect.provide(serviceLayers({ prefix: "usage-service-late-read-test", home, settings })),
         );
       }).pipe(Effect.scoped),

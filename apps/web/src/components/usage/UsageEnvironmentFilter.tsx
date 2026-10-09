@@ -1,12 +1,8 @@
 import { USAGE_CONTRACT_VERSION, type EnvironmentId } from "@t3tools/contracts";
+import { usageEnvironmentProgress } from "@t3tools/client-runtime/state/usage-progress";
 import { formatUsageContractMismatch } from "@t3tools/shared/usageFormat";
 import { isCompatibleUsageContractVersion, type MergedUsage } from "@t3tools/shared/usageMerge";
-import {
-  CircleAlertIcon,
-  ChevronDownIcon,
-  CircleDashedIcon,
-  SlidersHorizontalIcon,
-} from "lucide-react";
+import { CircleAlertIcon, ChevronDownIcon, SlidersHorizontalIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { EnvironmentUsageStatus } from "../../state/usage";
 import { InlineButton } from "../ui/button";
@@ -62,13 +58,14 @@ function UsageCoverageNotice({
   );
 }
 
-/** Environment selection and scan progress share a permanent header control. */
+/** Environment selection, with each environment's scan status in the menu. */
 export function UsageEnvironmentFilter({
   environments,
   selectedEnvironments,
   selectedEnvironmentIds,
   onSelectionChange,
   showUsageStatus,
+  refreshing,
   isPartial,
   duplicateSources,
   contractMismatches,
@@ -79,6 +76,8 @@ export function UsageEnvironmentFilter({
   readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
   readonly onSelectionChange: (ids: ReadonlySet<EnvironmentId> | null) => void;
   readonly showUsageStatus: boolean;
+  /** A manual refresh is running, so every answered environment is refreshing. */
+  readonly refreshing: boolean;
   readonly isPartial: boolean;
   readonly duplicateSources: readonly string[];
   readonly contractMismatches: MergedUsage["contractMismatches"];
@@ -90,10 +89,6 @@ export function UsageEnvironmentFilter({
     : selectedEnvironments.length === 1
       ? selectedEnvironments[0]!.label
       : `${selectedEnvironments.length} environments`;
-  const pendingCount = selectedEnvironments.filter(
-    (environment) =>
-      environment.error === null && (environment.isPending || environment.summary === null),
-  ).length;
   const hasIssue =
     selectedEnvironments.some((environment) => environment.error !== null) ||
     contractMismatches.length > 0;
@@ -106,15 +101,7 @@ export function UsageEnvironmentFilter({
       >
         <span className="min-w-0 truncate">{label}</span>
         <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
-          {showUsageStatus && pendingCount > 0 ? (
-            <>
-              <CircleDashedIcon className="size-3.5" aria-hidden />
-              <span className="sr-only">
-                {pendingCount} {pendingCount === 1 ? "environment" : "environments"} still scanning
-                {isPartial ? "; totals are partial" : ""}
-              </span>
-            </>
-          ) : showUsageStatus && hasIssue ? (
+          {showUsageStatus && hasIssue ? (
             <CircleAlertIcon
               className="size-3.5 text-amber-600 dark:text-amber-400"
               aria-label="Some environments could not report usage"
@@ -140,6 +127,7 @@ export function UsageEnvironmentFilter({
           const checked =
             selectedEnvironmentIds === null ||
             selectedEnvironmentIds.has(environment.environmentId);
+          const progress = usageEnvironmentProgress(environment, refreshing);
           const status =
             environment.error !== null
               ? "Unavailable"
@@ -149,11 +137,13 @@ export function UsageEnvironmentFilter({
                     USAGE_CONTRACT_VERSION,
                   )
                 ? "Update required"
-                : environment.summary === null
-                  ? "Scanning…"
-                  : environment.isPending
-                    ? "Refreshing…"
-                    : "Ready";
+                : !environment.isConnected
+                  ? "Connecting…"
+                  : progress === "loading"
+                    ? "Scanning…"
+                    : progress === "stale"
+                      ? "Refreshing…"
+                      : "Ready";
           return (
             <MenuCheckboxItem
               key={environment.environmentId}

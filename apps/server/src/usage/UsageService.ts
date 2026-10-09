@@ -34,6 +34,8 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -83,8 +85,11 @@ const RATES_REFRESH_FLOOR_MS = 60 * 1000;
 const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** Longest window the UI offers, plus slack. Older entries are pruned. */
-const CACHE_RETENTION_DAYS = 90;
+/**
+ * The longest window the UI offers, 90 days, plus its `MTIME_SLACK_MS`, rounded
+ * up. Older entries are pruned.
+ */
+const CACHE_RETENTION_DAYS = 92;
 
 /** Transcripts parsed at once. More gains little once the disk stays busy. */
 const TRANSCRIPT_READ_CONCURRENCY = 4;
@@ -412,11 +417,11 @@ export const make = Effect.gen(function* () {
   // keeps an older snapshot from landing after a newer one.
   const persistLock = yield* Semaphore.make(1);
 
-  const persistScanCache = Effect.fn("UsageService.persistScanCache")(function* () {
+  const persistScanCache = Effect.gen(function* () {
     if (!cacheDirty) return;
     // Cleared before encoding, so a scan that changes the cache while this
     // write is in flight marks it dirty again. A failed write restores the
-    // flag, so the next scan retries instead of leaving disk stale.
+    // flag, so the next persist retries instead of leaving disk stale.
     cacheDirty = false;
     yield* Effect.sync(() =>
       writeScanCache(fileCache, { sources: Object.fromEntries(sourceCache) }),
@@ -428,9 +433,24 @@ export const make = Effect.gen(function* () {
           cacheDirty = true;
         }),
       ),
-      persistLock.withPermit,
     );
-  });
+  }).pipe(persistLock.withPermit, Effect.withSpan("UsageService.persistScanCache"));
+
+  const pendingPersists = new Set<Fiber.Fiber<void>>();
+  /** Writes the dirty cache in the background, after the summary that dirtied it answers. */
+  const schedulePersist = Effect.forkDetach(persistScanCache).pipe(
+    Effect.map((fiber) => {
+      pendingPersists.add(fiber);
+      fiber.addObserver(() => pendingPersists.delete(fiber));
+    }),
+  );
+  /** Waits for every write scheduled so far, as a restart would need. */
+  const awaitPersisted = Effect.suspend(() => Fiber.awaitAll([...pendingPersists])).pipe(
+    Effect.asVoid,
+  );
+  // A write still running when the service shuts down finishes first, so the
+  // next start does not lose the last scan.
+  yield* Effect.addFinalizer(() => awaitPersisted);
 
   /**
    * Parses one transcript, reusing the cached result when it is unchanged.
@@ -721,7 +741,6 @@ export const make = Effect.gen(function* () {
 
     const pruned = pruneScanCache(fileCache, retentionCutoffMs);
     if (pruned > 0) cacheDirty = true;
-    yield* persistScanCache();
 
     const aggregated = aggregator.finish();
     const readAt = yield* DateTime.now;
@@ -773,9 +792,12 @@ export const make = Effect.gen(function* () {
         inflightScans.set(key, created);
         // Detached so one departing client cannot tear the scan out from under
         // the fibers awaiting it; a finished scan warms the cache either way.
+        // The cache write is registered before the waiters resume, so they
+        // can await it, but its fiber starts after they have the summary.
         yield* scanSummary(input, settings).pipe(
           Effect.onExit((exit) =>
             Effect.sync(() => inflightScans.delete(key)).pipe(
+              Effect.andThen(Exit.isSuccess(exit) ? schedulePersist : Effect.void),
               Effect.andThen(Deferred.done(created, exit)),
             ),
           ),
@@ -789,7 +811,9 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates } as const;
+  // `awaitPersisted` is outside the service interface: tests use it to restart
+  // against what a previous instance wrote.
+  return { readSummary, refreshRates, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);
