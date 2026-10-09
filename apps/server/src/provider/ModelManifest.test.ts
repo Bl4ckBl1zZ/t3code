@@ -12,6 +12,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   applyManifestDefault,
+  applyModelManifest,
   BUNDLED_MODEL_MANIFEST,
   encodeManifestCache,
   classifyModels,
@@ -153,6 +154,85 @@ describe("classifyModels", () => {
       );
     },
   );
+});
+
+describe("applyModelManifest", () => {
+  const manifest: ModelManifestData = {
+    version: 1,
+    currentModels: {},
+    providers: {
+      codex: {
+        profiles: {},
+        models: [
+          {
+            slug: "gpt-next",
+            name: "GPT Next",
+            status: "current",
+            badge: "new",
+            adapter: { codex: { minVersion: "1.2.0" } },
+          },
+          { slug: "gpt-unversioned", name: "GPT Unversioned", status: "current" },
+          {
+            slug: "gpt-retired",
+            name: "GPT Retired",
+            status: "legacy",
+            adapter: { codex: { minVersion: "1.2.0" } },
+          },
+        ],
+      },
+    },
+  };
+  const draft = (version: string | null, models: ReadonlyArray<ServerProviderModel> = []) => ({
+    enabled: true,
+    installed: true,
+    version,
+    status: "ready" as const,
+    auth: { status: "authenticated" as const },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models,
+    slashCommands: [],
+    skills: [],
+  });
+
+  it("names current Codex models that need a newer CLI and are missing from discovery", () => {
+    assert.deepStrictEqual(
+      applyModelManifest(draft("1.1.9"), manifest, CODEX).updateRequiredModels,
+      [{ slug: "gpt-next", name: "GPT Next", badge: "new", minVersion: "1.2.0" }],
+    );
+    for (const result of [
+      // The CLI is new enough.
+      applyModelManifest(draft("1.2.0"), manifest, CODEX),
+      // The CLI already lists the model, even under a qualified slug.
+      applyModelManifest(draft("1.1.9", [model({ slug: "openai.gpt-next" })]), manifest, CODEX),
+      // An unknown version cannot be compared.
+      applyModelManifest(draft(null), manifest, CODEX),
+      // A qualified manifest slug still matches the discovered family.
+      applyModelManifest(
+        draft("1.1.9", [model({ slug: "gpt-next" })]),
+        {
+          ...manifest,
+          providers: {
+            codex: {
+              profiles: {},
+              models: [{ ...manifest.providers!.codex!.models[0]!, slug: "openai.gpt-next" }],
+            },
+          },
+        },
+        CODEX,
+      ),
+    ]) {
+      assert.isUndefined(result.updateRequiredModels);
+    }
+  });
+
+  it("keeps the update-required models a non-Codex driver computed while probing", () => {
+    const updateRequiredModels = [{ slug: "claude-next", name: "Next", minVersion: "3.0.0" }];
+    assert.deepStrictEqual(
+      applyModelManifest({ ...draft("2.0.0"), updateRequiredModels }, manifest, CLAUDE)
+        .updateRequiredModels,
+      updateRequiredModels,
+    );
+  });
 });
 
 const REMOTE_MANIFEST: ModelManifestData = {
