@@ -1,6 +1,7 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { UsageLimits } from "./UsageLimits";
 import { UsageEnvironmentFilter } from "./UsageEnvironmentFilter";
+import { UsageProviderFilter } from "./UsageProviderFilter";
 import {
   readUsagePagePreferences,
   saveUsagePagePreferences,
@@ -9,7 +10,7 @@ import {
 import type { EnvironmentId, UsageProviderKind } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { InfoIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import {
   isModelCostUnknown,
@@ -79,6 +80,16 @@ export function UsagePage() {
     setPreferences(next);
     saveUsagePagePreferences(next);
   };
+  const hiddenProviders = useMemo(
+    () => new Set(preferences.hiddenProviders),
+    [preferences.hiddenProviders],
+  );
+  const providerFilter = (
+    <UsageProviderFilter
+      hiddenProviders={hiddenProviders}
+      onChange={(next) => updatePreferences({ ...preferences, hiddenProviders: next })}
+    />
+  );
   useEscapeToGoBack();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const onUsageKeyDown = useEffectEvent((event: KeyboardEvent) => {
@@ -114,6 +125,8 @@ export function UsagePage() {
     <UsageLimits
       selected={selectedEnvironmentIds}
       setSelected={setSelectedEnvironmentIds}
+      hiddenProviders={hiddenProviders}
+      providerFilter={providerFilter}
       onShowUsage={() => updatePreferences({ ...preferences, metric: "cost" })}
     />
   ) : (
@@ -122,6 +135,8 @@ export function UsagePage() {
       updatePreferences={updatePreferences}
       selectedEnvironmentIds={selectedEnvironmentIds}
       setSelectedEnvironmentIds={setSelectedEnvironmentIds}
+      hiddenProviders={hiddenProviders}
+      providerFilter={providerFilter}
       onShowLimits={() => updatePreferences({ ...preferences, metric: "limits" })}
     />
   );
@@ -133,12 +148,16 @@ function UsageHistoryPage({
   updatePreferences,
   selectedEnvironmentIds,
   setSelectedEnvironmentIds,
+  hiddenProviders,
+  providerFilter,
 }: {
   onShowLimits: () => void;
   preferences: UsagePagePreferences;
   updatePreferences: (next: UsagePagePreferences) => void;
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
   setSelectedEnvironmentIds: (next: ReadonlySet<EnvironmentId> | null) => void;
+  hiddenProviders: ReadonlySet<UsageProviderKind>;
+  providerFilter: ReactNode;
 }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshingRef = useRef(false);
@@ -179,6 +198,7 @@ function UsageHistoryPage({
   const { merged, environments, selectedEnvironments, isPending, isPartial, refresh } = useUsage(
     window,
     selectedEnvironmentIds,
+    hiddenProviders,
   );
 
   const days = useMemo(
@@ -376,7 +396,7 @@ function UsageHistoryPage({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <WorkspacePageHeader electron={isElectron}>{topbarContent}</WorkspacePageHeader>
 
-        <div className="flex min-w-0 items-center border-b border-border px-4 py-2 text-sm">
+        <div className="flex min-w-0 items-center gap-1 border-b border-border px-4 py-2 text-sm">
           <UsageEnvironmentFilter
             environments={environments}
             selectedEnvironments={selectedEnvironments}
@@ -388,6 +408,10 @@ function UsageHistoryPage({
             contractMismatches={merged.contractMismatches}
             onOpenModelPrices={() => setPriceDialog({})}
           />
+          <span aria-hidden className="text-muted-foreground/60">
+            ·
+          </span>
+          {providerFilter}
         </div>
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">

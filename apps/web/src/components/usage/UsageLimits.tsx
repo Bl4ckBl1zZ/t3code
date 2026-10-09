@@ -4,13 +4,15 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationReadScope,
   type EnvironmentId,
+  type ServerProvider,
   type ServerProviderUsageWindow,
+  type UsageProviderKind,
 } from "@t3tools/contracts";
 import { AlertTriangleIcon, GaugeIcon } from "lucide-react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { isElectron } from "../../env";
@@ -36,6 +38,7 @@ import {
   paceOf,
   remainingPercent,
 } from "./usageLimits.logic";
+import { PROVIDER_PRESENTATION } from "./usageProviders";
 
 const refreshAccessAtom = Atom.make(
   (get) =>
@@ -130,10 +133,14 @@ export function UsageLimits({
   onShowUsage,
   selected,
   setSelected,
+  hiddenProviders,
+  providerFilter,
 }: {
   onShowUsage: () => void;
   selected: ReadonlySet<EnvironmentId> | null;
   setSelected: (next: ReadonlySet<EnvironmentId> | null) => void;
+  hiddenProviders: ReadonlySet<UsageProviderKind>;
+  providerFilter: ReactNode;
 }) {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const refreshAccess = useAtomValue(refreshAccessAtom);
@@ -146,20 +153,22 @@ export function UsageLimits({
     reportFailure: false,
   });
   const targets = [...presentations].filter(([id]) => selected === null || selected.has(id));
-  const accounts = useMemo(
-    () =>
-      collectLimitAccounts(
-        [...presentations]
-          .filter(([id]) => selected === null || selected.has(id))
-          .map(([id, value]) => ({
-            id,
-            label: value.entry.target.label,
-            providers: value.serverConfig?.providers ?? [],
-            usageLimitSources: value.serverConfig?.usageLimitSources ?? [],
-          })),
-      ),
-    [presentations, selected],
-  );
+  const accounts = useMemo(() => {
+    // Hidden providers drop both native and hub accounts, so their bars and pools go together.
+    const hiddenDrivers = new Set<ServerProvider["driver"]>(
+      [...hiddenProviders].map((provider) => PROVIDER_PRESENTATION[provider].driverKind),
+    );
+    return collectLimitAccounts(
+      [...presentations]
+        .filter(([id]) => selected === null || selected.has(id))
+        .map(([id, value]) => ({
+          id,
+          label: value.entry.target.label,
+          providers: value.serverConfig?.providers ?? [],
+          usageLimitSources: value.serverConfig?.usageLimitSources ?? [],
+        })),
+    ).filter((account) => !hiddenDrivers.has(account.driver));
+  }, [hiddenProviders, presentations, selected]);
   const pools = useMemo(() => collectLimitPools(accounts, now), [accounts, now]);
   const refresh = async () => {
     if (busy.current) return;
@@ -223,6 +232,10 @@ export function UsageLimits({
             Usage
           </Button>
           <span className="text-sm font-medium">Limits</span>
+          <span aria-hidden className="text-sm text-muted-foreground/60">
+            ·
+          </span>
+          <span className="flex min-w-0 text-sm">{providerFilter}</span>
           <Button
             className="ml-auto"
             variant="ghost"

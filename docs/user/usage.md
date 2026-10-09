@@ -18,8 +18,9 @@ completed-turn record will not appear.
 Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. The **7 days**,
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
 headline and chart, and refreshing rescans selected environments. The environment filter shows scan progress and
-explains unavailable or incompatible servers; totals appear as machines answer. Your selected
-usage view, metric and time range are remembered.
+explains unavailable or incompatible servers; totals appear as machines answer. The provider
+filter next to it hides providers from totals, charts, breakdowns, and Limits. Your selected
+usage view, metric, time range, and hidden providers are remembered.
 
 When your app and server support different providers, usage totals may cover only the providers
 your app understands. Update the app to include newly supported providers.
