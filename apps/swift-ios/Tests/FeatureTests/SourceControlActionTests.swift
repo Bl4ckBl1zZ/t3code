@@ -160,4 +160,15 @@ final class SourceControlActionTests: XCTestCase {
         XCTAssertEqual(SourceControlBranchSummary.subtitle(status, step: "Pushing…"), "main · Pushing…")
         XCTAssertEqual(SourceControlBranchSummary.subtitle(status, step: nil), "main · default branch")
     }
+
+    // MARK: - Reconnect refresh
+
+    func testOnlyAReconnectReloadsStatus() {
+        XCTAssertTrue(SourceControlRefreshPolicy.reloadsOnConnectionChange(from: .reconnecting, to: .connected))
+        XCTAssertTrue(SourceControlRefreshPolicy.reloadsOnConnectionChange(from: .disconnected, to: .connected))
+        XCTAssertFalse(SourceControlRefreshPolicy.reloadsOnConnectionChange(from: .connected, to: .reconnecting))
+        XCTAssertFalse(SourceControlRefreshPolicy.reloadsOnConnectionChange(from: .connected, to: .connected))
+        // The first known state is the initial load's job.
+        XCTAssertFalse(SourceControlRefreshPolicy.reloadsOnConnectionChange(from: nil, to: .connected))
+    }
 }

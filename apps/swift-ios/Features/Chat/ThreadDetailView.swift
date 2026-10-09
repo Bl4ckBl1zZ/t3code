@@ -1486,7 +1486,8 @@ public struct ThreadDetailView: View {
             FeatureSourceControlView(
                 client: model.client,
                 threadID: thread.id,
-                reviewSelection: model.reviewSelection
+                reviewSelection: model.reviewSelection,
+                connectionState: threadConnectionState
             )
         case let .terminal(terminalID):
             FeatureTerminalView(
