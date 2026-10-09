@@ -63,7 +63,11 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
-import type { Components, ExtraProps as ReactMarkdownExtraProps } from "react-markdown";
+import type {
+  Components,
+  ExtraProps as ReactMarkdownExtraProps,
+  Options as ReactMarkdownOptions,
+} from "react-markdown";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
