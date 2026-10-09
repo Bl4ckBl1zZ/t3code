@@ -379,6 +379,17 @@ export const executorLayer: Layer.Layer<
                   }),
               ),
             );
+          case "preview.cleanup":
+            return resourceCleanup.cleanupPreviews(effect.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "terminal.close-idle":
             // The settle action starts its own shell, so idle shells close first.
             return resourceCleanup

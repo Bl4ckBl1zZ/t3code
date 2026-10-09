@@ -2683,6 +2683,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
 
     if (command.type === "thread.delete") {
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:preview.cleanup`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "preview.cleanup" },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
       const projection = yield* loadProjection;
       const attachmentIds = Array.from(
         new Set(

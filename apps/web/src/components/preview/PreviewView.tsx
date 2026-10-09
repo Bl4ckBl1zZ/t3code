@@ -8,7 +8,7 @@ import {
   type PreviewViewportSetting,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { normalizePreviewUrl } from "@t3tools/shared/preview";
+import { resolveAddressBarInput } from "@t3tools/shared/preview";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -176,12 +176,12 @@ export function PreviewView({
   const handleSubmitUrl = useCallback(
     async (next: string) => {
       try {
-        const normalized = normalizePreviewUrl(next);
-        if (await navigateToResolvedUrl(normalized)) {
-          recordVisitForThread(threadRef, normalized);
+        const resolved = resolveAddressBarInput(next);
+        if (await navigateToResolvedUrl(resolved)) {
+          recordVisitForThread(threadRef, resolved);
         }
       } catch {
-        // Server-side `failed` event renders the unreachable view.
+        // Only empty input or an unsupported scheme lands here; the bar keeps the text.
       }
     },
     [navigateToResolvedUrl, threadRef],

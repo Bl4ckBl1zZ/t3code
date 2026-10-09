@@ -90,6 +90,10 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("terminal.cleanup"),
   }),
+  /** Closes a deleted thread's preview sessions, so clients drop their browser tabs. */
+  Schema.Struct({
+    type: Schema.Literal("preview.cleanup"),
+  }),
   /**
    * Follows a settle: closes the thread's shells that wait at an idle prompt
    * (see `TerminalManager.closeIdle`), then runs the project's settle action
@@ -121,6 +125,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "checkpoint.capture",
   "terminal.cleanup",
   "terminal.close-idle",
+  "preview.cleanup",
   "attachment.cleanup",
   "delegated-tasks.stop",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;

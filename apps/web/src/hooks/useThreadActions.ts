@@ -50,6 +50,7 @@ import {
   readThreadShells,
 } from "../state/entities";
 import { useUiStateStore } from "../uiStateStore";
+import { removePreviewThread } from "../previewStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import {
@@ -597,6 +598,9 @@ export function useThreadActions() {
             environmentId: target.environmentId,
             input: { threadId: target.threadId },
           });
+          // The server closes the thread's preview sessions too, but the
+          // desktop host keeps a page for every session held here.
+          if (result._tag === "Success") removePreviewThread(target);
           if (result._tag === "Success" && thread !== null) {
             releaseComposerDraftUploads(target);
             clearComposerDraftForThread(target);

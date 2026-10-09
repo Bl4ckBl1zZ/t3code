@@ -1204,6 +1204,15 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         },
       );
 
+      // Deleting the thread closes its preview sessions; archiving keeps them.
+      const sql = yield* SqlClient.SqlClient;
+      const cleanupEffectIds = (yield* sql<{ readonly effect_id: string }>`
+        SELECT effect_id FROM orchestration_v2_effect_outbox
+        WHERE command_id IN (${"runtime-layer-lifecycle-archive"}, ${"runtime-layer-lifecycle-delete"})
+      `).map((row) => row.effect_id);
+      assert.include(cleanupEffectIds, "effect:runtime-layer-lifecycle-delete:preview.cleanup");
+      assert.notInclude(cleanupEffectIds, "effect:runtime-layer-lifecycle-archive:preview.cleanup");
+
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projection.thread.title, "Renamed lifecycle thread");
       assert.equal(projection.thread.branch, "feature/v2");
