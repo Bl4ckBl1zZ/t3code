@@ -101,6 +101,9 @@ function makeHarness(options: HarnessOptions = {}) {
   const generateBranchName = vi.fn(
     options.generateBranchName ?? (() => Effect.succeed({ branch: "generated-branch" })),
   );
+  const generateThreadTitle = vi.fn(
+    options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
+  );
   const externalServices = Layer.mergeAll(
     Layer.succeed(ProjectService.ProjectService, {
       create: () => Effect.die("unused"),
@@ -127,8 +130,7 @@ function makeHarness(options: HarnessOptions = {}) {
       runForThread: runSetup,
     }),
     Layer.mock(TextGeneration.TextGeneration)({
-      generateThreadTitle:
-        options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
+      generateThreadTitle,
       generateBranchName,
     }),
     ServerSettings.layerTest(options.serverSettings),
@@ -142,6 +144,7 @@ function makeHarness(options: HarnessOptions = {}) {
     createWorktree,
     renameBranch,
     generateBranchName,
+    generateThreadTitle,
     runSetup,
   };
 }
@@ -150,6 +153,8 @@ function launchInput(input: {
   readonly command: string;
   readonly thread: string;
   readonly message?: string;
+  readonly title?: string;
+  readonly generateTitle?: boolean;
   readonly workspace?: ThreadLaunch.ThreadLaunchWorkspaceStrategy;
   readonly prepareWorkspace?: boolean;
 }) {
@@ -157,7 +162,8 @@ function launchInput(input: {
     commandId: CommandId.make(input.command),
     threadId: ThreadId.make(input.thread),
     projectId,
-    title: "New thread",
+    title: input.title ?? "New thread",
+    ...(input.generateTitle === undefined ? {} : { generateTitle: input.generateTitle }),
     modelSelection,
     runtimeMode: "full-access" as const,
     interactionMode: "default" as const,
@@ -832,6 +838,53 @@ it.effect("still generates a title for launches that skip workspace preparation"
         threads
           .getThreadProjection(launched.threadId)
           .pipe(Effect.map((projection) => projection.thread.title === "Generated title")),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("generates a title when the client marks its prompt-derived title as a placeholder", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:client-title",
+          thread: "thread:launch:client-title",
+          message: "Fix the login bug on mobile",
+          title: "Fix the login bug on mobile",
+          generateTitle: true,
+        }),
+      );
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(launched.threadId)
+          .pipe(Effect.map((projection) => projection.thread.title === "Generated title")),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("keeps an explicit launch title", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:explicit-title",
+          thread: "thread:launch:explicit-title",
+          message: "Run the nightly report",
+          title: "Nightly report",
+        }),
+      );
+      assert.equal(harness.generateThreadTitle.mock.calls.length, 0);
+      assert.equal(
+        (yield* threads.getThreadProjection(launched.threadId)).thread.title,
+        "Nightly report",
       );
     }).pipe(Effect.provide(harness.layer));
   }),
