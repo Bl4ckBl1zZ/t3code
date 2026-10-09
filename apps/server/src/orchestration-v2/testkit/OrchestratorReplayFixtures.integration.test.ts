@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import type { OrchestrationV2DomainEvent, ProviderReplayTranscript } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testkit.ts";
@@ -10,6 +11,7 @@ import { CursorOrchestratorReplayHarness } from "../Adapters/CursorAdapterV2.tes
 import { AcpRegistryOrchestratorReplayHarness } from "../Adapters/AcpRegistryAdapterV2.testkit.ts";
 import { GrokOrchestratorReplayHarness } from "../Adapters/GrokAdapterV2.testkit.ts";
 import { OpenCodeOrchestratorReplayHarness } from "../Adapters/OpenCodeAdapterV2.testkit.ts";
+import { MuseOrchestratorReplayHarness } from "../Adapters/MuseAdapterV2.testkit.ts";
 import { PiOrchestratorReplayHarness } from "../Adapters/PiAdapterV2.testkit.ts";
 import { layer as idAllocatorLayer } from "../IdAllocator.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
@@ -66,10 +68,19 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
 }) {
   const rawTranscript = yield* readTranscript(input.driver.transcriptFile);
   const workspace = yield* checkpointWorkspace(input.fixtureName);
+  // Muse canonicalizes its workspace path (macOS /var -> /private/var) before sending it.
   const transcript = yield* input.harness.decodeTranscript(
     input.driver.driver === "codex"
       ? materializeReplayTranscriptWorkspace(rawTranscript, workspace)
-      : rawTranscript,
+      : input.driver.driver === "muse"
+        ? materializeReplayTranscriptWorkspace(
+            rawTranscript,
+            yield* FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.realPath(workspace)),
+              Effect.provide(NodeServices.layer),
+            ),
+          )
+        : rawTranscript,
   );
   const materialized = yield* materializeFixtureInput({
     scenario: input.fixtureName,
@@ -91,9 +102,23 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
 
   const result = yield* runOrchestratorV2ProviderReplayScenario(scenario, input.harness, {
     enableLegacyTokenStreaming: input.enableLegacyTokenStreaming ?? false,
+    ...(input.driver.runContinuationWorker === true ? { runContinuationWorker: true } : {}),
   }).pipe(provideDeterministicTestRuntime);
   input.driver.assertOutput(result, transcript);
   assertProviderNativeSubagentRootTurns(result);
+  const expectedAbsentWorkspacePaths = input.driver.expectedAbsentWorkspacePaths;
+  if (expectedAbsentWorkspacePaths !== undefined) {
+    yield* Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      for (const relativePath of expectedAbsentWorkspacePaths) {
+        assert.isFalse(
+          yield* fs.exists(path.join(workspace, relativePath)),
+          `${input.fixtureName}/${input.driver.driver} must not create ${relativePath} in the replay workspace`,
+        );
+      }
+    }).pipe(Effect.provide(NodeServices.layer));
+  }
   if (input.enableLegacyTokenStreaming !== true) {
     assert.isFalse(
       result.domainEvents.some(isStreamingAssistantEvent),
@@ -160,6 +185,11 @@ function runFixtureProviderWithRegisteredHarness(input: {
       return runFixtureProvider({
         ...input,
         harness: PiOrchestratorReplayHarness,
+      }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
+    case "muse":
+      return runFixtureProvider({
+        ...input,
+        harness: MuseOrchestratorReplayHarness,
       }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
     default:
       return Effect.die(

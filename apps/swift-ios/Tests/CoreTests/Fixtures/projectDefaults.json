@@ -118,6 +118,11 @@
         "binaryPath": "",
         "customModels": []
       },
+      "muse": {
+        "enabled": false,
+        "binaryPath": "muse",
+        "customModels": []
+      },
       "pi": {
         "enabled": false,
         "binaryPath": "pi",

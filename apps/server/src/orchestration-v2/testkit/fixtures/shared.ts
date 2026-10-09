@@ -18,6 +18,7 @@ import {
   type ProviderDriverKind,
   type ProviderReplayTranscript,
   type ProviderUserInputAnswers,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -212,6 +213,11 @@ export type OrchestratorFixtureInputStep =
       readonly checkpointSuffix: string;
     }
   | {
+      readonly type: "await_run_status";
+      readonly targetRunIndex: number;
+      readonly status: OrchestrationV2RunStatus;
+    }
+  | {
       /**
        * Advance the deterministic test clock, e.g. past the provider session
        * manager's idle timeout so the next message must reopen the session.
@@ -222,6 +228,7 @@ export type OrchestratorFixtureInputStep =
 
 export interface OrchestratorFixtureInput {
   readonly interactionMode?: ProviderInteractionMode;
+  readonly runtimeMode?: RuntimeMode;
   readonly steps: ReadonlyArray<OrchestratorFixtureInputStep>;
 }
 
@@ -230,6 +237,13 @@ export interface ProviderOrchestratorReplayVariant {
   readonly transcriptFile: URL;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicyOverride?: RuntimePolicyV2Override;
+  /** Replays a provider wake turn as a continuation run, as the live runtime does. */
+  readonly runContinuationWorker?: boolean;
+  /**
+   * Workspace-relative paths that must not exist once the scenario finishes,
+   * e.g. the target of a tool call the run was configured to deny.
+   */
+  readonly expectedAbsentWorkspacePaths?: ReadonlyArray<string>;
   readonly assertOutput: (
     result: OrchestratorV2ScenarioResult,
     transcript: ProviderReplayTranscript,
@@ -266,6 +280,12 @@ export const CLAUDE_MODEL_SELECTION = {
 export const CURSOR_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("cursor"),
   model: "composer-2.5",
+} satisfies ModelSelection;
+
+/** Muse fixtures are recorded against this model; the account's listed models may differ. */
+export const MUSE_MODEL_SELECTION = {
+  instanceId: ProviderInstanceId.make("muse"),
+  model: "muse-spark-1.3-contributor",
 } satisfies ModelSelection;
 
 export const GROK_MODEL_SELECTION = {
@@ -345,6 +365,7 @@ export function createThreadCommand(input: {
   readonly scenario: string;
   readonly modelSelection: ModelSelection;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly runtimeMode?: RuntimeMode;
 }): OrchestrationV2Command {
   return {
     type: "thread.create",
@@ -355,7 +376,7 @@ export function createThreadCommand(input: {
     projectId: input.ids.projectId,
     title: `Replay fixture: ${input.scenario}`,
     modelSelection: input.modelSelection,
-    runtimeMode: "full-access",
+    runtimeMode: input.runtimeMode ?? "full-access",
     interactionMode: input.interactionMode ?? "default",
     branch: null,
     worktreePath: null,
@@ -443,6 +464,9 @@ export function materializeFixtureInput(input: {
         ...(input.fixtureInput.interactionMode === undefined
           ? {}
           : { interactionMode: input.fixtureInput.interactionMode }),
+        ...(input.fixtureInput.runtimeMode === undefined
+          ? {}
+          : { runtimeMode: input.fixtureInput.runtimeMode }),
       }),
     );
 
@@ -457,7 +481,10 @@ export function materializeFixtureInput(input: {
               (nextStep !== undefined &&
                 ((nextStep.type === "interrupt" && nextStep.targetRunIndex === runIndex) ||
                   nextStep.type === "queue_message" ||
-                  (nextStep.type === "restart" && nextStep.targetRunIndex === runIndex))) ||
+                  (nextStep.type === "restart" && nextStep.targetRunIndex === runIndex) ||
+                  // A provider continuation run starts while this thread is
+                  // busy, so waiting for idle first would never return.
+                  (nextStep.type === "await_run_status" && nextStep.targetRunIndex > runIndex))) ||
               nextStep?.type === "approve_next_runtime_request" ||
               nextStep?.type === "answer_next_user_input_request";
             const key = `run:${runIndex}`;
@@ -679,6 +706,14 @@ export function materializeFixtureInput(input: {
           break;
         case "advance_clock":
           steps.push({ type: "advance_clock", duration: step.duration });
+          break;
+        case "await_run_status":
+          steps.push({
+            type: "await_run_status",
+            threadId: ids.threadId,
+            runId: runIdFor(step.targetRunIndex),
+            status: step.status,
+          });
           break;
         case "rollback":
           {

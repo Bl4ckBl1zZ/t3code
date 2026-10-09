@@ -33,7 +33,10 @@ import { PI_PROVIDER } from "../src/orchestration-v2/Adapters/PiAdapterV2.ts";
 import * as IdAllocator from "../src/orchestration-v2/IdAllocator.ts";
 import { provideDeterministicTestRuntime } from "../src/orchestration-v2/testkit/DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "../src/orchestration-v2/testkit/fixtures/index.ts";
-import { materializeFixtureInput } from "../src/orchestration-v2/testkit/fixtures/shared.ts";
+import {
+  materializeFixtureInput,
+  type ProviderOrchestratorReplayVariant,
+} from "../src/orchestration-v2/testkit/fixtures/shared.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "../src/orchestration-v2/testkit/ProviderReplayHarness.ts";
 import {
   checkpointWorkspace,
@@ -60,7 +63,9 @@ function readArgValue(name: string): string | undefined {
 
 const scenario = readArgValue("--scenario");
 const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find((entry) => entry.name === scenario);
-const variant = fixture?.providers.find((provider) => provider.driver === PI_PROVIDER);
+const variant: ProviderOrchestratorReplayVariant | undefined = fixture?.providers.find(
+  (provider) => provider.driver === PI_PROVIDER,
+);
 if (fixture === undefined || variant === undefined) {
   const names = ORCHESTRATOR_REPLAY_FIXTURES.filter((entry) =>
     entry.providers.some((provider) => provider.driver === PI_PROVIDER),

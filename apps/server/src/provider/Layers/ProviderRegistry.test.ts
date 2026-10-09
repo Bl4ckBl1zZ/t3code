@@ -2526,6 +2526,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 "cursor",
                 "grok",
                 "hermes",
+                "muse",
                 "opencode",
                 "pi",
               ]);
@@ -2535,6 +2536,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 cursorProvider?.message,
                 "Cursor is disabled in T3 Code settings.",
               );
+              const museProvider = providers.find((provider) => provider.driver === "muse");
+              assert.strictEqual(museProvider?.enabled, false);
+              assert.strictEqual(museProvider?.status, "disabled");
               assert.strictEqual(cursorSpawned, false);
             }).pipe(Effect.provide(runtimeServices));
           }),
