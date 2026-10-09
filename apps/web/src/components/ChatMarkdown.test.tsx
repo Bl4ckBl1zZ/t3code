@@ -231,15 +231,15 @@ describe("ChatMarkdown heading levels", () => {
       />,
     );
 
-    expect(html).toContain('<h1 aria-level="4">Top</h1>');
-    expect(html).toContain('<h2 aria-level="5">Section</h2>');
-    expect(html).toContain('<h6 aria-level="6">Fine print</h6>');
+    expect(html).toContain('<h1 id="user-content-top" aria-level="4">Top</h1>');
+    expect(html).toContain('<h2 id="user-content-section" aria-level="5">Section</h2>');
+    expect(html).toContain('<h6 id="user-content-fine-print" aria-level="6">Fine print</h6>');
   });
 
   it("leaves heading levels alone when the markdown is not nested", () => {
     const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text="# Top" />);
 
-    expect(html).toContain("<h1>Top</h1>");
+    expect(html).toContain('<h1 id="user-content-top">Top</h1>');
   });
 });
 
@@ -518,4 +518,87 @@ describe("ChatMarkdown shell code blocks", () => {
       vi.unstubAllGlobals();
     }
   });
+});
+
+describe("ChatMarkdown heading ids", () => {
+  it("never gives two headings the same id, even when a suffix matches another heading", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        parseRawHtml
+        text={
+          '## Setup\n\n## Setup\n\n## Setup-1\n\n<h2 id="install-1">Pinned</h2>\n\n## Install\n\n## Install'
+        }
+      />,
+    );
+    const ids = [...html.matchAll(/<h2 id="([^"]+)"/g)].map((match) => match[1]);
+    expect(ids).toEqual([
+      "user-content-setup",
+      "user-content-setup-1",
+      "user-content-setup-1-1",
+      "user-content-install-1",
+      "user-content-install",
+      "user-content-install-2",
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("ChatMarkdown in-page links", () => {
+  it.each([true, false])(
+    "scrolls a table-of-contents link to its heading without touching the URL (parseRawHtml=%s)",
+    async (parseRawHtml) => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      let renderer: ReactTestRenderer | undefined;
+      try {
+        await act(async () => {
+          renderer = create(
+            <ChatMarkdown
+              cwd="/tmp/project"
+              parseRawHtml={parseRawHtml}
+              text={
+                "- [Operating model](#1-operating-model)\n- [Missing](#nowhere)\n\n## 1. Operating model\n\n## 1. Operating model"
+              }
+            />,
+          );
+        });
+        const headingIds = renderer!.root.findAllByType("h2").map((heading) => heading.props.id);
+        expect(headingIds).toEqual([
+          "user-content-1-operating-model",
+          "user-content-1-operating-model-1",
+        ]);
+
+        // No DOM here: stand in for the rendered headings the click handler searches.
+        const headings = headingIds.map((id: string) => ({ id, scrollIntoView: vi.fn() }));
+        const markdownRoot = { querySelectorAll: () => headings };
+        vi.stubGlobal("document", { getElementById: () => null, querySelectorAll: () => [] });
+        const click = () => ({
+          button: 0,
+          defaultPrevented: false,
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: false,
+          altKey: false,
+          preventDefault: vi.fn(),
+          currentTarget: { closest: () => markdownRoot },
+        });
+        const [tocLink, missingLink] = renderer!.root.findAllByType("a");
+
+        const tocClick = click();
+        act(() => tocLink!.props.onClick(tocClick));
+        expect(tocClick.preventDefault).toHaveBeenCalled();
+        expect(headings[0]!.scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+        expect(headings[1]!.scrollIntoView).not.toHaveBeenCalled();
+
+        // A fragment with no target is still swallowed so it never rewrites the route hash.
+        const missingClick = click();
+        act(() => missingLink!.props.onClick(missingClick));
+        expect(missingClick.preventDefault).toHaveBeenCalled();
+        expect(headings[0]!.scrollIntoView).toHaveBeenCalledTimes(1);
+      } finally {
+        await act(async () => renderer?.unmount());
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });

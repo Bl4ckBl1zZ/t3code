@@ -251,6 +251,12 @@ describe("assetResponseHeaders", () => {
       "text/html; charset=utf-8",
     );
   });
+  it("serves HTML assets inside a sandbox that still allows downloads", () => {
+    expect(assetResponseHeaders("/workspace/page.html")).toMatchObject({
+      "Content-Security-Policy":
+        "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads",
+    });
+  });
 
   it("downloads uploaded documents without executing their content", () => {
     expect(assetResponseHeaders("/attachments/upload.html", { download: true })).toMatchObject({
