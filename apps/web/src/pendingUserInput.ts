@@ -49,25 +49,30 @@ export function resolvePendingUserInputAnswer(
   draft: PendingUserInputDraftAnswer | undefined,
 ): string | string[] | null {
   const customAnswer =
-    question.allowCustomAnswer === false ? null : normalizeDraftAnswer(draft?.customAnswer);
-  if (customAnswer) {
+    question.allowCustomAnswer === false
+      ? null
+      : question.initialAnswer !== undefined
+        ? (draft?.customAnswer ?? null)
+        : normalizeDraftAnswer(draft?.customAnswer);
+  if (customAnswer !== null && customAnswer.length > 0) {
     return customAnswer;
   }
 
   const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
   if (question.multiSelect) {
-    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+    return selectedOptionLabels.length > 0 ? selectedOptionLabels : customAnswer;
   }
 
-  return selectedOptionLabels[0] ?? null;
+  return selectedOptionLabels[0] ?? customAnswer;
 }
 
 export function setPendingUserInputCustomAnswer(
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string,
+  question?: Pick<UserInputQuestion, "initialAnswer">,
 ): PendingUserInputDraftAnswer {
   const selectedOptionLabels =
-    customAnswer.trim().length > 0
+    question?.initialAnswer !== undefined || customAnswer.trim().length > 0
       ? undefined
       : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
 
@@ -132,7 +137,7 @@ export function buildPendingUserInputAnswers(
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
-    if (!answer) {
+    if (answer === null) {
       return null;
     }
     answers[question.id] = answer;
@@ -146,7 +151,9 @@ export function countAnsweredPendingUserInputQuestions(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   return questions.reduce((count, question) => {
-    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) ? count + 1 : count;
+    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) !== null
+      ? count + 1
+      : count;
   }, 0);
 }
 
@@ -175,10 +182,11 @@ export function derivePendingUserInputProgress(
     selectedOptionLabels: normalizeSelectedOptionLabels(activeDraft?.selectedOptionLabels),
     customAnswer,
     resolvedAnswer,
-    usingCustomAnswer: customAnswer.trim().length > 0,
+    usingCustomAnswer:
+      (activeQuestion?.initialAnswer !== undefined ? customAnswer : customAnswer.trim()).length > 0,
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: Boolean(resolvedAnswer),
+    canAdvance: resolvedAnswer !== null,
   };
 }

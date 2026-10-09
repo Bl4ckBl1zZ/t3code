@@ -83,7 +83,10 @@ import {
   threadSupportsProviderHandoff,
 } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
-import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import {
+  derivePendingThreadRequests,
+  seedUserInputDraftAnswers,
+} from "@t3tools/client-runtime/state/thread-requests";
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
@@ -2870,6 +2873,20 @@ function ChatViewContent(props: ChatViewProps) {
         : EMPTY_PENDING_USER_INPUT_ANSWERS,
     [activePendingUserInput, pendingUserInputAnswersByRequestId],
   );
+  // Editor-style questions start from their prefilled text. Seed once per
+  // request; later edits, cleared answers, and selections win.
+  if (
+    activePendingUserInput &&
+    seedUserInputDraftAnswers(activePendingUserInput.questions, activePendingDraftAnswers) !==
+      activePendingDraftAnswers
+  ) {
+    const requestId = activePendingUserInput.requestId;
+    setPendingUserInputAnswersByRequestId((existing) => {
+      const drafts = existing[requestId] ?? EMPTY_PENDING_USER_INPUT_ANSWERS;
+      const seeded = seedUserInputDraftAnswers(activePendingUserInput.questions, drafts);
+      return seeded === drafts ? existing : { ...existing, [requestId]: seeded };
+    });
+  }
   const activePendingQuestionIndex = activePendingUserInput
     ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInput.requestId] ?? 0)
     : 0;
@@ -8139,6 +8156,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activePendingUserInput) {
         return;
       }
+      const question = activePendingUserInput.questions.find((entry) => entry.id === questionId);
       promptRef.current = value;
       setPendingUserInputAnswersByRequestId((existing) => ({
         ...existing,
@@ -8147,6 +8165,7 @@ function ChatViewContent(props: ChatViewProps) {
           [questionId]: setPendingUserInputCustomAnswer(
             existing[activePendingUserInput.requestId]?.[questionId],
             value,
+            question,
           ),
         },
       }));

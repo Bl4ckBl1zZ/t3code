@@ -467,6 +467,8 @@ export const UserInputQuestion = Schema.Struct({
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
+  /** Editable initial text. Answers preserve whitespace and allow an empty string when present. */
+  initialAnswer: Schema.optional(Schema.String),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(Effect.succeed(false)),
   ),

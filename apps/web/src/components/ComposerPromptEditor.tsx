@@ -842,11 +842,17 @@ function $setComposerEditorPrompt(
   prompt: string,
   terminalContexts: ReadonlyArray<TerminalContextDraft>,
   skillMetadata: ReadonlyMap<string, ComposerSkillMetadata>,
+  literalText = false,
 ): void {
   const root = $getRoot();
   root.clear();
   const paragraph = $createParagraphNode();
   root.append(paragraph);
+  // Editor answers are verbatim text, including mention and skill sources.
+  if (literalText) {
+    $appendTextWithLineBreaks(paragraph, prompt);
+    return;
+  }
 
   const segments = splitPromptIntoComposerSegments(prompt, terminalContexts);
   for (const segment of segments) {
@@ -935,6 +941,11 @@ interface ComposerPromptEditorProps {
   ) => boolean;
   onPaste: React.ClipboardEventHandler<HTMLElement>;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
+  /**
+   * Edit `value` as verbatim text: no chips, no token plugins, and cursors are
+   * plain character offsets. Used for editor-style question answers.
+   */
+  literalText?: boolean | undefined;
 }
 
 function caretLineRect(range: Range, edge: "start" | "end"): DOMRect | null {
@@ -1689,10 +1700,13 @@ function ComposerPromptEditorInner({
   onCommandKeyDown,
   onPaste,
   editorRef,
+  literalText = false,
 }: ComposerPromptEditorProps) {
   const [editor] = useLexicalComposerContext();
   const onChangeRef = useRef(onChange);
-  const initialCursor = clampCollapsedComposerCursor(value, cursor);
+  const literalTextRef = useRef(literalText);
+  const literalTextAppliedRef = useRef(literalText);
+  const initialCursor = clampCollapsedComposerCursor(value, cursor, literalText);
   const terminalContextsSignature = terminalContextSignature(terminalContexts);
   const terminalContextsSignatureRef = useRef(terminalContextsSignature);
   const skillsSignature = skillSignature(skills);
@@ -1701,7 +1715,7 @@ function ComposerPromptEditorInner({
   const snapshotRef = useRef({
     value,
     cursor: initialCursor,
-    expandedCursor: expandCollapsedComposerCursor(value, initialCursor),
+    expandedCursor: expandCollapsedComposerCursor(value, initialCursor, literalText),
     terminalContextIds: terminalContexts.map((context) => context.id),
   });
   const isApplyingControlledUpdateRef = useRef(false);
@@ -1754,10 +1768,16 @@ function ComposerPromptEditorInner({
   }, [editor, openCitationComment?.nodeKey]);
 
   useLayoutEffect(() => {
-    const normalizedCursor = clampCollapsedComposerCursor(value, cursor);
+    literalTextRef.current = literalText;
+  }, [literalText]);
+
+  useLayoutEffect(() => {
+    const normalizedCursor = clampCollapsedComposerCursor(value, cursor, literalText);
     const previousSnapshot = snapshotRef.current;
     const contextsChanged = terminalContextsSignatureRef.current !== terminalContextsSignature;
-    const skillsChanged = skillsSignatureRef.current !== skillsSignature;
+    const skillsChanged =
+      skillsSignatureRef.current !== skillsSignature ||
+      literalTextAppliedRef.current !== literalText;
     if (
       previousSnapshot.value === value &&
       previousSnapshot.cursor === normalizedCursor &&
@@ -1767,10 +1787,11 @@ function ComposerPromptEditorInner({
       return;
     }
 
+    literalTextAppliedRef.current = literalText;
     snapshotRef.current = {
       value,
       cursor: normalizedCursor,
-      expandedCursor: expandCollapsedComposerCursor(value, normalizedCursor),
+      expandedCursor: expandCollapsedComposerCursor(value, normalizedCursor, literalText),
       terminalContextIds: terminalContexts.map((context) => context.id),
     };
     terminalContextsSignatureRef.current = terminalContextsSignature;
@@ -1790,7 +1811,7 @@ function ComposerPromptEditorInner({
         const shouldRewriteEditorState =
           previousSnapshot.value !== value || contextsChanged || skillsChanged;
         if (shouldRewriteEditorState) {
-          $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current);
+          $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current, literalText);
         }
         if (shouldRewriteEditorState || isFocused) {
           $setSelectionAtComposerOffset(normalizedCursor);
@@ -1807,13 +1828,25 @@ function ComposerPromptEditorInner({
     queueMicrotask(() => {
       isApplyingControlledUpdateRef.current = false;
     });
-  }, [cursor, editor, skillsSignature, terminalContexts, terminalContextsSignature, value]);
+  }, [
+    cursor,
+    editor,
+    literalText,
+    skillsSignature,
+    terminalContexts,
+    terminalContextsSignature,
+    value,
+  ]);
 
   const focusAt = useCallback(
     (nextCursor: number) => {
       const rootElement = editor.getRootElement();
       if (!rootElement) return;
-      const boundedCursor = clampCollapsedComposerCursor(snapshotRef.current.value, nextCursor);
+      const boundedCursor = clampCollapsedComposerCursor(
+        snapshotRef.current.value,
+        nextCursor,
+        literalTextRef.current,
+      );
       rootElement.focus({ preventScroll: true });
       editor.update(() => {
         $setSelectionAtComposerOffset(boundedCursor);
@@ -1821,7 +1854,11 @@ function ComposerPromptEditorInner({
       snapshotRef.current = {
         value: snapshotRef.current.value,
         cursor: boundedCursor,
-        expandedCursor: expandCollapsedComposerCursor(snapshotRef.current.value, boundedCursor),
+        expandedCursor: expandCollapsedComposerCursor(
+          snapshotRef.current.value,
+          boundedCursor,
+          literalTextRef.current,
+        ),
         terminalContextIds: snapshotRef.current.terminalContextIds,
       };
       onChangeRef.current(
@@ -1844,10 +1881,15 @@ function ComposerPromptEditorInner({
     let snapshot = snapshotRef.current;
     editor.getEditorState().read(() => {
       const nextValue = $getRoot().getTextContent();
-      const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
+      const fallbackCursor = clampCollapsedComposerCursor(
+        nextValue,
+        snapshotRef.current.cursor,
+        literalTextRef.current,
+      );
       const nextCursor = clampCollapsedComposerCursor(
         nextValue,
         $readSelectionOffsetFromEditorState(fallbackCursor),
+        literalTextRef.current,
       );
       const fallbackExpandedCursor = clampExpandedCursor(
         nextValue,
@@ -1881,6 +1923,7 @@ function ComposerPromptEditorInner({
           collapseExpandedComposerCursor(
             snapshotRef.current.value,
             snapshotRef.current.value.length,
+            literalTextRef.current,
           ),
         );
       },
@@ -1938,10 +1981,15 @@ function ComposerPromptEditorInner({
   const handleEditorChange = useCallback((editorState: EditorState) => {
     editorState.read(() => {
       const nextValue = $getRoot().getTextContent();
-      const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
+      const fallbackCursor = clampCollapsedComposerCursor(
+        nextValue,
+        snapshotRef.current.cursor,
+        literalTextRef.current,
+      );
       const nextCursor = clampCollapsedComposerCursor(
         nextValue,
         $readSelectionOffsetFromEditorState(fallbackCursor),
+        literalTextRef.current,
       );
       const fallbackExpandedCursor = clampExpandedCursor(
         nextValue,
@@ -1972,8 +2020,9 @@ function ComposerPromptEditorInner({
         terminalContextIds,
       };
       const cursorAdjacentToMention =
-        isCollapsedCursorAdjacentToInlineToken(nextValue, nextCursor, "left") ||
-        isCollapsedCursorAdjacentToInlineToken(nextValue, nextCursor, "right");
+        !literalTextRef.current &&
+        (isCollapsedCursorAdjacentToInlineToken(nextValue, nextCursor, "left") ||
+          isCollapsedCursorAdjacentToInlineToken(nextValue, nextCursor, "right"));
       onChangeRef.current(
         nextValue,
         nextCursor,
@@ -2037,14 +2086,21 @@ function ComposerPromptEditorInner({
           />
           <OnChangePlugin onChange={handleEditorChange} />
           <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
-          <ComposerSurroundSelectionPlugin terminalContexts={terminalContexts} skills={skills} />
           <ComposerHomeEndKeyPlugin />
-          <ComposerInlineTokenArrowPlugin />
-          <ComposerCitationTabPlugin />
-          <ComposerInlineTokenSelectionNormalizePlugin />
-          <ComposerInlineTokenBackspacePlugin />
-          <ComposerInlineTokenPastePlugin />
-          <ComposerChipSelectionPlugin />
+          {literalText ? null : (
+            <>
+              <ComposerSurroundSelectionPlugin
+                terminalContexts={terminalContexts}
+                skills={skills}
+              />
+              <ComposerInlineTokenArrowPlugin />
+              <ComposerCitationTabPlugin />
+              <ComposerInlineTokenSelectionNormalizePlugin />
+              <ComposerInlineTokenBackspacePlugin />
+              <ComposerInlineTokenPastePlugin />
+              <ComposerChipSelectionPlugin />
+            </>
+          )}
           <HistoryPlugin />
         </div>
       </ComposerTerminalContextActionsContext>
@@ -2071,8 +2127,10 @@ export function ComposerPromptEditor({
   onCommandKeyDown,
   onPaste,
   editorRef,
+  literalText = false,
 }: ComposerPromptEditorProps) {
   const initialValueRef = useRef(value);
+  const initialLiteralTextRef = useRef(literalText);
   const initialTerminalContextsRef = useRef(terminalContexts);
   const initialSkillMetadataRef = useRef(skillMetadataByName(skills));
   const initialConfig = useMemo<InitialConfigType>(
@@ -2090,6 +2148,7 @@ export function ComposerPromptEditor({
           initialValueRef.current,
           initialTerminalContextsRef.current,
           initialSkillMetadataRef.current,
+          initialLiteralTextRef.current,
         );
       },
       onError: (error) => {
@@ -2116,6 +2175,7 @@ export function ComposerPromptEditor({
         onChange={onChange}
         onPaste={onPaste}
         editorRef={editorRef}
+        literalText={literalText}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
         containerClassName={containerClassName}
