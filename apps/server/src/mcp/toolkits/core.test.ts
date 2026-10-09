@@ -239,7 +239,12 @@ it.effect("returns a bounded public failure without serializing storage causes",
         text: '{"_tag":"OrchestratorMcpFailure","code":"orchestration_error","message":"The operation could not be completed."}',
       },
     ]);
-    const definition = server.tools.find(({ tool }) => tool.name === "t3_thread_organize");
+    // t3_thread_organize now succeeds with a Union (dispatch result or
+    // settlesWhenTurnEnds), and this fork's effect emits no outputSchema for a
+    // top-level union, so the dispatch-result schema is checked on a queue tool.
+    const organize = server.tools.find(({ tool }) => tool.name === "t3_thread_organize");
+    expect(organize).toBeDefined();
+    const definition = server.tools.find(({ tool }) => tool.name === "t3_queue_edit");
     expect(definition?.tool.outputSchema).toBeDefined();
     const validate = new AjvJsonSchemaValidator().getValidator(
       definition!.tool.outputSchema! as JsonSchemaType,
