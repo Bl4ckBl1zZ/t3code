@@ -441,6 +441,16 @@ public actor T3ConnectRelayClient {
     }
 }
 
+/// T3 Connect refusing this account (401) or this environment (403) after
+/// its own token retry: renewing the environment credential cannot succeed
+/// until the user signs in or is granted access again.
+extension T3ConnectRelayError: CredentialRejecting {
+    public var rejectsCredential: Bool {
+        guard case let .response(status, _, _) = self else { return false }
+        return status == 401 || status == 403
+    }
+}
+
 private extension T3ConnectRelayError {
     var isRejectedAuthorization: Bool {
         guard case let .response(status, _, _) = self else { return false }

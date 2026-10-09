@@ -50,6 +50,10 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     /// Set when this device's grant predates the server's granular
     /// permissions, so Files, Git and settings are denied until it is renewed.
     public var permissionUpdate: FeaturePermissionUpdate? = nil
+    /// Set when the server refused this device's credential (revoked,
+    /// replaced or expired, and renewing failed): the way back in. The
+    /// connection stops retrying until then.
+    public var accessEnded: FeaturePermissionUpdate? = nil
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?

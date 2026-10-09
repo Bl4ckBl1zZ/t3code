@@ -73,6 +73,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// The read in flight per environment. Replacing a credential drops it, so
     /// a read made with the old one is not saved.
     private var authSessionReads: [String: Task<AuthSessionState, Error>] = [:]
+    /// Environments whose saved credential the server refused (revoked,
+    /// replaced or expired, and renewing failed), with the way back in. Set
+    /// from failed reads, cleared by a new credential or a read that works.
+    private var refusedCredentials: [String: FeaturePermissionUpdate] = [:]
     private var environmentThemesByEnvironmentID: [String: [EnvironmentTheme]] = [:]
     private var projectScriptActionsInFlight: Set<String> = []
     private var pendingProjectScripts: [String: (terminalID: String, startedAt: Date)] = [:]
@@ -484,6 +488,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let environmentID = client.environment.id
         authSessions[environmentID] = nil
         authSessionReads[environmentID] = nil
+        setCredentialRefused(false, environmentID: environmentID)
         await client.reconnectWithNewCredential()
         Task { [weak self] in _ = try? await self?.authSession(for: client) }
     }
@@ -4210,6 +4215,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         break
                     }
                     self.lastShellEventAt = .now
+                    self.setCredentialRefused(false, environmentID: activeClient.environment.id)
                     self.emitConnection(.connected)
                     switch item {
                     case let .snapshot(shell, resolvedRepositoryIdentityRoots):
@@ -4261,7 +4267,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 let socketIsSynchronized =
                     await activeClient.liveConnectionActive()
                     && self.lastShellEventAt != nil
-                if !socketIsSynchronized {
+                // A refused credential is refused on every read; polling
+                // resumes once a new one replaces it.
+                let credentialRefused =
+                    self.refusedCredentials[activeClient.environment.id] != nil
+                if !socketIsSynchronized, !credentialRefused {
                     self.emitConnection(
                         .reconnecting,
                         detail: "Live updates reconnecting. Refreshing over HTTP."
@@ -4290,10 +4300,19 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                               ) else {
                             return
                         }
-                        self.emitConnection(
-                            .reconnecting,
-                            detail: "Server unreachable. Retrying automatically."
-                        )
+                        if CredentialRejection.isRejected(error) {
+                            let environmentID = activeClient.environment.id
+                            self.setCredentialRefused(true, environmentID: environmentID)
+                            self.emitConnection(
+                                .disconnected,
+                                detail: self.refusedCredentialDetail(environmentID: environmentID)
+                            )
+                        } else {
+                            self.emitConnection(
+                                .reconnecting,
+                                detail: "Server unreachable. Retrying automatically."
+                            )
+                        }
                     }
                 }
                 do {
@@ -4535,6 +4554,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) async {
         guard isCurrentSession(client: client, generation: generation),
               let environment = activeEnvironment else { return }
+        setCredentialRefused(false, environmentID: environment.id)
         // Merged, not replaced: enrichment may have resolved an identity this
         // snapshot was built too early to carry, and a stream that resumed
         // while the read was in flight may already hold newer rows.
@@ -5072,15 +5092,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return await withTaskGroup(of: EnvironmentShellLoad.self) { group in
             for pair in clients {
                 group.addTask {
-                    let shell = try? await pair.client.shellSnapshot(
-                        timeoutInterval: shellTimeoutInterval
-                    )
-                    guard shell != nil else {
+                    let shell: OrchestrationV2ShellSnapshot
+                    do {
+                        shell = try await pair.client.shellSnapshot(
+                            timeoutInterval: shellTimeoutInterval
+                        )
+                    } catch {
                         return EnvironmentShellLoad(
                             environment: pair.environment,
                             client: pair.client,
                             shell: nil,
-                            config: nil
+                            config: nil,
+                            credentialRefused: CredentialRejection.isRejected(error)
                         )
                     }
 
@@ -5148,6 +5171,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             savedIDs.contains($0.key)
         }
         authSessions = authSessions.filter { savedIDs.contains($0.key) }
+        refusedCredentials = refusedCredentials.filter { savedIDs.contains($0.key) }
 
         for load in loads {
             environmentClients[load.environment.id] = load.client
@@ -5161,6 +5185,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 shellsByEnvironmentID[load.environment.id] = shell
                 environmentConnectionStates[load.environment.id] = .connected
                 environmentConnectionDetails[load.environment.id] = nil
+                refusedCredentials[load.environment.id] = nil
+            } else if load.credentialRefused {
+                refusedCredentials[load.environment.id] =
+                    Self.refusedCredentialUpdate(kind: load.client.routeSelector.current().kind)
+                environmentConnectionStates[load.environment.id] = .disconnected
+                environmentConnectionDetails[load.environment.id] =
+                    refusedCredentialDetail(environmentID: load.environment.id)
             } else {
                 environmentConnectionStates[load.environment.id] = .disconnected
                 environmentConnectionDetails[load.environment.id] =
@@ -5782,6 +5813,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         mapped.mcpURL = EnvironmentRoutes.mcpURL(environment.routes)
             .flatMap { mcpOAuthSupport[$0.absoluteString] == true ? $0 : nil }
         mapped.permissionUpdate = permissionUpdate(environmentID: environment.id)
+        mapped.accessEnded = refusedCredentials[environment.id]
         return mapped
     }
 
@@ -7348,6 +7380,34 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return kind == .managedDPoP ? .renewManagedAccess : .pairAgain
     }
 
+    /// Records whether the server refuses an environment's saved credential,
+    /// publishing only a change so Home and Settings offer the way back in.
+    private func setCredentialRefused(_ refused: Bool, environmentID: String) {
+        let update = refused
+            ? Self.refusedCredentialUpdate(
+                kind: environmentClients[environmentID]?.routeSelector.current().kind
+            )
+            : nil
+        guard refusedCredentials[environmentID] != update else { return }
+        refusedCredentials[environmentID] = update
+        guard var snapshot = latestSnapshot else { return }
+        for index in snapshot.environments.indices where snapshot.environments[index].id == environmentID {
+            snapshot.environments[index].accessEnded = update
+        }
+        publish(snapshot)
+    }
+
+    /// A refused T3 Connect credential is renewed; a direct pairing is paired again.
+    private static func refusedCredentialUpdate(kind: EnvironmentKind?) -> FeaturePermissionUpdate {
+        kind == .managedDPoP ? .renewManagedAccess : .pairAgain
+    }
+
+    private func refusedCredentialDetail(environmentID: String) -> String {
+        refusedCredentials[environmentID] == .renewManagedAccess
+            ? "This device's T3 Connect access ended. Renew it to reconnect."
+            : "This device's access ended. Pair it again to reconnect."
+    }
+
     private static func title(from prompt: String, hasAttachments: Bool) -> String {
         let compact = prompt
             .split(whereSeparator: \.isWhitespace)
@@ -7504,6 +7564,8 @@ private struct EnvironmentShellLoad: Sendable {
     let client: T3Client
     let shell: OrchestrationV2ShellSnapshot?
     let config: ServerConfigSnapshot?
+    /// The read failed because the server refused the saved credential.
+    var credentialRefused = false
 }
 
 private struct EntityWireOwner: Hashable {

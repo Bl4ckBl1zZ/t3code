@@ -216,6 +216,11 @@ public actor WebSocketRPCClient {
             await value.finishConnectionLoop(loopID)
         }
 
+        func credentialRejected(_ error: any Error, loopID: UUID) async {
+            guard let value else { return }
+            await value.credentialRejected(error, loopID: loopID)
+        }
+
         func sendKeepalive(connectionID: UUID) async -> Bool {
             guard let value else { return false }
             return await value.sendKeepalive(expectedConnectionID: connectionID)
@@ -297,7 +302,13 @@ public actor WebSocketRPCClient {
     /// over a better route. Subscriptions resubscribe on the new socket; unary
     /// calls in flight fail like on any dropped connection.
     public func reconnectNow(reason: String = "route-change") async {
-        guard desired, connection != nil else { return }
+        guard desired else { return }
+        guard connection != nil else {
+            // A loop stopped by a refused credential dials again, for example
+            // with the credential that just replaced it.
+            start()
+            return
+        }
         ConnectionLog.logger.info("[conn] reconnect-requested reason=\(reason, privacy: .public)")
         await disconnected()
     }
@@ -503,6 +514,16 @@ public actor WebSocketRPCClient {
                     await openedConnection?.close()
                 }
                 guard await owner.isCurrentConnectionLoop(loopID), !Task.isCancelled else { break }
+                // A refused credential is refused again on every retry, so the
+                // loop stops instead of redialing with it. `start()` (any new
+                // request) and `reconnectNow` dial again, once each.
+                if openedID == nil, CredentialRejection.isRejected(error) {
+                    ConnectionLog.logger.error(
+                        "[conn] credential-rejected error=\(ConnectionLog.describe(error), privacy: .public)"
+                    )
+                    await owner.credentialRejected(error, loopID: loopID)
+                    break
+                }
                 retry += 1
                 // Jitter desynchronizes reconnects across environments so a
                 // server restart doesn't trigger simultaneous ticket mints.
@@ -544,6 +565,16 @@ public actor WebSocketRPCClient {
 
     private func ownsConnection(loopID: UUID, connectionID: UUID) -> Bool {
         isCurrentConnectionLoop(loopID) && self.connectionID == connectionID
+    }
+
+    /// Ends the loop at once, so the next `start()` dials again, and fails
+    /// requests waiting for a socket with the refusal rather than a timeout,
+    /// so whoever asked can say why. Subscriptions stay to resume later.
+    private func credentialRejected(_ error: any Error, loopID: UUID) {
+        guard self.loopID == loopID else { return }
+        self.loopID = nil
+        loopTask = nil
+        failUnary(error, includingUnsent: true)
     }
 
     private func finishConnectionLoop(_ loopID: UUID) {

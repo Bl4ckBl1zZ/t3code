@@ -108,12 +108,13 @@ struct SettingsServerDetailView: View {
             compatibilitySection(environment, reason: reason)
         }
 
-        if let update = environment.permissionUpdate {
+        if let update = environment.accessEnded ?? environment.permissionUpdate {
             Section {
                 SettingsPermissionUpdateNotice(
                     model: model,
                     environmentID: environment.id,
                     update: update,
+                    accessEnded: environment.accessEnded != nil,
                     onPairAgain: { pairingAgain = true }
                 )
             } header: {
