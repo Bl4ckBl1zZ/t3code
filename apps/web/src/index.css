@@ -1415,17 +1415,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     }
   }
 
+  /* 3rem leaves the timeline minimap markers room beside the conversation. */
   @media (min-width: 40rem) {
     .messages-timeline-row-frame {
-      padding-inline-start: 1.25rem;
-      padding-inline-end: calc(1.25rem + var(--chat-lane-inset-end, 0px));
+      padding-inline-start: 3rem;
+      padding-inline-end: calc(3rem + var(--chat-lane-inset-end, 0px));
     }
 
     .chat-composer-horizontal-inset {
-      padding-inline-start: calc(env(safe-area-inset-left) + 1.25rem);
-      padding-inline-end: calc(
-        env(safe-area-inset-right) + 1.25rem + var(--chat-lane-inset-end, 0px)
-      );
+      padding-inline-start: calc(env(safe-area-inset-left) + 3rem);
+      padding-inline-end: calc(env(safe-area-inset-right) + 3rem + var(--chat-lane-inset-end, 0px));
     }
   }
 

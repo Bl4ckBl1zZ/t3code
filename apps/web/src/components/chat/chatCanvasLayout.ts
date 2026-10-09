@@ -31,7 +31,7 @@ export const MIN_DOCKED_CHAT_WIDTH = 640;
  */
 export function resolveChatCanvasLayout({
   container,
-  padding = 20,
+  padding = 48,
   maxChatWidth = 768,
   detailsCard = null,
 }: {

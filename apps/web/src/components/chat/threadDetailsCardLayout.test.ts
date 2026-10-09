@@ -5,7 +5,7 @@ import {
   resolveThreadDetailsCardLayout,
 } from "./threadDetailsCardLayout";
 
-const lane = { padding: 20, minChatWidth: 640 };
+const lane = { padding: 48, minChatWidth: 640 };
 const resolve = (width: number, height: number) =>
   resolveThreadDetailsCardLayout({ container: { width, height }, lane });
 
@@ -16,8 +16,8 @@ describe("workspace card", () => {
   });
 
   it("becomes a popover when a readable chat lane cannot fit beside it", () => {
-    expect(resolve(984, 900)).toMatchObject({ x: 692 });
-    expect(resolve(983, 900)).toBeNull();
+    expect(resolve(1012, 900)).toMatchObject({ x: 720 });
+    expect(resolve(1011, 900)).toBeNull();
   });
 
   it("becomes a popover when the canvas is too short for readable controls", () => {
