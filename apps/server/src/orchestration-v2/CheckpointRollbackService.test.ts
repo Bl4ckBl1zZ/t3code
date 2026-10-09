@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 
 import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
@@ -27,6 +28,10 @@ import { ProjectionStoreReadError, ProjectionStoreV2 } from "./ProjectionStore.t
 import type { ProviderAdapterV2RollbackThreadInput } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import {
+  ThreadCommandExecutor,
+  layer as threadCommandExecutorLayer,
+} from "./ThreadCommandExecutor.ts";
 
 it.effect("rejects a non-ready checkpoint before opening a session or restoring files", () => {
   const threadId = ThreadId.make("thread:rollback-non-ready");
@@ -53,6 +58,7 @@ it.effect("rejects a non-ready checkpoint before opening a session or restoring 
         Layer.mock(CheckpointServiceV2)({ restore }),
         Layer.mock(EventSinkV2)({}),
         idAllocatorLayer,
+        threadCommandExecutorLayer,
         Layer.mock(ProjectionStoreV2)({
           getThreadRecords: () => Effect.succeed(projection),
         }),
@@ -123,6 +129,7 @@ it.effect("rejects a rollback when another provider thread became active", () =>
         Layer.mock(CheckpointServiceV2)({ restore }),
         Layer.mock(EventSinkV2)({}),
         idAllocatorLayer,
+        threadCommandExecutorLayer,
         Layer.mock(ProjectionStoreV2)({
           getThreadRecords: () => Effect.succeed(projection),
         }),
@@ -195,6 +202,7 @@ it.effect("rejects a rollback when provider selection changed before execution",
         Layer.mock(CheckpointServiceV2)({ restore }),
         Layer.mock(EventSinkV2)({}),
         idAllocatorLayer,
+        threadCommandExecutorLayer,
         Layer.mock(ProjectionStoreV2)({
           getThreadRecords: () => Effect.succeed(projection),
         }),
@@ -258,6 +266,7 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
         Layer.mock(CheckpointServiceV2)({ restore }),
         Layer.mock(EventSinkV2)({}),
         idAllocatorLayer,
+        threadCommandExecutorLayer,
         Layer.mock(ProjectionStoreV2)({
           getThreadRecords: () => Effect.succeed(projection),
         }),
@@ -333,6 +342,15 @@ it.effect("leaves a runless rollback marker so the discarded work stays visible"
     checkpointScopes: [{ id: scopeId }],
   } as unknown as OrchestrationV2ThreadProjection;
   const written: Array<{ readonly events: ReadonlyArray<{ readonly type: string }> }> = [];
+  let lockedThreads = Effect.succeed<ReadonlyArray<ThreadId>>([]);
+  const layerThreadCommands = Layer.effect(
+    ThreadCommandExecutor,
+    Effect.tap(KeyedLock.make<ThreadId>(), (lock) =>
+      Effect.sync(() => {
+        lockedThreads = lock.activeKeys;
+      }),
+    ),
+  );
   const testLayer = checkpointRollbackServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -341,12 +359,16 @@ it.effect("leaves a runless rollback marker so the discarded work stays visible"
           deleteStaleRefs: () => Effect.void,
         }),
         Layer.mock(EventSinkV2)({
-          write: ((input: { readonly events: ReadonlyArray<{ readonly type: string }> }) => {
-            written.push(input);
-            return Effect.void;
-          }) as never,
+          write: ((input: { readonly events: ReadonlyArray<{ readonly type: string }> }) =>
+            Effect.map(lockedThreads, (locked) => {
+              // A thread command that planned against the old provider thread
+              // must not commit after this and undo the rollback.
+              assert.include(locked, threadId);
+              written.push(input);
+            })) as never,
         }),
         idAllocatorLayer,
+        layerThreadCommands,
         Layer.mock(ProjectionStoreV2)({
           getThreadRecords: () => Effect.succeed(projection),
         }),
@@ -448,6 +470,7 @@ it.effect.each([{ targetOrdinal: 0 }, { targetOrdinal: 1 }])(
           }),
           Layer.mock(EventSinkV2)({ write: (() => Effect.void) as never }),
           idAllocatorLayer,
+          threadCommandExecutorLayer,
           Layer.mock(ProjectionStoreV2)({
             getThreadRecords: () => Effect.succeed(projection),
           }),
@@ -499,6 +522,7 @@ it.effect("records a rollback that failed for good with the reason the client sh
           }) as never,
         }),
         idAllocatorLayer,
+        threadCommandExecutorLayer,
         Layer.mock(ProjectionStoreV2)({
           getThreadRecords: (() => Effect.succeed({ thread })) as never,
         }),
@@ -574,6 +598,7 @@ it.effect("drops a late failure from a rollback that a newer one superseded", ()
           }) as never,
         }),
         idAllocatorLayer,
+        threadCommandExecutorLayer,
         Layer.mock(ProjectionStoreV2)({
           getThreadRecords: (() => Effect.succeed({ thread })) as never,
         }),

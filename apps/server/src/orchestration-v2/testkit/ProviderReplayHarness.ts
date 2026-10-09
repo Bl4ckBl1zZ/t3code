@@ -386,6 +386,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         idAllocatorLayer,
         storesLayer,
         providerSessionManagerProvided,
+        threadCommandExecutorLayer,
         runtimeLayer,
       ),
     ),

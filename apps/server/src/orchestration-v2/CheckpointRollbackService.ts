@@ -20,6 +20,7 @@ import { ProjectionStoreV2, type ProjectionStoreV2Error } from "./ProjectionStor
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { ThreadCommandExecutor } from "./ThreadCommandExecutor.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
   "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
@@ -104,6 +105,7 @@ export const layer: Layer.Layer<
   | ProjectionStoreV2
   | ProviderSessionManagerV2
   | RuntimePolicyV2
+  | ThreadCommandExecutor
 > = Layer.effect(
   CheckpointRollbackServiceV2,
   Effect.gen(function* () {
@@ -113,6 +115,7 @@ export const layer: Layer.Layer<
     const projections = yield* ProjectionStoreV2;
     const sessions = yield* ProviderSessionManagerV2;
     const runtimePolicy = yield* RuntimePolicyV2;
+    const threadCommands = yield* ThreadCommandExecutor;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -258,107 +261,115 @@ export const layer: Layer.Layer<
         yield* checkpoints.deleteStaleRefs({ scope, checkpoints: staleCheckpoints });
       }
 
-      const now = yield* DateTime.now;
-      const makeEvent = <Event extends OrchestrationV2DomainEvent>(event: Omit<Event, "id">) =>
-        Effect.map(
-          ids.allocate.event({ threadId: event.threadId }),
-          (id) =>
-            ({
-              ...event,
-              id,
-            }) as Event,
-        );
-      const events: Array<OrchestrationV2DomainEvent> = [];
-      events.push(
-        yield* makeEvent({
-          type: "provider-thread.updated",
-          threadId: input.threadId,
-          driver: providerThread.driver,
-          providerInstanceId: providerThread.providerInstanceId,
-          occurredAt: now,
-          payload: {
-            ...snapshot.providerThread,
-            lastRunOrdinal: targetOrdinal === 0 ? null : targetOrdinal,
-            updatedAt: now,
-          },
-        }),
-      );
-      for (const staleCheckpoint of staleCheckpoints) {
-        events.push(
-          yield* makeEvent({
-            type: "checkpoint.captured",
-            threadId: input.threadId,
-            ...(staleCheckpoint.runId === null ? {} : { runId: staleCheckpoint.runId }),
-            nodeId: staleCheckpoint.nodeId,
-            providerInstanceId: providerThread.providerInstanceId,
-            occurredAt: now,
-            payload: { ...staleCheckpoint, status: "stale" },
-          }),
-        );
-      }
-      // Runless on purpose: run-scoped items disappear along with the runs
-      // being discarded, and this row has to outlive them. The ordinal lands
-      // past every surviving item and ahead of the next run's first item.
-      events.push(
-        yield* makeEvent({
-          type: "turn-item.updated",
-          threadId: input.threadId,
-          providerInstanceId: providerThread.providerInstanceId,
-          occurredAt: now,
-          payload: {
-            id: ids.derive.checkpointRollbackTurnItem({ checkpointId: checkpoint.id }),
-            threadId: input.threadId,
-            runId: null,
-            nodeId: null,
-            providerThreadId: providerThread.id,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            // The position store bands run-scoped ordinals at runOrdinal *
-            // 1_000_000; the start of the rolled-back run's band sits past
-            // every surviving item and ahead of the next run's first item.
-            ordinal: (targetOrdinal + 1) * 1_000_000,
-            status: "completed",
-            title: "Rolled back",
-            startedAt: now,
-            completedAt: now,
-            updatedAt: now,
-            type: "checkpoint_rollback",
-            checkpointId: checkpoint.id,
-            scopeId: scope.id,
-            restoredFileCount: checkpoint.files?.length ?? 0,
-            rolledBackRunCount: runsToRollback.length,
-          },
-        }),
-      );
-      for (const run of runsToRollback) {
-        const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
-        events.push(
-          yield* makeEvent({
-            type: "run.updated",
-            threadId: input.threadId,
-            runId: run.id,
-            ...(rootNode === undefined ? {} : { nodeId: rootNode.id }),
-            providerInstanceId: run.providerInstanceId,
-            occurredAt: now,
-            payload: { ...run, status: "rolled_back", completedAt: now },
-          }),
-        );
-        if (rootNode !== undefined) {
+      // Thread commands write full provider thread rows under this lock. Without
+      // it, a message sent during the rollback can plan against the old native
+      // session and commit after this, undoing the provider's fork.
+      yield* threadCommands.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const makeEvent = <Event extends OrchestrationV2DomainEvent>(event: Omit<Event, "id">) =>
+            Effect.map(
+              ids.allocate.event({ threadId: event.threadId }),
+              (id) =>
+                ({
+                  ...event,
+                  id,
+                }) as Event,
+            );
+          const events: Array<OrchestrationV2DomainEvent> = [];
           events.push(
             yield* makeEvent({
-              type: "node.updated",
+              type: "provider-thread.updated",
               threadId: input.threadId,
-              runId: run.id,
-              nodeId: rootNode.id,
-              providerInstanceId: run.providerInstanceId,
+              driver: providerThread.driver,
+              providerInstanceId: providerThread.providerInstanceId,
               occurredAt: now,
-              payload: { ...rootNode, status: "rolled_back", completedAt: now },
+              payload: {
+                ...snapshot.providerThread,
+                lastRunOrdinal: targetOrdinal === 0 ? null : targetOrdinal,
+                updatedAt: now,
+              },
             }),
           );
-        }
-      }
-      yield* eventSink.write({ events });
+          for (const staleCheckpoint of staleCheckpoints) {
+            events.push(
+              yield* makeEvent({
+                type: "checkpoint.captured",
+                threadId: input.threadId,
+                ...(staleCheckpoint.runId === null ? {} : { runId: staleCheckpoint.runId }),
+                nodeId: staleCheckpoint.nodeId,
+                providerInstanceId: providerThread.providerInstanceId,
+                occurredAt: now,
+                payload: { ...staleCheckpoint, status: "stale" },
+              }),
+            );
+          }
+          // Runless on purpose: run-scoped items disappear along with the runs
+          // being discarded, and this row has to outlive them. The ordinal lands
+          // past every surviving item and ahead of the next run's first item.
+          events.push(
+            yield* makeEvent({
+              type: "turn-item.updated",
+              threadId: input.threadId,
+              providerInstanceId: providerThread.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                id: ids.derive.checkpointRollbackTurnItem({ checkpointId: checkpoint.id }),
+                threadId: input.threadId,
+                runId: null,
+                nodeId: null,
+                providerThreadId: providerThread.id,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                // The position store bands run-scoped ordinals at runOrdinal *
+                // 1_000_000; the start of the rolled-back run's band sits past
+                // every surviving item and ahead of the next run's first item.
+                ordinal: (targetOrdinal + 1) * 1_000_000,
+                status: "completed",
+                title: "Rolled back",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                type: "checkpoint_rollback",
+                checkpointId: checkpoint.id,
+                scopeId: scope.id,
+                restoredFileCount: checkpoint.files?.length ?? 0,
+                rolledBackRunCount: runsToRollback.length,
+              },
+            }),
+          );
+          for (const run of runsToRollback) {
+            const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
+            events.push(
+              yield* makeEvent({
+                type: "run.updated",
+                threadId: input.threadId,
+                runId: run.id,
+                ...(rootNode === undefined ? {} : { nodeId: rootNode.id }),
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: now,
+                payload: { ...run, status: "rolled_back", completedAt: now },
+              }),
+            );
+            if (rootNode !== undefined) {
+              events.push(
+                yield* makeEvent({
+                  type: "node.updated",
+                  threadId: input.threadId,
+                  runId: run.id,
+                  nodeId: rootNode.id,
+                  providerInstanceId: run.providerInstanceId,
+                  occurredAt: now,
+                  payload: { ...rootNode, status: "rolled_back", completedAt: now },
+                }),
+              );
+            }
+          }
+          yield* eventSink.write({ events });
+        }),
+      );
     });
 
     const recordPermanentFailure: CheckpointRollbackServiceV2Shape["recordPermanentFailure"] = (
