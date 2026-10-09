@@ -83,6 +83,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
+  ListFilterIcon,
   MessageCircleQuestionIcon,
   MessageSquareIcon,
   PinIcon,
@@ -4927,7 +4928,7 @@ export default function Sidebar() {
                         />
                       </span>
                     ) : (
-                      <FolderIcon className="size-4 shrink-0" />
+                      <ListFilterIcon className="size-4 shrink-0" />
                     )}
                     <span className="min-w-0 flex-1 truncate">
                       {scopedProjectGroup?.displayName ?? "All projects"}
