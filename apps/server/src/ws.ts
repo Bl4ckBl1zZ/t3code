@@ -117,6 +117,7 @@ import * as LiveThreadShells from "./orchestration-v2/LiveThreadShells.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
+  loadShellSnapshotParts,
   canChangeShell,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
@@ -1014,15 +1015,12 @@ const makeWsRpcLayer = (
         }) {
           const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
           const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
-            const base = yield* sql.withTransaction(
-              Effect.gen(function* () {
-                const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
-                const threads = yield* threadManagement.getShellSnapshot({ location: "active" });
-                return buildActiveShellSnapshot({
-                  projects,
-                  threads,
-                  snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-                });
+            const base = buildActiveShellSnapshot(
+              yield* loadShellSnapshotParts({
+                sql,
+                readThreads: threadManagement.readShellSnapshot({ location: "active" }),
+                listProjects: projectionSnapshotQuery.getProjectShellsWithoutEnrichment(),
+                latestSequence: applicationEvents.latestApplicationSequence,
               }),
             );
             const enriched = yield* enrichProjectShells(base.projects);
@@ -1253,33 +1251,33 @@ const makeWsRpcLayer = (
         },
       );
 
-      const getOrchestrationV2ArchivedShellSnapshot = sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
-            const threads = yield* threadManagement.getShellSnapshot({ location: "archive" });
-            return {
-              schemaVersion: threads.schemaVersion,
-              snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-              projects,
-              threads: threads.archivedThreads,
-            } as const;
-          }),
-        )
-        .pipe(
-          Effect.flatMap((snapshot) =>
-            enrichProjectShells(snapshot.projects).pipe(
-              Effect.map(({ projects }) => ({ ...snapshot, projects })),
-            ),
+      const getOrchestrationV2ArchivedShellSnapshot = Effect.gen(function* () {
+        const { threads, projects, snapshotSequence } = yield* loadShellSnapshotParts({
+          sql,
+          readThreads: threadManagement.readShellSnapshot({ location: "archive" }),
+          listProjects: projectionSnapshotQuery.getProjectShellsWithoutEnrichment(),
+          latestSequence: applicationEvents.latestApplicationSequence,
+        });
+        return {
+          schemaVersion: threads.schemaVersion,
+          snapshotSequence,
+          projects,
+          threads: threads.archivedThreads,
+        } as const;
+      }).pipe(
+        Effect.flatMap((snapshot) =>
+          enrichProjectShells(snapshot.projects).pipe(
+            Effect.map(({ projects }) => ({ ...snapshot, projects })),
           ),
-          Effect.mapError(
-            (cause) =>
-              new OrchestrationV2GetShellSnapshotError({
-                message: "Failed to load archived thread snapshot",
-                cause,
-              }),
-          ),
-        );
+        ),
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2GetShellSnapshotError({
+              message: "Failed to load archived thread snapshot",
+              cause,
+            }),
+        ),
+      );
 
       const subscribeOrchestrationV2ArchivedShell = Effect.fn(
         "ws.orchestrationV2.subscribeArchivedShell",

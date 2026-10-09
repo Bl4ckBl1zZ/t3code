@@ -224,6 +224,7 @@ it.effect(
           getThreadRecords: () => Effect.die("unused record read"),
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
+          readShellSnapshot: () => Effect.die("unused readShellSnapshot"),
           getThreadShell: () => Effect.die("unused getThreadShell"),
           listThreads: () => Effect.die("unused listThreads"),
           getPlan: () => Effect.die("unused getPlan"),
