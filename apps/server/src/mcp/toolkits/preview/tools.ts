@@ -128,10 +128,11 @@ export const PreviewSetAppearanceTool = safeBrowserTool(
     .annotate(Tool.Idempotent, true),
 );
 
-export const PreviewSnapshotTool = readonlyBrowserTool(
+// Not read-only: save=true writes the screenshot to disk.
+export const PreviewSnapshotTool = safeBrowserTool(
   Tool.make("preview_snapshot", {
     description:
-      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, and a PNG screenshot. The text is capped near 20 KB and lists what it omitted; use preview_evaluate to read more. Set includeImage=false for text-only output. To keep visual evidence for the human, pass save:true; the result then includes savedScreenshotPath, which can be embedded with markdown image syntax. Use savePath only when the screenshot should live inside the repo.",
+      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, and screenshot dimensions. The text is capped near 20 KB and lists what it omitted; use preview_evaluate to read more. Set includeImage=true only when you need to see the page; the image stays in tool history. To keep visual evidence for the human, pass save:true; the result then includes savedScreenshotPath, which can be embedded with markdown image syntax. Use savePath only when the screenshot should live inside the repo.",
     parameters: PreviewAutomationSnapshotInput,
     success: PreviewAutomationSnapshot,
     failure: PreviewToolFailure,
