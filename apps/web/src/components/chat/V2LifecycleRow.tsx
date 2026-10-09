@@ -343,6 +343,7 @@ function SubagentTimelineTooltip(props: {
           origin: item.origin,
           model: agent?.model ?? null,
           providerInstanceId: item.providerInstanceId,
+          modelSelection: agent?.modelSelection,
         },
         modelSelection: child?.modelSelection,
         providerEntry,

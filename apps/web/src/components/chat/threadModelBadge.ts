@@ -68,18 +68,25 @@ export interface SubagentModelTraits {
 
 /**
  * Reasoning tier and speed of the selection a subagent runs on, for its hover
- * card. Only a T3-owned subagent runs on its child thread's model selection;
- * a provider-native child thread mirrors the parent's, and a child that moved
- * to another model or instance no longer describes the subagent. Both return
- * null so the card never claims traits the agent is not using.
+ * card. A selection the provider reported for the subagent wins, and it stays
+ * after the subagent completes. Without one, only a T3-owned subagent runs on
+ * its child thread's model selection; a provider-native child thread mirrors
+ * the parent's, and a child that moved to another model or instance no longer
+ * describes the subagent. Both return null so the card never claims traits the
+ * agent is not using.
  */
 export function resolveSubagentModelTraits(input: {
-  readonly subagent: Pick<OrchestrationV2Subagent, "origin" | "model" | "providerInstanceId">;
+  readonly subagent: Pick<
+    OrchestrationV2Subagent,
+    "origin" | "model" | "providerInstanceId" | "modelSelection"
+  >;
   readonly modelSelection: ModelSelection | null | undefined;
   readonly providerEntry: ProviderInstanceEntry | null | undefined;
 }): SubagentModelTraits | null {
-  const { subagent, modelSelection: selection, providerEntry: entry } = input;
-  if (subagent.origin !== "app_owned" || !selection) return null;
+  const { subagent, providerEntry: entry } = input;
+  const selection =
+    subagent.modelSelection ?? (subagent.origin === "app_owned" ? input.modelSelection : null);
+  if (!selection) return null;
   if (selection.instanceId !== subagent.providerInstanceId) return null;
   const resolveSlug = (value: string | null | undefined) =>
     (entry ? resolveSelectableModel(entry.driverKind, value, entry.models) : null) ?? value?.trim();

@@ -863,6 +863,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   prompt: Schema.String,
   title: Schema.NullOr(Schema.String),
   model: Schema.NullOr(Schema.String),
+  modelSelection: Schema.optional(ModelSelection),
   // Parent-wake policy for app-owned tasks: "always" offers a continuation on
   // every terminal (async delegations; a live parent run is steered, with
   // queue_after_active as fallback), "settled_only" offers only when the parent has no

@@ -6076,13 +6076,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   : {
                       thread: {
                         id: name.includes("wrong child") ? "other-child" : threadId,
-                        ...(name.startsWith("current Codex") ? { model: "gpt-6-sol" } : {}),
+                        ...(name.startsWith("current Codex")
+                          ? { model: "gpt-6-sol", reasoningEffort: "high" }
+                          : {}),
                       },
                       model: name.startsWith("current Codex")
                         ? null
                         : name === "wrong child"
                           ? "gpt-5.6-sol"
                           : model,
+                      reasoningEffort: "high",
+                      serviceTier: "priority",
                     },
               ),
             );
@@ -6102,6 +6106,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         yield* TestClock.adjust("100 millis");
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
         assert.equal(harness.subagentUpdates().at(-1)?.subagent.model, model);
+        if (model) {
+          assert.deepEqual(harness.subagentUpdates().at(-1)?.subagent.modelSelection?.options, [
+            { id: "reasoningEffort", value: "high" },
+            ...(name.startsWith("current Codex") ? [] : [{ id: "serviceTier", value: "priority" }]),
+          ]);
+        }
         // `thread/read` answers for current Codex; older app servers fall back to `thread/resume`.
         assert.equal(metadataRequests, name === "current Codex Sol" ? 1 : 2);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
@@ -6190,6 +6200,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                       threadId: RESUME_CHILD_THREAD,
                       threadSettings: {
                         model,
+                        effort: "low",
+                        serviceTier: "ultrafast",
                         modelProvider: "openai",
                         cwd: "/workspace",
                         approvalPolicy: "never",
@@ -6200,12 +6212,32 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     },
             },
           };
+          const initialSettings: CodexReplay.CodexAppServerReplayEntry = {
+            type: "emit_inbound",
+            frame: {
+              method: "thread/settings/updated",
+              params: {
+                threadId: RESUME_CHILD_THREAD,
+                threadSettings: {
+                  model: "gpt-6-astra",
+                  effort: "low",
+                  serviceTier: "ultrafast",
+                  modelProvider: "openai",
+                  cwd: "/workspace",
+                  approvalPolicy: "never",
+                  approvalsReviewer: "auto_review",
+                  collaborationMode: { mode: "default", settings: { model: "gpt-6-astra" } },
+                  sandboxPolicy: { type: "dangerFullAccess" },
+                },
+              },
+            },
+          };
           const harness = yield* makeCodexReplayHarness(
             {
               ...resumeSubagentTranscript,
               entries: resumeSubagentTranscript.entries.flatMap((entry) =>
                 entry.type === "emit_inbound" && entry.label === "turn/completed/root"
-                  ? [entry, notification]
+                  ? [entry, initialSettings, notification]
                   : [entry],
               ),
             },
@@ -6234,6 +6266,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* Deferred.succeed(releaseMetadata, undefined);
           yield* TestClock.adjust("30 seconds");
           assert.equal(harness.subagentUpdates().at(-1)?.subagent.model, model);
+          assert.deepEqual(harness.subagentUpdates().at(-1)?.subagent.modelSelection?.options, [
+            { id: "reasoningEffort", value: "low" },
+            { id: "serviceTier", value: "ultrafast" },
+          ]);
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
       ),
   );
