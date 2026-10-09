@@ -3405,7 +3405,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("delete-confirmation")}
-          description="Ask before deleting threads, and whether to remove a worktree they leave unused. When off, those worktrees are kept."
+          description="Ask before deleting threads, and whether to remove a worktree they leave unused. When off, those worktrees are removed without asking."
           resetAction={
             settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete ? (
               <SettingResetButton

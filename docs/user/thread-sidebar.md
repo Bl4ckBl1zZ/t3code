@@ -93,8 +93,10 @@ project**.
 Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With
 **Settings → General → Delete confirmation** on, T3 Code asks once before deleting. If the deleted
 threads were the only ones using a worktree, it then asks once whether to delete those worktrees
-too, however many threads you selected. With the setting off, threads are deleted without asking
-and their worktrees are kept. To clean up settled threads automatically, see
+too, however many threads you selected. With the setting off, nothing asks: threads are deleted
+and worktrees no other thread uses are removed along with them, including uncommitted changes in
+those worktrees. A branch T3 Code created for a removed worktree is deleted too once it is merged;
+branches with unmerged work are kept. To clean up settled threads automatically, see
 [Auto-delete settled threads](#auto-delete-settled-threads).
 
 ## Snooze until later
