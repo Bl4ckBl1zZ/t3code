@@ -1,55 +1,21 @@
 import SwiftUI
 
-/// The transcript bar's right-hand capsule: what this thread left running in the
-/// background, in the space a glance can spend on it.
+/// The activity pill's background half: what this thread left running, in the
+/// space a glance can spend on it — a build, a dev server, a monitor parked on
+/// a condition. The agents half reports work the thread delegated; this reports
+/// work it launched and walked away from.
 ///
-/// The left-hand capsule reports agents — work the thread delegated. This
-/// reports work the thread launched and walked away from: a build, a dev server,
-/// a monitor parked on a condition. Both are things happening while the reader
-/// is looking at something else, which is why they share a bar.
-///
-/// They are two capsules rather than one split pill because they answer to two
-/// different sheets. A single button spanning both would have to send every tap
-/// to whichever destination won the coin toss, and a divider inside a button
-/// looks tappable without being so.
+/// Only the label: the pill is the button, and the activity sheet lists the
+/// rows behind it.
 ///
 /// Mirrors apps/web/src/components/chat/BackgroundProcessesControl.tsx, the
 /// strip above the desktop composer.
-struct ThreadBackgroundTasksCapsule: View {
+struct ThreadBackgroundSegment: View {
     let summary: ThreadBackgroundSummary
     let nowMilliseconds: Int
-    let processes: [ThreadDetailsBackgroundProcess]
-
-    @State private var isSheetPresented = false
 
     var body: some View {
-        Button {
-            isSheetPresented = true
-        } label: {
-            collapsedLabel
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(
-            ThreadDetailsBackgroundTasks.capsuleAccessibilityLabel(
-                summary, nowMilliseconds: nowMilliseconds
-            )
-        )
-        .accessibilityIdentifier("thread-background-tasks-capsule")
-        .sheet(isPresented: $isSheetPresented) {
-            ThreadBackgroundTasksSheet(processes: processes)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-    }
-
-    // MARK: Collapsed
-
-    /// Geometry is the agents capsule's, to the point: the two sit on one line
-    /// and any difference in height or corner reads as a mistake rather than as
-    /// a distinction. `ThreadRelationshipsBanner.collapsedLabel` is the origin of
-    /// every number here.
-    private var collapsedLabel: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 6) {
             glyph
             Text(label)
                 .font(T3Typography.supportingStrong)
@@ -57,12 +23,6 @@ struct ThreadBackgroundTasksCapsule: View {
                 .monospacedDigit()
                 .lineLimit(1)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .frame(minHeight: 48)
-        .t3GlassEffect(.regular, interactive: true, in: collapsedShape)
-        .t3GlassRim(in: collapsedShape)
-        .contentShape(collapsedShape)
     }
 
     /// Several tasks get their noun: a bare "3" beside a glyph read as a
@@ -74,29 +34,23 @@ struct ThreadBackgroundTasksCapsule: View {
         return ThreadDetailsBackgroundTasks.capsuleLabel(summary, nowMilliseconds: nowMilliseconds)
     }
 
-    private var collapsedShape: Capsule {
-        Capsule(style: .continuous)
-    }
-
     @ViewBuilder
     private var glyph: some View {
         switch ThreadDetailsBackgroundTasks.capsuleGlyph(summary, nowMilliseconds: nowMilliseconds) {
-        case .command:
+        case .command, .outcome:
             symbol("terminal")
         case let .deadline(fraction):
             DeadlineRing(fraction: fraction, color: tint)
         case .asleep:
             symbol("moon.zzz.fill")
-        case .outcome:
-            symbol("terminal")
         }
     }
 
     private func symbol(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.footnote.weight(.medium))
+            .font(.caption.weight(.semibold))
             .foregroundStyle(tint)
-            .frame(minWidth: 17, minHeight: 17)
+            .frame(minWidth: 15, minHeight: 15)
     }
 
     private var tint: Color {
@@ -150,7 +104,7 @@ private struct DeadlineRing: View {
     let fraction: Double?
     let color: Color
 
-    @ScaledMetric(relativeTo: .footnote) private var diameter: CGFloat = 17
+    @ScaledMetric(relativeTo: .footnote) private var diameter: CGFloat = 15
     private let lineWidth: CGFloat = 2
 
     var body: some View {
@@ -169,32 +123,5 @@ private struct DeadlineRing: View {
         }
         .frame(width: diameter, height: diameter)
         .accessibilityHidden(true)
-    }
-}
-
-/// The capsule's destination: the same rows the thread details sheet lists under
-/// "Background Tasks", without the four-row ceiling that section needs to stay
-/// proportionate to the sections around it. Here they are the entire subject, so
-/// truncating them would only hide the thing the reader tapped to see.
-private struct ThreadBackgroundTasksSheet: View {
-    let processes: [ThreadDetailsBackgroundProcess]
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(processes, id: \.id) { process in
-                        ThreadDetailsBackgroundTaskRow(process: process)
-                            .t3GroupedRow()
-                    }
-                }
-            }
-            .listStyle(.insetGrouped)
-            .t3GroupedListBackground()
-            .navigationTitle("Background Tasks")
-            .navigationBarTitleDisplayMode(.inline)
-            .t3NavigationChrome()
-            .t3SheetToolbar(.close)
-        }
     }
 }
