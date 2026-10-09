@@ -1152,6 +1152,10 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     /// contract always sends driver and instance: `model` is null when the
     /// provider does not report one, and an absent field must not drop the row.
     public var model: String? = nil
+    /// The model, effort and service tier the provider reported for this
+    /// subagent. It outlives the subagent, so a finished agent keeps its
+    /// traits; absent when the provider does not report one or on older servers.
+    public var modelSelection: ModelSelection? = nil
     public var driver: String? = nil
     public var providerInstanceId: String? = nil
     /// When the task's first run started. Null while it is still pending; Stop

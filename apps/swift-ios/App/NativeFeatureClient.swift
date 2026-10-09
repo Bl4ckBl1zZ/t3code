@@ -5996,18 +5996,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     amongDrivers: drivers
                 )
             } ?? false
+            let reported = subagent.modelSelection.map(mapSelection)
             result[subagent.id] = SubagentRowMetadata(
                 modelLabel: resolved.modelLabel,
                 traits: ThreadLifecycle.resolveSubagentModelTraits(
                     origin: subagent.origin,
                     model: subagent.model,
                     providerInstanceID: subagent.providerInstanceId,
+                    reportedSelection: reported,
                     childSelection: child.map { mapSelection($0.modelSelection) },
                     provider: catalog.first { $0.id == subagent.providerInstanceId }
                 ),
                 account: showsAccount ? provider.map { $0.displayName ?? providerDisplayName($0.driver) } : nil,
                 accentColor: showsAccount ? ProviderAccountBadge.normalizedAccent(provider?.accentColor) : nil,
-                workspace: resolved.workspace
+                workspace: resolved.workspace,
+                reportedSelection: reported
             )
         }
         return result

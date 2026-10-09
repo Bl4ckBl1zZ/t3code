@@ -1198,14 +1198,22 @@ public struct ThreadDetailView: View {
     }
 
     private func providerSubagentBar(_ detail: FeatureThreadDetail) -> some View {
-        let selection = currentSelection
+        let parentThreadID = detail.workflow.thread?.parentThreadID
+        // A provider-native child thread mirrors its parent's selection, so
+        // what the provider reported for this subagent (on the parent's row,
+        // when that thread is loaded) is the better description, and it stays
+        // after the subagent completes.
+        let reported = parentThreadID.flatMap { self.model.details[$0] }.flatMap { parent in
+            parent.workflow.subagents.first { $0.childThreadID == thread.id }
+                .flatMap { parent.subagentMetadata[$0.id]?.reportedSelection }
+        }
+        let selection = reported ?? currentSelection
         let provider = selection.flatMap { selection in
             threadProviders.first { $0.id == selection.providerID }
         }
         let model = selection.flatMap { selection in
             provider?.models.first { $0.id == selection.modelID }
         }
-        let parentThreadID = detail.workflow.thread?.parentThreadID
         let showsAccount = provider.map {
             ProviderAccountBadge.shows(
                 driver: $0.driver,
