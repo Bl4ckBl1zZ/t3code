@@ -6793,17 +6793,17 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      if (command === "rightPanel.toggleMaximized") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) toggleRightPanelMaximized();
+        return;
+      }
+
       if (command === "threadPanel.toggle") {
         event.preventDefault();
         event.stopPropagation();
         toggleThreadPanel();
-        return;
-      }
-
-      if (command === "rightPanel.toggleMaximized") {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleRightPanelMaximized();
         return;
       }
 
@@ -6961,6 +6961,14 @@ function ChatViewContent(props: ChatViewProps) {
     logicalProjectEnvironments,
     onEnvironmentChange,
   ]);
+
+  // A focused desktop browser page forwards these chords as menu actions.
+  useEffect(() => {
+    return window.desktopBridge?.onMenuAction((action) => {
+      if (action === "rightPanel.toggle") toggleRightPanel();
+      else if (action === "rightPanel.toggleMaximized") toggleRightPanelMaximized();
+    });
+  }, [toggleRightPanel, toggleRightPanelMaximized]);
 
   const guardCheckpointRestore = useCallback((): boolean => {
     if (!activeThread || isRevertingCheckpoint) return false;

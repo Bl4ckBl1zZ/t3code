@@ -856,6 +856,14 @@ export const DesktopPreviewPointerEventSchema: Schema.Codec<DesktopPreviewPointe
     createdAt: Schema.String,
   });
 
+/** A `target="_blank"` link the previewed page asked to open beside itself. */
+export interface DesktopPreviewOpenLinkEvent {
+  tabId: string;
+  url: string;
+  /** True for middle-click / Cmd-click, which should not take focus. */
+  background: boolean;
+}
+
 /** Recording decorations are forwarded separately from the captured page pixels. */
 export const DesktopPreviewRecordingInputSchema = Schema.Union([
   Schema.Struct({
@@ -1550,6 +1558,7 @@ export interface DesktopPreviewBridge {
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
 }
 
 export type ConfirmDialogVariant = "default" | "destructive";
