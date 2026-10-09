@@ -79,6 +79,8 @@ public struct ThreadDetailView: View {
     @State private var queueBusyRunID: String?
     @FocusState private var composerFocused: Bool
     @State private var readingHistoryThreadID: String?
+    /// Find in Thread; open only on servers that answer it.
+    @State private var find = ThreadFindModel()
 
     public init(
         model: FeatureRootModel,
@@ -228,11 +230,18 @@ public struct ThreadDetailView: View {
             if failed { PlatformHapticEngine.shared.play(.error) }
         }
         .onChange(of: composerFocused) { if composerFocused { readingHistoryThreadID = nil } }
+        .modifier(ThreadFindLifecycle(
+            find: find,
+            threadID: thread.id,
+            isAvailable: isFindAvailable,
+            contentRevision: model.detailRenderUpdates[thread.id]?.revision
+        ))
         .onChange(of: draft) { scheduleDraftSave() }
         .onChange(of: attachments) { scheduleDraftSave() }
         .onDisappear {
             model.releaseThread(thread.id)
             persistDraftBeforeLeaving()
+            find.close()
         }
         .sheet(item: $citationPreview) { citation in
             AssistantCitationPreview(citation: citation) { openCitationSource(citation) }
@@ -247,13 +256,13 @@ public struct ThreadDetailView: View {
         ) {
             ThreadMessageActionsStore.Handlers(
                 restore: { restoreRequest = $0 },
-                fork: { [model, thread] point in
+                fork: { [model, thread, forkTitle] point in
                     try await model.client.forkThread(
                         threadID: thread.id,
                         sourceThreadID: point.sourceThreadID,
                         runID: point.runID,
                         latestOnly: point.latestOnly,
-                        title: "\(model.details[thread.id]?.thread.title ?? thread.title) fork"
+                        title: forkTitle
                     )
                 },
                 isThreadReady: { [model] id in model.snapshot.threads.contains { $0.id == id } },
@@ -477,6 +486,12 @@ public struct ThreadDetailView: View {
     /// Details keeps the full picture behind the info button.
     private var threadActionsMenu: some View {
         Menu {
+            if isFindAvailable {
+                Section {
+                    Button("Find in Thread", systemImage: "magnifyingglass", action: openFind)
+                        .accessibilityIdentifier("thread-find-button")
+                }
+            }
             if currentThread.supportsPinning != false {
                 Section {
                     Button(
@@ -544,6 +559,34 @@ public struct ThreadDetailView: View {
         Task { _ = await model.setPinned(thread.id, pinned: pinned) }
     }
 
+    /// The title a message fork gets: the thread's latest title plus "fork".
+    private var forkTitle: String {
+        let title = model.details[thread.id]?.thread.title ?? thread.title
+        return title + " fork"
+    }
+
+    // MARK: - Find
+
+    /// The server answers `orchestration.searchThread` and this client can ask it.
+    private var isFindAvailable: Bool {
+        threadEnvironment?.supportsThreadFind == true && model.client is any FeatureThreadFinding
+    }
+
+    private func openFind() {
+        guard isFindAvailable, let finder = model.client as? any FeatureThreadFinding else { return }
+        let threadID = thread.id
+        find.skills = (threadProviders.first { $0.id == currentSelection?.providerID }?
+            .inWorkspace(threadWorkspaceRoot).skills ?? [])
+            .map { ThreadFindSkillLabel(name: $0.name, displayName: $0.displayName) }
+        find.open(
+            threadID: threadID,
+            progressive: threadEnvironment?.supportsProgressiveThreadFind == true
+        ) { [weak finder] query, progressive in
+            finder?.findInThread(threadID: threadID, query: query, progressive: progressive)
+                ?? AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
+        }
+    }
+
     private var pullRequestContext: MarkdownPullRequestContext? {
         threadEnvironment?.supportsPullRequests == true
             ? MarkdownPullRequestContext(threadID: thread.id, client: model.client)
@@ -563,6 +606,18 @@ public struct ThreadDetailView: View {
         Group {
             Button("Thread Details") { toolSurface = .details }
                 .keyboardShortcut("i", modifiers: .command)
+            if isFindAvailable {
+                Button("Find in Thread", action: openFind)
+                    .keyboardShortcut("f", modifiers: .command)
+            }
+            if find.isOpen {
+                Button("Next Match") { find.next() }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Previous Match") { find.previous() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Close Find") { find.close() }
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
             Button("Previous Turn") { turnNavigationRequest -= 1 }
                 .keyboardShortcut(.upArrow, modifiers: [.command, .option])
             Button("Next Turn") { turnNavigationRequest += 1 }
@@ -666,6 +721,9 @@ public struct ThreadDetailView: View {
             transcriptArea(detail, isLoading: isLoading)
 
             VStack(spacing: 0) {
+                if find.isOpen {
+                    ThreadFindBar(model: find)
+                }
                 if isEnvironmentOffline, let environmentID = threadEnvironment?.id {
                     ThreadConnectionBanner(
                         environmentName: currentThread.homeEnvironmentLabel(in: model.snapshot) ?? "This environment"
@@ -855,6 +913,8 @@ public struct ThreadDetailView: View {
                 },
                 navigationRequest: turnNavigationRequest,
                 scrollToLatestRequest: scrollToLatestRequest,
+                find: find,
+                findReveal: find.reveal,
                 onReadingHistoryChanged: { reading in
                     let next = reading ? thread.id : nil
                     if readingHistoryThreadID != next { readingHistoryThreadID = next }
@@ -1198,14 +1258,22 @@ public struct ThreadDetailView: View {
     }
 
     private func providerSubagentBar(_ detail: FeatureThreadDetail) -> some View {
-        let selection = currentSelection
+        let parentThreadID = detail.workflow.thread?.parentThreadID
+        // A provider-native child thread mirrors its parent's selection, so
+        // what the provider reported for this subagent (on the parent's row,
+        // when that thread is loaded) is the better description, and it stays
+        // after the subagent completes.
+        let reported = parentThreadID.flatMap { self.model.details[$0] }.flatMap { parent in
+            parent.workflow.subagents.first { $0.childThreadID == thread.id }
+                .flatMap { parent.subagentMetadata[$0.id]?.reportedSelection }
+        }
+        let selection = reported ?? currentSelection
         let provider = selection.flatMap { selection in
             threadProviders.first { $0.id == selection.providerID }
         }
         let model = selection.flatMap { selection in
             provider?.models.first { $0.id == selection.modelID }
         }
-        let parentThreadID = detail.workflow.thread?.parentThreadID
         let showsAccount = provider.map {
             ProviderAccountBadge.shows(
                 driver: $0.driver,
@@ -1486,7 +1554,8 @@ public struct ThreadDetailView: View {
             FeatureSourceControlView(
                 client: model.client,
                 threadID: thread.id,
-                reviewSelection: model.reviewSelection
+                reviewSelection: model.reviewSelection,
+                connectionState: threadConnectionState
             )
         case let .terminal(terminalID):
             FeatureTerminalView(
@@ -2576,6 +2645,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
     var navigationRequest: Int = 0
     var scrollToLatestRequest: Int = 0
+    /// Find in Thread: what rows paint, and where a new query starts reading.
+    var find: ThreadFindModel? = nil
+    /// The match to scroll to, read by the parent so a new one updates this view.
+    var findReveal: ThreadFindReveal? = nil
     var onReadingHistoryChanged: (Bool) -> Void = { _ in }
     var onActivityBelowChanged: (Bool) -> Void = { _ in }
 
@@ -2622,6 +2695,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         context.coordinator.onActivityBelowChanged = onActivityBelowChanged
         context.coordinator.turnItemDetails.loader = loadTurnItem
         context.coordinator.attach(messageActions, to: collectionView)
+        context.coordinator.attach(find, to: collectionView)
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -2663,6 +2737,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         context.coordinator.navigate(request: navigationRequest, in: collectionView)
         context.coordinator.scrollToLatest(request: scrollToLatestRequest, in: collectionView)
         context.coordinator.navigateCitation(citationNavigation, completion: onCitationComplete, in: collectionView)
+        context.coordinator.revealFind(findReveal, in: collectionView)
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
@@ -2803,6 +2878,135 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             citationCompletion(request, "The source response could not be loaded. Load earlier turns and try again. Your saved quote is unchanged.")
         }
 
+        // MARK: Find in Thread
+
+        private weak var find: ThreadFindModel?
+        private var findHighlight: ThreadFindHighlight?
+        private var findRequest: ThreadFindReveal?
+        private var handledFindRevealID = 0
+        private var findPages = Set<String>()
+        private var findSawLoading = false
+
+        /// Rows paint from the find's highlight, and a new query starts from the
+        /// first searchable row being read.
+        func attach(_ find: ThreadFindModel?, to collectionView: UICollectionView) {
+            guard self.find !== find else { return }
+            self.find = find
+            findHighlight = find?.highlight
+            find?.readingPosition = { [weak self, weak collectionView] in
+                guard let self, let collectionView else { return nil }
+                return self.findReadingPosition(in: collectionView)
+            }
+        }
+
+        func revealFind(_ request: ThreadFindReveal?, in collectionView: UICollectionView) {
+            guard let request else {
+                findRequest = nil
+                return
+            }
+            guard request.id != handledFindRevealID, request != findRequest else { return }
+            findRequest = request
+            findPages = []
+            findSawLoading = false
+            DispatchQueue.main.async { [weak self, weak collectionView] in
+                guard let self, let collectionView else { return }
+                self.revealFindMatch(in: collectionView)
+            }
+        }
+
+        /// Scrolls to the selected match's entry, opening the fold that hides
+        /// it or loading earlier turns first, the way a citation is revealed.
+        private func revealFindMatch(in collectionView: UICollectionView) {
+            guard let request = findRequest, !applyingSnapshot, dataSource != nil else { return }
+            let match = request.match
+            if let entryID = orderedIDs.first(where: { entriesByID[$0]?.findEntryID == match.entryId }) {
+                findRequest = nil
+                handledFindRevealID = request.id
+                positionFind(match, entryID: entryID, in: collectionView)
+                // Forcing a collapsed message or plan open resizes its cell
+                // after this pass; settle on the new geometry.
+                for delay in [0.0, 0.25] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak collectionView] in
+                        guard let self, let collectionView, self.handledFindRevealID == request.id,
+                              self.findRequest == nil, !collectionView.isDragging else { return }
+                        self.positionFind(match, entryID: entryID, in: collectionView)
+                    }
+                }
+                return
+            }
+            if let runID = hiddenCitationRunIDs[match.entryId], !expandedRunIDs.contains(runID) {
+                toggleFold(runID)
+                return
+            }
+            if currentIsLoadingEarlier { findSawLoading = true; return }
+            let page = orderedIDs.first ?? "empty"
+            if currentCanLoadEarlier && findPages.count < 20 {
+                if findPages.insert(page).inserted { findSawLoading = false; onLoadEarlier?(); return }
+                if !findSawLoading { return }
+            }
+            findRequest = nil
+            handledFindRevealID = request.id
+            T3HUD.show("This match isn't shown in the transcript", systemImage: "magnifyingglass", haptic: nil)
+        }
+
+        /// Brings the entry into view; a tall one scrolls to roughly where the
+        /// occurrence falls in its text rather than to its top.
+        private func positionFind(_ match: ThreadFindMatch, entryID: String, in collectionView: UICollectionView) {
+            guard let path = dataSource?.indexPath(for: entryID) else { return }
+            (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
+            collectionView.layoutIfNeeded()
+            guard let frame = collectionView.layoutAttributesForItem(at: path)?.frame else { return }
+            let inset = collectionView.adjustedContentInset
+            let viewportTop = collectionView.contentOffset.y + inset.top
+            let viewportHeight = collectionView.bounds.height - inset.top - inset.bottom
+            let margin = min(48, max(0, viewportHeight / 4))
+            let anchorY: CGFloat
+            if frame.height > viewportHeight - margin * 2,
+               let fraction = findFraction(match, entryID: entryID) {
+                anchorY = frame.minY + frame.height * fraction - viewportHeight * 0.35
+            } else if frame.minY >= viewportTop + margin, frame.maxY <= viewportTop + viewportHeight - margin {
+                return
+            } else {
+                anchorY = frame.minY - margin
+            }
+            let minimumY = -inset.top
+            let maximumY = max(minimumY, collectionView.contentSize.height - collectionView.bounds.height + inset.bottom)
+            let targetY = min(maximumY, max(minimumY, anchorY - inset.top))
+            guard abs(targetY - collectionView.contentOffset.y) >= 1 else { return }
+            collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: targetY), animated: false)
+            reportReadingHistory(!isNearBottom(collectionView))
+        }
+
+        /// Where the occurrence sits in the entry's source text, 0...1.
+        private func findFraction(_ match: ThreadFindMatch, entryID: String) -> CGFloat? {
+            let text: String
+            switch entriesByID[entryID] {
+            case let .message(message, _)?: text = message.text
+            case let .proposedPlan(entry)?: text = entry.plan.displayedMarkdown
+            default: return nil
+            }
+            let ranges = ThreadFindText.occurrences(of: findHighlight?.query ?? "", in: text)
+            let length = (text as NSString).length
+            guard let range = ranges.indices.contains(match.occurrence) ? ranges[match.occurrence] : ranges.last,
+                  length > 0 else { return nil }
+            return CGFloat(range.location) / CGFloat(length)
+        }
+
+        /// The first searchable row on screen, which a new query reads from.
+        private func findReadingPosition(in collectionView: UICollectionView) -> ThreadFindStart? {
+            guard let dataSource else { return nil }
+            let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+            let bottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
+            for path in collectionView.indexPathsForVisibleItems.sorted() {
+                guard let id = dataSource.itemIdentifier(for: path),
+                      let findID = entriesByID[id]?.findEntryID,
+                      let frame = collectionView.layoutAttributesForItem(at: path)?.frame,
+                      frame.maxY > top, frame.minY < bottom else { continue }
+                return ThreadFindStart(entryId: findID, occurrence: 0)
+            }
+            return nil
+        }
+
         private var lastNavigationRequest = 0
         private var pendingPreviousTurn = false
 
@@ -2902,6 +3106,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
                 let context = rowContext
                 let highlight = citationHighlight
+                let findHighlight = findHighlight
+                let findEntryID = entry.findEntryID
                 let toolHistory = workLogHistory
                 let toolDetails = turnItemDetails
                 let messageActions = messageActions
@@ -2922,6 +3128,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         onRetrySetup: context.onRetrySetup,
                         onToggleFold: { [weak self] in self?.toggleFold($0) }
                     )
+                    .modifier(ThreadFindEntryEmphasis(entryID: findEntryID))
                     // A recycled cell keeps the SwiftUI state of whatever it
                     // rendered last. Keying on the entry drops an expansion
                     // when the cell is reused for a different row, rather than
@@ -2931,6 +3138,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.markdownPullRequestContext, context.pullRequests)
                     .environment(\.assistantCitationContext, context.citationContext)
                     .environment(\.assistantCitationHighlight, highlight)
+                    .environment(\.threadFindHighlight, findHighlight)
+                    .environment(\.threadFindEntryID, findEntryID)
                     .environment(\.threadWorkLogHistory, toolHistory)
                     .environment(\.threadTurnItemDetails, toolDetails)
                     .environment(\.threadMessageActions, messageActions)
@@ -3039,7 +3248,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             // merges into the run beside it — so a delta that only names changed
             // messages cannot say which rows moved, and applying it would leave
             // stale groups on screen instead of failing loudly.
-            if threadChanged { expandedRunIDs = []; hiddenCitationRunIDs = [:] }
+            if threadChanged { expandedRunIDs = []; hiddenCitationRunIDs = [:]; findRequest = nil }
             messageActions?.apply(detail)
             let fullEntries = ThreadTimelineFeed.entries(for: detail)
             let folded = ThreadTimelineFoldPresentation.apply(entries: fullEntries, detail: detail,
@@ -3164,6 +3373,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         self.restore(prependAnchor, in: collectionView, dataSource: dataSource)
                     }
                     self.revealCitation(in: collectionView)
+                    self.revealFindMatch(in: collectionView)
                     if self.pendingPreviousTurn && !self.currentIsLoadingEarlier {
                         self.pendingPreviousTurn = false
                         self.navigateTurn(forward: false, in: collectionView, allowLoad: false)
@@ -3395,6 +3605,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             if let request = citationRequest {
                 citationRequest = nil
                 citationCompletion(request, nil)
+            }
+            if let request = findRequest {
+                findRequest = nil
+                handledFindRevealID = request.id
             }
             (scrollView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
         }
@@ -4134,5 +4348,22 @@ private struct ThreadMcpAppsModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// Closes or refreshes Find in Thread as the thread, the server's support for
+/// it, or the transcript changes. A modifier of its own keeps the thread
+/// view's modifier chain small enough for the type checker.
+private struct ThreadFindLifecycle: ViewModifier {
+    let find: ThreadFindModel
+    let threadID: String
+    let isAvailable: Bool
+    let contentRevision: UInt64?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: threadID) { find.close() }
+            .onChange(of: isAvailable) { if !isAvailable { find.close() } }
+            .onChange(of: contentRevision) { find.contentChanged() }
     }
 }

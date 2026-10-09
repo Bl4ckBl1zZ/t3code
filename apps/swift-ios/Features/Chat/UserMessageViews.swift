@@ -76,6 +76,8 @@ struct UserMessageBubble<Attachments: View>: View {
 
     @SwiftUI.Environment(\.threadMessageActions) private var store
     @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
+    @SwiftUI.Environment(\.threadFindHighlight) private var findHighlight
+    @SwiftUI.Environment(\.threadFindEntryID) private var findEntryID
     @State private var localExpanded = false
     @State private var shownContext: UserMessageContextSheet.Item?
     @State private var isSelectingText = false
@@ -161,9 +163,15 @@ struct UserMessageBubble<Attachments: View>: View {
         store?.row(message.id).isExpanded ?? localExpanded
     }
 
+    /// Thread find's selected match is in this message: show all of it, since
+    /// the match may sit below the fold.
+    private var isFindTarget: Bool {
+        findHighlight?.isActive(findEntryID) == true
+    }
+
     @ViewBuilder
     private func collapsibleBody(_ text: String, isLong: Bool) -> some View {
-        let collapsed = isLong && !isExpanded
+        let collapsed = isLong && !isExpanded && !isFindTarget
         VStack(alignment: .leading, spacing: 4) {
             ReviewContextMessageText(source: text, isStreaming: message.state == .streaming)
                 .modifier(UserMessageCollapse(isCollapsed: collapsed))

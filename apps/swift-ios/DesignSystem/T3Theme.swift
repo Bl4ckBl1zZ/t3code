@@ -58,6 +58,13 @@ enum T3Colors {
     static let warning = color(light: rgb(0xD97706), dark: rgb(0xFF9F0A))
     /// Skill chips in messages: the web's fuchsia-700 / fuchsia-300.
     static let skillChip = color(light: rgb(0xA21CAF), dark: rgb(0xF0ABFC))
+    /// Find-in-thread matches: the web's searchMatch roles for the T3 Code
+    /// palettes. Amber, so a match never reads as accent-tinted inline code;
+    /// the current match is a stronger gold with dark text.
+    static let searchMatchBackground = color(light: rgb(0xFFDE8B), dark: rgb(0x8C6C1F))
+    static let searchMatchForeground = color(light: rgb(0x21180A), dark: rgb(0xF5F5F5))
+    static let searchMatchActiveBackground = color(light: rgb(0xEEA52B), dark: rgb(0xEEA52B))
+    static let searchMatchActiveForeground = color(light: rgb(0x21180A), dark: rgb(0x21180A))
 
     static let syntaxKeyword = color(light: rgb(0x7C3AED), dark: rgb(0xC78EFF))
     static let syntaxLiteral = color(light: rgb(0x2563EB), dark: rgb(0x8CC7FF))

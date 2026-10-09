@@ -22,11 +22,13 @@ public enum AuthScope {
     public static let sourceControlWrite = "source-control:write"
     public static let filesystemRead = "filesystem:read"
     public static let filesystemWrite = "filesystem:write"
+    public static let relayRead = "relay:read"
+    public static let relayWrite = "relay:write"
 
     /// The vocabulary from before the split.
     static let legacy: Set<String> = [
         orchestrationRead, orchestrationOperate, terminalOperate, "review:write",
-        accessRead, accessWrite, "relay:read", "relay:write",
+        accessRead, accessWrite, relayRead, relayWrite,
     ]
 
     /// The broad scope each split-off permission used to be part of. Only a
@@ -59,6 +61,35 @@ public enum AuthScope {
         return (changesSettings || !changesProviders ? [settingsWrite] : [])
             + (changesProviders ? [providersManage] : [])
     }
+}
+
+/// Every grantable scope with the title clients show for it, mirrored from
+/// `AUTH_SCOPE_OPTIONS` in `packages/shared/src/authScopeOptions.ts` (same
+/// titles, same order).
+public struct AuthScopeOption: Identifiable, Equatable, Sendable {
+    public let scope: String
+    public let title: String
+
+    public var id: String { scope }
+
+    public static let all: [AuthScopeOption] = [
+        .init(scope: AuthScope.orchestrationRead, title: "View environment"),
+        .init(scope: AuthScope.orchestrationOperate, title: "Operate tasks"),
+        .init(scope: AuthScope.sourceControlWrite, title: "Change source control"),
+        .init(scope: AuthScope.settingsWrite, title: "Change environment settings"),
+        .init(scope: AuthScope.providersManage, title: "Manage providers"),
+        .init(scope: AuthScope.environmentMaintain, title: "Maintain environment"),
+        .init(scope: AuthScope.previewOperate, title: "Control previews"),
+        .init(scope: AuthScope.diagnosticsRead, title: "View diagnostics and usage"),
+        .init(scope: AuthScope.terminalRead, title: "View terminals"),
+        .init(scope: AuthScope.terminalOperate, title: "Use terminals"),
+        .init(scope: AuthScope.filesystemRead, title: "Read files"),
+        .init(scope: AuthScope.filesystemWrite, title: "Write files"),
+        .init(scope: AuthScope.accessRead, title: "View access"),
+        .init(scope: AuthScope.accessWrite, title: "Manage access"),
+        .init(scope: AuthScope.relayRead, title: "View relay"),
+        .init(scope: AuthScope.relayWrite, title: "Manage relay"),
+    ]
 }
 
 public extension AuthSessionState {

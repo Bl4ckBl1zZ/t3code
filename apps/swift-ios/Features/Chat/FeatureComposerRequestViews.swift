@@ -314,8 +314,11 @@ struct FeatureComposerUserInputPanel: View {
                 .t3SensoryFeedback(.warning, trigger: unansweredWarnings)
             }
         }
+        .onAppear {
+            answers = FeatureComposerCustomAnswer.seeded(answers, questions: input.questions)
+        }
         .onChange(of: input.id) {
-            answers = [:]
+            answers = FeatureComposerCustomAnswer.seeded([:], questions: input.questions)
             files = [:]
             questionIndex = 0
             collapsedQuestionID = nil
@@ -327,9 +330,12 @@ struct FeatureComposerUserInputPanel: View {
                 previousQuestionIDs: previousIDs,
                 currentQuestionIDs: currentIDs
             )
-            answers = FeatureComposerQuestionReconciliation.answers(
-                answers,
-                currentQuestionIDs: currentIDs
+            answers = FeatureComposerCustomAnswer.seeded(
+                FeatureComposerQuestionReconciliation.answers(
+                    answers,
+                    currentQuestionIDs: currentIDs
+                ),
+                questions: input.questions
             )
         }
     }
@@ -369,20 +375,23 @@ struct FeatureComposerUserInputPanel: View {
         VStack(spacing: 0) {
             Divider().overlay(T3Colors.separator)
 
-            ScrollView {
-                VStack(spacing: 6) {
-                    ForEach(
-                        Array(question.options.enumerated()),
-                        id: \.offset
-                    ) { _, option in
-                        optionButton(option, question: question)
+            // A free-text question (a Pi editor dialog) has no options.
+            if !question.options.isEmpty {
+                ScrollView {
+                    VStack(spacing: 6) {
+                        ForEach(
+                            Array(question.options.enumerated()),
+                            id: \.offset
+                        ) { _, option in
+                            optionButton(option, question: question)
+                        }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 10)
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
+                .frame(maxHeight: 320)
+                .scrollIndicators(.hidden)
             }
-            .frame(maxHeight: 320)
-            .scrollIndicators(.hidden)
 
             if question.allowCustomAnswer != false {
             HStack(spacing: 8) {
@@ -612,7 +621,10 @@ struct FeatureComposerUserInputPanel: View {
     }
 
     private func normalizedAnswer(for questionID: String) -> FeatureInputAnswer? {
-        answers[questionID]?.normalized ?? ((files[questionID]?.isEmpty == false) ? .text("See attached files.") : nil)
+        let answer = input.questions.first { $0.id == questionID }.map {
+            FeatureComposerCustomAnswer.resolved(answers[questionID], for: $0)
+        } ?? answers[questionID]?.normalized
+        return answer ?? ((files[questionID]?.isEmpty == false) ? .text("See attached files.") : nil)
     }
 
     private func isOptionSelected(_ label: String, for question: FeatureInputQuestion) -> Bool {
@@ -653,6 +665,43 @@ enum FeatureComposerCustomAnswer {
         while let last = trimmedDraft.last, last.isWhitespace { trimmedDraft.removeLast() }
         guard !trimmedDraft.isEmpty else { return displaced }
         return "\(trimmedDraft)\n\n\(displaced)"
+    }
+
+    /// Seeds each prefilled question once, porting `seedUserInputDraftAnswers`:
+    /// an answer already there (an edit, a cleared field, a picked option)
+    /// wins, so a refresh never puts back text the reader deleted.
+    static func seeded(
+        _ answers: [String: FeatureInputAnswer],
+        questions: [FeatureInputQuestion]
+    ) -> [String: FeatureInputAnswer] {
+        var seeded = answers
+        for question in questions
+        where question.allowCustomAnswer != false && seeded[question.id] == nil {
+            guard let initialAnswer = question.initialAnswer else { continue }
+            seeded[question.id] = replacingText(in: nil, with: initialAnswer, for: question)
+        }
+        return seeded
+    }
+
+    /// The answer a question submits, or nil while it has none. A prefilled
+    /// question sends exactly what is in the field, whitespace and newlines
+    /// included, and an empty field is a valid answer; any other question is
+    /// trimmed and must say something.
+    static func resolved(
+        _ answer: FeatureInputAnswer?,
+        for question: FeatureInputQuestion
+    ) -> FeatureInputAnswer? {
+        guard question.initialAnswer != nil, question.allowCustomAnswer != false, let answer else {
+            return answer?.normalized
+        }
+        switch answer {
+        case .text:
+            return answer
+        case let .selections(values):
+            var seen: Set<String> = []
+            let kept = values.filter { !$0.isEmpty && seen.insert($0).inserted }
+            return kept.isEmpty ? .text("") : .selections(kept)
+        }
     }
 
     static func replacingText(

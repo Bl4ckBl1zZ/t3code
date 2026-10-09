@@ -54,6 +54,11 @@ and diffs, and is also in the command palette as **Find in current thread**. Pre
 **Shift+Enter** to move between matches, and **Escape** to close find. Thread search requires server
 support; update an older server to enable it. Select **Retry** if a search fails.
 
+In the iOS app, choose **Find in Thread** from a thread's **•••** menu, or press **⌘F** on a hardware
+keyboard. **Return** or **⌘G** moves to the next match, **⇧⌘G** to the previous one, and **Esc**
+closes find. The transcript scrolls to the matching message or plan and loads earlier turns when
+the match is further back.
+
 ## Rule Shape
 
 - `key` (required): shortcut string, like `mod+j`, `ctrl+k`, `cmd+shift+d`

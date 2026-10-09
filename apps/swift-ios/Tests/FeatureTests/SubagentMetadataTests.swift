@@ -257,6 +257,61 @@ final class SubagentMetadataTests: XCTestCase {
         XCTAssertNil(traits(selection: nil, provider: entry))
     }
 
+    func testUsesTheSelectionTheProviderReportedForAnySubagentAfterItCompletes() throws {
+        let entry = provider("codex", [serviceTier])
+        let reported = FeatureSelection(
+            providerID: "codex",
+            modelID: "gpt-5.4",
+            options: [
+                .init(id: "reasoningEffort", value: .string("high")),
+                .init(id: "serviceTier", value: .string("ultrafast")),
+            ]
+        )
+        // A provider-native child mirrors the parent; a stale child selection loses.
+        let stale = FeatureSelection(
+            providerID: "codex",
+            modelID: "gpt-5.4",
+            options: [.init(id: "reasoningEffort", value: .string("medium"))]
+        )
+        for origin in ["provider_native", "app_owned"] {
+            XCTAssertEqual(
+                ThreadLifecycle.resolveSubagentModelTraits(
+                    origin: origin,
+                    model: "gpt-5.4",
+                    providerInstanceID: "codex",
+                    reportedSelection: reported,
+                    childSelection: stale,
+                    provider: entry
+                ),
+                SubagentModelTraits(effort: "High", speed: .ultrafast),
+                origin
+            )
+        }
+        // A reported selection on another model still does not describe this agent.
+        XCTAssertNil(ThreadLifecycle.resolveSubagentModelTraits(
+            origin: "provider_native",
+            model: "gpt-5.4",
+            providerInstanceID: "codex",
+            reportedSelection: FeatureSelection(providerID: "codex", modelID: "gpt-5.5", options: reported.options),
+            childSelection: nil,
+            provider: entry
+        ))
+
+        // The wire field is optional, so older servers still decode.
+        let base = #""id":"sub-1","threadId":"t","childThreadId":null,"title":null,"origin":"provider_native","status":"completed","progress":null,"result":null,"workflow":null,"usage":null,"model":"gpt-5.4""#
+        let legacy = try JSONDecoder().decode(
+            OrchestrationV2Subagent.self,
+            from: Data("{\(base)}".utf8)
+        )
+        XCTAssertNil(legacy.modelSelection)
+        let current = try JSONDecoder().decode(
+            OrchestrationV2Subagent.self,
+            from: Data(#"{\#(base),"modelSelection":{"instanceId":"codex","model":"gpt-5.4","options":[{"id":"reasoningEffort","value":"high"}]}}"#.utf8)
+        )
+        XCTAssertEqual(current.modelSelection?.instanceId, "codex")
+        XCTAssertEqual(current.modelSelection?.options?.first?.value, .string("high"))
+    }
+
     func testKeepsTheMatchButNoTraitsOnceTheProviderInstanceIsGone() {
         XCTAssertEqual(
             traits(

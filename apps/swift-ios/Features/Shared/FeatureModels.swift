@@ -50,6 +50,10 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     /// Set when this device's grant predates the server's granular
     /// permissions, so Files, Git and settings are denied until it is renewed.
     public var permissionUpdate: FeaturePermissionUpdate? = nil
+    /// Set when the server refused this device's credential (revoked,
+    /// replaced or expired, and renewing failed): the way back in. The
+    /// connection stops retrying until then.
+    public var accessEnded: FeaturePermissionUpdate? = nil
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?
@@ -63,6 +67,11 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var supportsAssistantCitations: Bool? = nil
     public var supportsCustomModelDefinitions: Bool? = nil
     public var supportsProjectIcons: Bool? = nil
+    /// `ServerConfig.threadFind`: the server answers find in one thread. Nil
+    /// until its config arrives, which reads as unsupported.
+    public var supportsThreadFind: Bool? = nil
+    /// `ServerConfig.threadFindProgressive`: its find can stream an early match.
+    public var supportsProgressiveThreadFind: Bool? = nil
     public var machineSymbol: String { EnvironmentMachineKind(rawValue: machineKind ?? "")?.symbol ?? "server.rack" }
 
     public init(
@@ -814,6 +823,9 @@ public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable,
     public var question: String
     public var options: [FeatureInputOption]
     public var allowsMultiple: Bool
+    /// Seeds the custom answer once per request. Its presence also means the
+    /// answer is sent exactly as typed, and an empty answer is a valid one.
+    public var initialAnswer: String? = nil
 
     public init(
         id: String,
@@ -821,9 +833,11 @@ public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable,
         question: String,
         options: [FeatureInputOption] = [],
         allowsMultiple: Bool = false,
-        allowCustomAnswer: Bool? = nil
+        allowCustomAnswer: Bool? = nil,
+        initialAnswer: String? = nil
     ) {
         self.allowCustomAnswer = allowCustomAnswer
+        self.initialAnswer = initialAnswer
         self.id = id
         self.header = header
         self.question = question
@@ -1298,6 +1312,18 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     public var workspaceSnapshots: [FeatureProviderWorkspace]? = nil
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?
+    /// Models this installed CLI is too old to run. Never selectable; the model
+    /// picker turns them into an "Update … to use …" notice.
+    public var updateRequiredModels: [ServerProviderUpdateRequiredModel]? = nil
+
+    /// The picker's notice for gated models matching `searchQuery`, or nil.
+    public func updateRequiredNotice(searchQuery: String = "") -> String? {
+        ProviderUpdateRequiredNotice.format(
+            driver: driver,
+            models: updateRequiredModels,
+            searchQuery: searchQuery
+        )
+    }
 
     /// Whether the server holds a scan of `cwd` that needs no retry; a key for
     /// re-running the scan when an instance installs or drops its entries.

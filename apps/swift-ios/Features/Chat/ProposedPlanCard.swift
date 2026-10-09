@@ -127,6 +127,7 @@ enum ProposedPlanCardExpansion {
 struct ProposedPlanCard: View {
     let entry: ThreadProposedPlanEntry
     @SwiftUI.Environment(\.proposedPlanWorkspaceSaver) private var saver
+    @SwiftUI.Environment(\.threadFindHighlight) private var findHighlight
     @State private var isExpanded: Bool
 
     init(entry: ThreadProposedPlanEntry) {
@@ -139,7 +140,9 @@ struct ProposedPlanCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            let text = isExpanded ? plan.displayedMarkdown : plan.collapsedPreview ?? plan.displayedMarkdown
+            // Thread find's selected match may sit past the preview.
+            let showsAll = isExpanded || findHighlight?.isActive(plan.itemID) == true
+            let text = showsAll ? plan.displayedMarkdown : plan.collapsedPreview ?? plan.displayedMarkdown
             if !text.isEmpty {
                 MarkdownMessageView(text, isStreaming: plan.isStreaming)
                     .frame(maxWidth: .infinity, alignment: .leading)

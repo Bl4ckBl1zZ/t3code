@@ -16,6 +16,8 @@ struct MarkdownMessageView: View {
     @State private var isCiting = false
     @SwiftUI.Environment(\.assistantCitationContext) private var citationContext
     @SwiftUI.Environment(\.assistantCitationHighlight) private var citationHighlight
+    @SwiftUI.Environment(\.threadFindHighlight) private var findHighlight
+    @SwiftUI.Environment(\.threadFindEntryID) private var findEntryID
     private let revision: MarkdownContentRevision
     private let isStreaming: Bool
     @State private var renderedDocument: MarkdownRenderedDocument?
@@ -173,8 +175,20 @@ struct MarkdownMessageView: View {
     private func highlightedBlocks(_ document: MarkdownRenderedDocument) -> [MarkdownRenderedBlock] {
         guard let citation = citationHighlight?.citation, citation.messageId == citationMessageID,
               let range = AssistantCitationTextRange.resolve(in: document.citationText, quote: citation.text,
-                  start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) else { return document.blocks }
+                  start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) else { return findBlocks(document) }
         return MarkdownCitationHighlight.blocks(document.blocks, range: range)
+    }
+
+    /// Thread find paints the query in rows the server searches (messages and
+    /// plans), and the selected occurrence in the selected row more strongly.
+    private func findBlocks(_ document: MarkdownRenderedDocument) -> [MarkdownRenderedBlock] {
+        guard let findHighlight, findEntryID != nil, !findHighlight.query.isEmpty else { return document.blocks }
+        let marks = ThreadFindText.marks(
+            query: findHighlight.query,
+            in: document.citationText,
+            activeOccurrence: findHighlight.isActive(findEntryID) ? findHighlight.activeOccurrence : nil
+        )
+        return MarkdownCitationHighlight.blocks(document.blocks, marks: marks)
     }
 
     private func skillBlocks(_ document: MarkdownRenderedDocument, _ blocks: [MarkdownRenderedBlock]) -> [MarkdownRenderedBlock] {

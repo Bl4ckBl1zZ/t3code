@@ -13,6 +13,14 @@ protocol FeatureMcpAccessProbing: AnyObject {
     func verifiedMcpURL(environmentID: String) async -> URL?
 }
 
+/// Reads this device's session on a server, for the permissions it grants.
+@MainActor
+protocol FeatureSessionPermissionsReading: AnyObject {
+    /// The authenticated session on the route in use, read fresh because
+    /// routes hold separate sessions; nil when it cannot be read.
+    func connectionSession(environmentID: String) async -> AuthSessionState?
+}
+
 /// One saved server: whether this device connects to it, the routes it is
 /// reached over, what else it offers, and the way to remove it. Pushed from
 /// the info button on a Servers row.
@@ -29,6 +37,7 @@ struct SettingsServerDetailView: View {
     @State private var supportsGitHubSettings = false
     @State private var probedMcpURL: URL?
     @State private var pairingAgain = false
+    @State private var session: AuthSessionState?
 
     private var environment: FeatureEnvironment? {
         (model.snapshot.environments + model.snapshot.switchedOffEnvironments)
@@ -77,6 +86,14 @@ struct SettingsServerDetailView: View {
         .task(id: routeRefreshKey) {
             routeInUse = await model.environmentRouteInUse(environmentID)
         }
+        .task(id: routeRefreshKey) {
+            guard canProbe, environment?.accessEnded == nil,
+                  let reader = model.client as? any FeatureSessionPermissionsReading else {
+                session = nil
+                return
+            }
+            session = await reader.connectionSession(environmentID: environmentID)
+        }
         .task(id: extrasKey) {
             guard canProbe, let probing = model.client as? any FeatureMcpAccessProbing else {
                 probedMcpURL = nil
@@ -108,12 +125,13 @@ struct SettingsServerDetailView: View {
             compatibilitySection(environment, reason: reason)
         }
 
-        if let update = environment.permissionUpdate {
+        if let update = environment.accessEnded ?? environment.permissionUpdate {
             Section {
                 SettingsPermissionUpdateNotice(
                     model: model,
                     environmentID: environment.id,
                     update: update,
+                    accessEnded: environment.accessEnded != nil,
                     onPairAgain: { pairingAgain = true }
                 )
             } header: {
@@ -137,6 +155,10 @@ struct SettingsServerDetailView: View {
         }
 
         routesSection(environment)
+
+        if let session, canProbe {
+            permissionsSection(environment, session: session)
+        }
 
         if supportsGitHubSettings, canProbe {
             let route = SettingsRoute.sourceControl(environmentID: environment.id)
@@ -281,6 +303,28 @@ struct SettingsServerDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: { route in
             Text("\(route.address ?? route.label) will need pairing again to be added back. Its credential is forgotten on this device.")
+        }
+    }
+
+    /// What this device's current connection may do, scope by scope. Only the
+    /// route in use is read: another route holds its own session.
+    private func permissionsSection(
+        _ environment: FeatureEnvironment,
+        session: AuthSessionState
+    ) -> some View {
+        Section {
+            ForEach(AuthScopeOption.all) { option in
+                LabeledContent(option.title) {
+                    Text(session.grants(option.scope) ? "Allowed" : "Not granted")
+                        .foregroundStyle(T3Colors.textSecondary)
+                }
+            }
+        } header: {
+            Text("Your Permissions")
+        } footer: {
+            Text(environment.routes.count > 1
+                ? "These permissions apply to your active route. Other routes may have different permissions."
+                : "These permissions apply to this client’s current connection.")
         }
     }
 

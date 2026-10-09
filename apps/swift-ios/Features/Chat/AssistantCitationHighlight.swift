@@ -24,31 +24,62 @@ extension EnvironmentValues {
     }
 }
 
+/// A painted span of rendered Markdown text, in UTF-16 offsets of
+/// `MarkdownRenderedDocument.citationText`.
+struct MarkdownTextMark: Equatable {
+    let range: NSRange
+    let background: Color
+    var foreground: Color? = nil
+    /// Code and diagram sources take one range and paint it their own way;
+    /// only marks that ask for it reach them.
+    var marksCode = false
+}
+
 @MainActor
 enum MarkdownCitationHighlight {
     static func mark(_ text: AttributedString, range: NSRange) -> AttributedString {
+        mark(text, marks: [MarkdownTextMark(range: range, background: T3Colors.accent.opacity(0.28))])
+    }
+
+    static func mark(_ text: AttributedString, marks: [MarkdownTextMark]) -> AttributedString {
         let plain = String(text.characters)
-        guard let stringRange = Range(range, in: plain),
-              let lower = AttributedString.Index(stringRange.lowerBound, within: text),
-              let upper = AttributedString.Index(stringRange.upperBound, within: text) else { return text }
         var result = text
-        result[lower..<upper].backgroundColor = T3Colors.accent.opacity(0.28)
+        for mark in marks {
+            guard let stringRange = Range(mark.range, in: plain),
+                  let lower = AttributedString.Index(stringRange.lowerBound, within: text),
+                  let upper = AttributedString.Index(stringRange.upperBound, within: text) else { continue }
+            result[lower..<upper].backgroundColor = mark.background
+            if let foreground = mark.foreground { result[lower..<upper].foregroundColor = foreground }
+        }
         return result
+    }
+
+    static func blocks(_ blocks: [MarkdownRenderedBlock], range: NSRange) -> [MarkdownRenderedBlock] {
+        self.blocks(blocks, marks: [MarkdownTextMark(range: range, background: T3Colors.accent.opacity(0.28), marksCode: true)])
     }
 
     /// Same separators as citationText: newlines between blocks/list items and
     /// table rows, tabs between cells. Cached inline objects are never mutated.
-    static func blocks(_ blocks: [MarkdownRenderedBlock], range: NSRange) -> [MarkdownRenderedBlock] {
+    static func blocks(_ blocks: [MarkdownRenderedBlock], marks: [MarkdownTextMark]) -> [MarkdownRenderedBlock] {
+        guard !marks.isEmpty else { return blocks }
         var offset = 0
-        func localRange(_ text: String) -> NSRange? {
+        func localMarks(_ text: String) -> [MarkdownTextMark] {
             let count = text.utf16.count
             defer { offset += count }
-            let start = max(offset, range.location), end = min(offset + count, NSMaxRange(range))
-            return end > start ? NSRange(location: start - offset, length: end - start) : nil
+            return marks.compactMap { mark in
+                let start = max(offset, mark.range.location), end = min(offset + count, NSMaxRange(mark.range))
+                guard end > start else { return nil }
+                return MarkdownTextMark(range: NSRange(location: start - offset, length: end - start),
+                    background: mark.background, foreground: mark.foreground, marksCode: mark.marksCode)
+            }
+        }
+        func codeRange(_ text: String) -> NSRange? {
+            localMarks(text).first(where: \.marksCode)?.range
         }
         func inline(_ value: MarkdownRenderedInline) -> MarkdownRenderedInline {
-            guard let local = localRange(String(value.attributedText.characters)) else { return value }
-            return MarkdownRenderedInline(attributedText: mark(value.attributedText, range: local), style: value.style)
+            let local = localMarks(String(value.attributedText.characters))
+            guard !local.isEmpty else { return value }
+            return MarkdownRenderedInline(attributedText: mark(value.attributedText, marks: local), style: value.style)
         }
         func items(_ values: [MarkdownRenderedListItem]) -> [MarkdownRenderedListItem] {
             values.enumerated().map { index, value in
@@ -77,13 +108,13 @@ enum MarkdownCitationHighlight {
                     let rows = table.rows.map { row in offset += 1; return cells(row) }
                     return .table(MarkdownRenderedTable(header: header, alignments: table.alignments, rows: rows, columnWidths: table.columnWidths, source: table.source))
                 case .codeBlock(let language, let code, _, let title, let terminated):
-                    return .codeBlock(language: language, code: code, citationRange: localRange(code), title: title, terminated: terminated)
+                    return .codeBlock(language: language, code: code, citationRange: codeRange(code), title: title, terminated: terminated)
                 case .details(let details):
                     let summary = inline(details.summary)
                     offset += 1
                     return .details(details.replacingSummary(summary).replacingBlocks(walk(details.blocks)))
                 case .mermaid(let source, let terminated, _):
-                    return .mermaid(source: source, terminated: terminated, citationRange: localRange(source))
+                    return .mermaid(source: source, terminated: terminated, citationRange: codeRange(source))
                 case .image, .htmlEmbed, .artifactTemplate, .thematicBreak: return block
                 }
             }

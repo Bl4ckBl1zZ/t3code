@@ -9,6 +9,9 @@ public struct FeatureSourceControlView: View {
     let threadID: String
     /// Lets file rows open Review at that file. Without it rows are plain.
     let reviewSelection: ReviewSelectionStore?
+    /// The thread's environment reachability. A reconnect reloads status,
+    /// because the server's cached status can miss changes made while away.
+    let connectionState: FeatureConnection.State?
 
     @SwiftUI.Environment(\.scenePhase) private var scenePhase
     @State private var status: FeatureSourceControlStatus?
@@ -28,11 +31,13 @@ public struct FeatureSourceControlView: View {
     public init(
         client: any FeatureClient,
         threadID: String,
-        reviewSelection: ReviewSelectionStore? = nil
+        reviewSelection: ReviewSelectionStore? = nil,
+        connectionState: FeatureConnection.State? = nil
     ) {
         self.client = client
         self.threadID = threadID
         self.reviewSelection = reviewSelection
+        self.connectionState = connectionState
     }
 
     public var body: some View {
@@ -127,6 +132,11 @@ public struct FeatureSourceControlView: View {
         .task { await load() }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, status != nil, !isLoading, runningAction == nil else { return }
+            Task { await load() }
+        }
+        .onChange(of: connectionState) { previous, current in
+            guard SourceControlRefreshPolicy.reloadsOnConnectionChange(from: previous, to: current),
+                  !isLoading, runningAction == nil else { return }
             Task { await load() }
         }
     }
@@ -608,5 +618,18 @@ private extension FeatureSourceControlFileState {
         case .untracked: "untracked"
         case .conflicted: "has conflicts"
         }
+    }
+}
+
+/// When Source Control reloads on its own. Mirrors Expo's
+/// `useSelectedThreadGitActions` reconnect refresh (upstream 4fec120b75).
+enum SourceControlRefreshPolicy {
+    /// Only a transition into `.connected` reloads; the first known state
+    /// is covered by the initial load.
+    static func reloadsOnConnectionChange(
+        from previous: FeatureConnection.State?,
+        to current: FeatureConnection.State?
+    ) -> Bool {
+        current == .connected && previous != nil && previous != .connected
     }
 }

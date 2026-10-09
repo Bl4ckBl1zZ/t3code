@@ -31,11 +31,12 @@ struct SettingsServersView: View {
             Section {
                 ForEach(environments) { environment in
                     serverRow(environment)
-                    if let update = environment.permissionUpdate {
+                    if let update = environment.accessEnded ?? environment.permissionUpdate {
                         SettingsPermissionUpdateNotice(
                             model: model,
                             environmentID: environment.id,
                             update: update,
+                            accessEnded: environment.accessEnded != nil,
                             onPairAgain: onAddServer
                         )
                     }
@@ -268,12 +269,16 @@ struct SettingsServersView: View {
 }
 
 /// Shown for a server whose grant on this device predates its granular
-/// permissions, which no longer cover Files, Git or settings. Pairing again,
-/// or renewing T3 Connect access, receives the current grant.
+/// permissions, which no longer cover Files, Git or settings, or whose
+/// access ended (`accessEnded`). Pairing again, or renewing T3 Connect
+/// access, receives the current grant.
 struct SettingsPermissionUpdateNotice: View {
     let model: FeatureRootModel
     let environmentID: String
     let update: FeaturePermissionUpdate
+    /// The server refused this device's credential, rather than offering
+    /// permissions it lacks.
+    var accessEnded = false
     /// Opens the pairing flow; pairing the same address replaces the credential.
     let onPairAgain: () -> Void
 
@@ -306,6 +311,11 @@ struct SettingsPermissionUpdateNotice: View {
 
     private var message: String {
         let device = UIDevice.current.model
+        if accessEnded {
+            return update == .pairAgain
+                ? "This \(device)'s access to the server ended. Pair it again to reconnect."
+                : "This \(device)'s T3 Connect access ended. Renew it to reconnect."
+        }
         return update == .pairAgain
             ? "New permissions available. Pair this \(device) again to keep Files, Git and settings working."
             : "New permissions available. Renew this \(device)'s T3 Connect access to keep Files, Git and settings working."

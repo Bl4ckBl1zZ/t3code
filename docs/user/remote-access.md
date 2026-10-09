@@ -279,6 +279,12 @@ applies only to the route in use; other routes are not checked. Direct pairing a
 separate sessions and may grant different permissions. An open connection ends as soon as its
 session is revoked or expires.
 
+In the iOS app, a server's info page lists **Your Permissions** after **Routes**: each permission
+marked **Allowed** or **Not granted** for the route in use. When a server refuses this device's
+access, the app stops reconnecting with it: Home shows a banner, and the server's page offers
+**Pair Again** (or **Renew Access** for T3 Connect). A failed settings save names the server and
+says why.
+
 In the iOS app, open **Settings → Servers** and tap a server's info button. **Routes** lists them
 preferred first with the one **In use**; tap **Edit** to drag them into another order, swipe a route
 you paired to remove it, or choose **Add Route** and paste a pairing link the same machine created

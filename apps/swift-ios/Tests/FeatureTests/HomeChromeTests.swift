@@ -125,6 +125,18 @@ final class HomeChromeTests: XCTestCase {
         XCTAssertEqual(banner?.offersReconnect, false)
     }
 
+    func testARefusedCredentialSendsToSettingsInsteadOfOfferingReconnect() {
+        var mac = environment("mac", name: "Mac", isActive: true, state: .disconnected)
+        mac.accessEnded = .pairAgain
+        let banner = HomeConnectionBanner.resolve(
+            snapshot: FeatureSnapshot(environments: [mac]),
+            isReconnecting: false
+        )
+        XCTAssertEqual(banner?.title, "Pair Mac again")
+        XCTAssertEqual(banner?.offersReconnect, false)
+        XCTAssertEqual(banner?.opensConnections, true)
+    }
+
     func testAReconnectingEnvironmentSaysChangesAreQueued() {
         let snapshot = FeatureSnapshot(
             connection: FeatureConnection(state: .connected),

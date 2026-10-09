@@ -17,7 +17,7 @@ extension FeatureInputAnswer {
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
-    FeatureMcpAppHosting, T3ConnectCapable
+    FeatureMcpAppHosting, FeatureThreadFinding, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -73,6 +73,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// The read in flight per environment. Replacing a credential drops it, so
     /// a read made with the old one is not saved.
     private var authSessionReads: [String: Task<AuthSessionState, Error>] = [:]
+    /// Environments whose saved credential the server refused (revoked,
+    /// replaced or expired, and renewing failed), with the way back in. Set
+    /// from failed reads, cleared by a new credential or a read that works.
+    private var refusedCredentials: [String: FeaturePermissionUpdate] = [:]
     private var environmentThemesByEnvironmentID: [String: [EnvironmentTheme]] = [:]
     private var projectScriptActionsInFlight: Set<String> = []
     private var pendingProjectScripts: [String: (terminalID: String, startedAt: Date)] = [:]
@@ -484,6 +488,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let environmentID = client.environment.id
         authSessions[environmentID] = nil
         authSessionReads[environmentID] = nil
+        setCredentialRefused(false, environmentID: environmentID)
         await client.reconnectWithNewCredential()
         Task { [weak self] in _ = try? await self?.authSession(for: client) }
     }
@@ -980,6 +985,34 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     // MARK: MCP apps
+
+    func findInThread(
+        threadID: String,
+        query: ThreadFindQuery,
+        progressive: Bool
+    ) -> AsyncThrowingStream<ThreadFindResult, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { @MainActor [weak self] in
+                do {
+                    guard let self else { throw CancellationError() }
+                    let route = try self.threadRoute(for: threadID)
+                    // Relative steps need the final count, so the server
+                    // answers them in one frame either way.
+                    if progressive, query.index == nil, query.offset == 0 {
+                        for try await result in await route.client.searchThreadStream(threadID: route.wireID, query: query) {
+                            continuation.yield(result)
+                        }
+                    } else {
+                        continuation.yield(try await route.client.searchThread(threadID: route.wireID, query: query))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 
     func mcpAppDocumentURL(threadID: String, app: McpAppReference) async throws -> URL {
         let route = try threadRoute(for: threadID)
@@ -4210,6 +4243,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         break
                     }
                     self.lastShellEventAt = .now
+                    self.setCredentialRefused(false, environmentID: activeClient.environment.id)
                     self.emitConnection(.connected)
                     switch item {
                     case let .snapshot(shell, resolvedRepositoryIdentityRoots):
@@ -4261,7 +4295,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 let socketIsSynchronized =
                     await activeClient.liveConnectionActive()
                     && self.lastShellEventAt != nil
-                if !socketIsSynchronized {
+                // A refused credential is refused on every read; polling
+                // resumes once a new one replaces it.
+                let credentialRefused =
+                    self.refusedCredentials[activeClient.environment.id] != nil
+                if !socketIsSynchronized, !credentialRefused {
                     self.emitConnection(
                         .reconnecting,
                         detail: "Live updates reconnecting. Refreshing over HTTP."
@@ -4290,10 +4328,19 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                               ) else {
                             return
                         }
-                        self.emitConnection(
-                            .reconnecting,
-                            detail: "Server unreachable. Retrying automatically."
-                        )
+                        if CredentialRejection.isRejected(error) {
+                            let environmentID = activeClient.environment.id
+                            self.setCredentialRefused(true, environmentID: environmentID)
+                            self.emitConnection(
+                                .disconnected,
+                                detail: self.refusedCredentialDetail(environmentID: environmentID)
+                            )
+                        } else {
+                            self.emitConnection(
+                                .reconnecting,
+                                detail: "Server unreachable. Retrying automatically."
+                            )
+                        }
                     }
                 }
                 do {
@@ -4327,7 +4374,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         let previous = self.serverConfigsByEnvironmentID[
                             activeClient.environment.id
                         ]
-                        let config = ServerConfigSnapshot(
+                        var config = ServerConfigSnapshot(
                             providers: providers,
                             settings: previous?.settings,
                             t3WorkDirectory: previous?.t3WorkDirectory,
@@ -4335,6 +4382,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                             threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
                             shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
                         )
+                        config.threadFind = previous?.threadFind
+                        config.threadFindProgressive = previous?.threadFindProgressive
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
                     case let .settingsUpdated(settings):
@@ -4535,6 +4584,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) async {
         guard isCurrentSession(client: client, generation: generation),
               let environment = activeEnvironment else { return }
+        setCredentialRefused(false, environmentID: environment.id)
         // Merged, not replaced: enrichment may have resolved an identity this
         // snapshot was built too early to carry, and a stream that resumed
         // while the read was in flight may already hold newer rows.
@@ -5072,15 +5122,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return await withTaskGroup(of: EnvironmentShellLoad.self) { group in
             for pair in clients {
                 group.addTask {
-                    let shell = try? await pair.client.shellSnapshot(
-                        timeoutInterval: shellTimeoutInterval
-                    )
-                    guard shell != nil else {
+                    let shell: OrchestrationV2ShellSnapshot
+                    do {
+                        shell = try await pair.client.shellSnapshot(
+                            timeoutInterval: shellTimeoutInterval
+                        )
+                    } catch {
                         return EnvironmentShellLoad(
                             environment: pair.environment,
                             client: pair.client,
                             shell: nil,
-                            config: nil
+                            config: nil,
+                            credentialRefused: CredentialRejection.isRejected(error)
                         )
                     }
 
@@ -5148,6 +5201,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             savedIDs.contains($0.key)
         }
         authSessions = authSessions.filter { savedIDs.contains($0.key) }
+        refusedCredentials = refusedCredentials.filter { savedIDs.contains($0.key) }
 
         for load in loads {
             environmentClients[load.environment.id] = load.client
@@ -5161,6 +5215,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 shellsByEnvironmentID[load.environment.id] = shell
                 environmentConnectionStates[load.environment.id] = .connected
                 environmentConnectionDetails[load.environment.id] = nil
+                refusedCredentials[load.environment.id] = nil
+            } else if load.credentialRefused {
+                refusedCredentials[load.environment.id] =
+                    Self.refusedCredentialUpdate(kind: load.client.routeSelector.current().kind)
+                environmentConnectionStates[load.environment.id] = .disconnected
+                environmentConnectionDetails[load.environment.id] =
+                    refusedCredentialDetail(environmentID: load.environment.id)
             } else {
                 environmentConnectionStates[load.environment.id] = .disconnected
                 environmentConnectionDetails[load.environment.id] =
@@ -5782,6 +5843,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         mapped.mcpURL = EnvironmentRoutes.mcpURL(environment.routes)
             .flatMap { mcpOAuthSupport[$0.absoluteString] == true ? $0 : nil }
         mapped.permissionUpdate = permissionUpdate(environmentID: environment.id)
+        mapped.accessEnded = refusedCredentials[environment.id]
+        mapped.supportsThreadFind = serverConfigsByEnvironmentID[environment.id]?.threadFind
+        mapped.supportsProgressiveThreadFind = serverConfigsByEnvironmentID[environment.id]?.threadFindProgressive
         return mapped
     }
 
@@ -5875,7 +5939,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                                     FeatureInputOption(label: $0.label, detail: $0.description, value: $0.value)
                                 },
                                 allowsMultiple: $0.multiSelect ?? false,
-                                allowCustomAnswer: $0.allowCustomAnswer
+                                allowCustomAnswer: $0.allowCustomAnswer,
+                                initialAnswer: $0.initialAnswer
                             )
                         }
                     )
@@ -5995,18 +6060,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     amongDrivers: drivers
                 )
             } ?? false
+            let reported = subagent.modelSelection.map(mapSelection)
             result[subagent.id] = SubagentRowMetadata(
                 modelLabel: resolved.modelLabel,
                 traits: ThreadLifecycle.resolveSubagentModelTraits(
                     origin: subagent.origin,
                     model: subagent.model,
                     providerInstanceID: subagent.providerInstanceId,
+                    reportedSelection: reported,
                     childSelection: child.map { mapSelection($0.modelSelection) },
                     provider: catalog.first { $0.id == subagent.providerInstanceId }
                 ),
                 account: showsAccount ? provider.map { $0.displayName ?? providerDisplayName($0.driver) } : nil,
                 accentColor: showsAccount ? ProviderAccountBadge.normalizedAccent(provider?.accentColor) : nil,
-                workspace: resolved.workspace
+                workspace: resolved.workspace,
+                reportedSelection: reported
             )
         }
         return result
@@ -6170,7 +6238,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         switch item.payload {
-        case let .userMessage(_, _, text, attachments):
+        case let .userMessage(messageID, _, text, attachments):
             var mapped = FeatureMessage(
                 id: item.id,
                 role: .user,
@@ -6189,7 +6257,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 },
                 // Kept so the transcript can tell an agent-sent user message
                 // from the reader's own, matching the RN feed.
-                createdBy: item.base.createdBy
+                createdBy: item.base.createdBy,
+                // Thread find names messages by this id rather than the turn item's.
+                wireMessageID: messageID
             )
             mapped.senderThreadID = item.senderThreadId.map {
                 FeatureScopedID.thread(environmentID: environmentID, wireID: $0)
@@ -6812,6 +6882,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     }
                 )
                 mapped.incompatibleVersionWarning = provider.incompatibleVersionWarning
+                mapped.updateRequiredModels = provider.updateRequiredModels
                 mapped.accentColor = ProviderAccountBadge.normalizedAccent(provider.accentColor)
                 mapped.workspaceSnapshots = provider.workspaceSnapshots?.map { workspace in
                     FeatureProviderWorkspace(cwd: workspace.cwd,
@@ -7060,6 +7131,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         case "grok": "Grok"
         case "opencode": "OpenCode"
         case "pi": "Pi"
+        case "muse": "Muse Code"
         default: id
         }
     }
@@ -7342,6 +7414,34 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return kind == .managedDPoP ? .renewManagedAccess : .pairAgain
     }
 
+    /// Records whether the server refuses an environment's saved credential,
+    /// publishing only a change so Home and Settings offer the way back in.
+    private func setCredentialRefused(_ refused: Bool, environmentID: String) {
+        let update = refused
+            ? Self.refusedCredentialUpdate(
+                kind: environmentClients[environmentID]?.routeSelector.current().kind
+            )
+            : nil
+        guard refusedCredentials[environmentID] != update else { return }
+        refusedCredentials[environmentID] = update
+        guard var snapshot = latestSnapshot else { return }
+        for index in snapshot.environments.indices where snapshot.environments[index].id == environmentID {
+            snapshot.environments[index].accessEnded = update
+        }
+        publish(snapshot)
+    }
+
+    /// A refused T3 Connect credential is renewed; a direct pairing is paired again.
+    private static func refusedCredentialUpdate(kind: EnvironmentKind?) -> FeaturePermissionUpdate {
+        kind == .managedDPoP ? .renewManagedAccess : .pairAgain
+    }
+
+    private func refusedCredentialDetail(environmentID: String) -> String {
+        refusedCredentials[environmentID] == .renewManagedAccess
+            ? "This device's T3 Connect access ended. Renew it to reconnect."
+            : "This device's access ended. Pair it again to reconnect."
+    }
+
     private static func title(from prompt: String, hasAttachments: Bool) -> String {
         let compact = prompt
             .split(whereSeparator: \.isWhitespace)
@@ -7498,6 +7598,8 @@ private struct EnvironmentShellLoad: Sendable {
     let client: T3Client
     let shell: OrchestrationV2ShellSnapshot?
     let config: ServerConfigSnapshot?
+    /// The read failed because the server refused the saved credential.
+    var credentialRefused = false
 }
 
 private struct EntityWireOwner: Hashable {
@@ -8052,8 +8154,16 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             throw FeatureCapabilityUnavailable("Custom model pricing")
         }
         let client = try await environmentClient(id: environmentID)
+        let environmentLabel = client.environment.label
         for scope in AuthScope.required(forSettingsPatch: patch.json) {
-            try await requireScope(scope, client: client)
+            do {
+                try await requireScope(scope, client: client)
+            } catch {
+                throw ServerSettingsSaveFailure.permissionDenied(
+                    environment: environmentLabel,
+                    pairingAgainHelps: error is AuthPermissionRequired
+                )
+            }
         }
         let sourceConfig = try await client.serverConfig()
         if patch.usageLimitSources != nil, sourceConfig.environment?.capabilities.usageLimitSources != true {
@@ -8067,7 +8177,17 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             throw FeatureCapabilityUnavailable("Merge method defaults")
         }
         setServerConfig(sourceConfig, environmentID: environmentID)
-        let settings = try await client.updateServerSettings(patch: patch)
+        let settings: ServerSettingsSnapshot
+        do {
+            settings = try await client.updateServerSettings(patch: patch)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ServerSettingsSaveFailure.rejected(
+                environment: environmentLabel,
+                reason: error.localizedDescription
+            )
+        }
         // Fold the server's answer into the cached config now. The active
         // environment would also hear it on the config subscription, but a
         // second server has no live stream, and a row that waits for one it
@@ -8155,6 +8275,19 @@ extension NativeFeatureClient: FeatureMcpAccessProbing {
             await emitSnapshot(shell, markSourceConnected: false)
         }
         return supported ? url : nil
+    }
+}
+
+extension NativeFeatureClient: FeatureSessionPermissionsReading {
+    func connectionSession(environmentID: String) async -> AuthSessionState? {
+        guard let client = try? await environmentClient(id: environmentID) else { return nil }
+        // The cached read may predate a route change, and routes hold separate
+        // sessions. Reading again also refreshes the permission gates.
+        authSessions[environmentID] = nil
+        guard let session = try? await authSession(for: client), session.authenticated else {
+            return nil
+        }
+        return session
     }
 }
 
@@ -8560,6 +8693,23 @@ struct NativeVoiceRelayClient: Sendable {
         }
 
         let models: [Model]
+    }
+}
+
+/// A settings save that failed, naming the server and why, like the web
+/// app's save-failure toasts.
+private enum ServerSettingsSaveFailure: LocalizedError {
+    case permissionDenied(environment: String, pairingAgainHelps: Bool)
+    case rejected(environment: String, reason: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .permissionDenied(environment, pairingAgainHelps):
+            "This connection lacks permission to change settings on \(environment)."
+                + (pairingAgainHelps ? " Pair this device again to get it." : "")
+        case let .rejected(environment, reason):
+            "Could not save on \(environment): \(reason)"
+        }
     }
 }
 

@@ -91,6 +91,19 @@ struct HomeConnectionBanner: Hashable {
     /// `isReconnecting` is the user's own Reconnect in flight, which turns the
     /// error into a wait instead of leaving a button that looks ignored.
     static func resolve(snapshot: FeatureSnapshot, isReconnecting: Bool) -> HomeConnectionBanner? {
+        // Reconnecting cannot help a refused credential; Settings offers the
+        // way back in.
+        if let ended = snapshot.environments.first(where: { $0.accessEnded != nil }) {
+            return HomeConnectionBanner(
+                tone: .error,
+                title: ended.accessEnded == .renewManagedAccess
+                    ? "Renew access to \(ended.name)"
+                    : "Pair \(ended.name) again",
+                message: "This device's access ended. Tap to reconnect it in Settings.",
+                offersReconnect: false,
+                opensConnections: true
+            )
+        }
         let unreachable = snapshot.environments.filter { $0.connectionState == .disconnected }
         if let first = unreachable.first {
             if unreachable.count > 1 {

@@ -2242,6 +2242,8 @@ struct FeatureThreadRow: View, Equatable {
             }
         }
         .contentShape(Rectangle())
+        // In-flight work recedes as a whole, as on web; the selected row never fades.
+        .opacity(!isSelected && thread.homeFadesInFlight(at: now) ? 0.7 : 1)
     }
 
     private func richRow(at now: Date) -> some View {

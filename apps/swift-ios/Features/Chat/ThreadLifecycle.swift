@@ -132,19 +132,24 @@ public struct SubagentRowMetadata: Equatable, Sendable {
     public let accentColor: String?
     /// Only what differs from the parent's workspace.
     public let workspace: [WorkspaceEntry]
+    /// The selection the provider reported for the subagent, which the child
+    /// thread's own bar prefers over the selection its thread mirrors.
+    public var reportedSelection: FeatureSelection? = nil
 
     public init(
         modelLabel: String,
         traits: SubagentModelTraits? = nil,
         account: String? = nil,
         accentColor: String? = nil,
-        workspace: [WorkspaceEntry] = []
+        workspace: [WorkspaceEntry] = [],
+        reportedSelection: FeatureSelection? = nil
     ) {
         self.modelLabel = modelLabel
         self.traits = traits
         self.account = account
         self.accentColor = accentColor
         self.workspace = workspace
+        self.reportedSelection = reportedSelection
     }
 }
 
@@ -271,19 +276,22 @@ public enum ThreadLifecycle {
     }
 
     /// Ports `resolveSubagentModelTraits` from
-    /// apps/web/src/components/chat/threadModelBadge.ts. Only a T3-owned
-    /// subagent runs on its child thread's selection; a provider-native child
-    /// mirrors the parent's, and a child that moved to another model or
-    /// instance no longer describes the subagent. Both return nil so the row
-    /// never claims traits the agent is not using.
+    /// apps/web/src/components/chat/threadModelBadge.ts. A selection the
+    /// provider reported for the subagent wins, for any origin, and it stays
+    /// after the subagent completes. Without one, only a T3-owned subagent runs
+    /// on its child thread's selection; a provider-native child mirrors the
+    /// parent's, and a child that moved to another model or instance no longer
+    /// describes the subagent. Both return nil so the row never claims traits
+    /// the agent is not using.
     static func resolveSubagentModelTraits(
         origin: String,
         model: String?,
         providerInstanceID: String?,
+        reportedSelection: FeatureSelection? = nil,
         childSelection: FeatureSelection?,
         provider: FeatureProvider?
     ) -> SubagentModelTraits? {
-        guard origin == "app_owned", let childSelection,
+        guard let childSelection = reportedSelection ?? (origin == "app_owned" ? childSelection : nil),
               childSelection.providerID == providerInstanceID else { return nil }
         let models = provider?.models ?? []
         func resolveSlug(_ value: String?) -> String? {

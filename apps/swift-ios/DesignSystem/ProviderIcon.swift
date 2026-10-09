@@ -8,6 +8,7 @@ enum ProviderBrand: String {
     case grok = "ProviderGrok"
     case openCode = "ProviderOpenCode"
     case pi = "ProviderPi"
+    case muse = "ProviderMuse"
 
     static func resolve(
         driver: String,
@@ -32,6 +33,8 @@ enum ProviderBrand: String {
                 return .openCode
             case "pi", "piagent", "picodingagent":
                 return .pi
+            case "muse", "musecode":
+                return .muse
             default:
                 continue
             }
@@ -41,7 +44,7 @@ enum ProviderBrand: String {
 
     var usesTemplateRendering: Bool {
         switch self {
-        case .openAI, .cursor, .grok, .pi: true
+        case .openAI, .cursor, .grok, .pi, .muse: true
         case .claude, .openCode, .antigravity: false
         }
     }
