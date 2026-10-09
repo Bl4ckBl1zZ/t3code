@@ -8,6 +8,7 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
+import { flushSync } from "react-dom";
 
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { ChatCanvasContext } from "./ChatCanvasContext";
@@ -78,7 +79,7 @@ export function ChatCanvas({
       );
     };
     measure();
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(() => flushSync(measure));
     observer.observe(element);
     observer.observe(probe);
     return () => observer.disconnect();
