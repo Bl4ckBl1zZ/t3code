@@ -56,7 +56,6 @@ import {
 } from "@t3tools/contracts";
 import {
   isOrchestrationV2SupersededInterrupt,
-  isOrchestrationV2TurnItemVisible,
   makeOrchestrationV2VisibilityContext,
 } from "@t3tools/shared/orchestrationV2Timeline";
 import {
@@ -1102,22 +1101,20 @@ function sortMessagesByTurnItemOrder(
 function activeLocalTurnItems(
   projection: OrchestrationV2ThreadProjection,
 ): Array<OrchestrationV2ProjectedTurnItem> {
-  return projection.turnItems
-    .filter((item) =>
-      isOrchestrationV2TurnItemVisible({
-        item,
-        runs: projection.runs,
-        attempts: projection.attempts,
-        items: projection.turnItems,
-      }),
-    )
-    .map((item, position) => ({
-      position,
-      visibility: "local" as const,
-      sourceThreadId: item.threadId,
-      sourceItemId: item.id,
-      item,
-    }));
+  // Indexed once: the per-item check rescans runs, attempts and items, which
+  // is quadratic over a long thread.
+  const isVisible = makeOrchestrationV2VisibilityContext({
+    runs: projection.runs,
+    attempts: projection.attempts,
+    items: projection.turnItems,
+  });
+  return projection.turnItems.filter(isVisible).map((item, position) => ({
+    position,
+    visibility: "local" as const,
+    sourceThreadId: item.threadId,
+    sourceItemId: item.id,
+    item,
+  }));
 }
 
 function localVisibleTurnItems(
