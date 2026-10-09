@@ -8,6 +8,7 @@ import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import noRawMcpRegistration from "./rules/no-raw-mcp-registration.ts";
 import noUnscopedHas from "./rules/no-unscoped-has.ts";
 import preferCatchTags from "./rules/prefer-catch-tags.ts";
+import requireCenteredScrollGutter from "./rules/require-centered-scroll-gutter.ts";
 import requireSuppressionReason from "./rules/require-suppression-reason.ts";
 
 export default definePlugin({
@@ -23,6 +24,7 @@ export default definePlugin({
     "no-raw-mcp-registration": noRawMcpRegistration,
     "no-unscoped-has": noUnscopedHas,
     "prefer-catch-tags": preferCatchTags,
+    "require-centered-scroll-gutter": requireCenteredScrollGutter,
     "require-suppression-reason": requireSuppressionReason,
   },
 });
