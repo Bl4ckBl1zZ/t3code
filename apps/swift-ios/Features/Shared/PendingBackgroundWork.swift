@@ -137,4 +137,19 @@ extension FeatureThread {
         guard homeStatus == .background, let pendingBackgroundTasks else { return nil }
         return PendingBackgroundWorkPresentation(pendingBackgroundTasks)?.title
     }
+
+    /// Commands the thread left running, such as a dev server. They never hold
+    /// the thread in Background, so the home row marks them with a glyph of
+    /// their own, as the desktop sidebar marks a running terminal. Empty on
+    /// servers that send only counts, which cannot tell a command apart.
+    var runningBackgroundCommands: [OrchestrationV2PendingBackgroundTask] {
+        pendingBackgroundTasks?.filter { $0.kind == .command } ?? []
+    }
+
+    /// The running commands in words ("Running: vp run dev"), for a row whose
+    /// status does not already name them. Background's title already does.
+    var runningBackgroundCommandsTitle: String? {
+        guard homeStatus != .background else { return nil }
+        return PendingBackgroundWorkPresentation(runningBackgroundCommands)?.title
+    }
 }
