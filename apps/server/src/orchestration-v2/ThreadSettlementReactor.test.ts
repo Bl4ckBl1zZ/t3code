@@ -23,7 +23,7 @@ import {
   type PullRequestMergeEvent,
   PullRequestService,
 } from "../pullRequest/PullRequestService.ts";
-import { GitManager } from "../git/GitManager.ts";
+import { type GitBranchPullRequest, GitManager } from "../git/GitManager.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ProjectionStoreV2, threadMatchesQuery } from "./ProjectionStore.ts";
@@ -248,6 +248,58 @@ it.effect("skips the branch recheck when a terminal link would settle nothing", 
     expect(summary).toHaveBeenCalledTimes(1);
     expect(h.branch).not.toHaveBeenCalled();
     expect(h.dispatch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("settles a merged branch PR opened on the checkout's fork", () =>
+  Effect.gen(function* () {
+    // Too recent for inactivity, so only the merge can settle it.
+    yield* TestClock.adjust("2 days");
+    const thread = fixture({ branch: "feature" });
+    // `upstream` names the project; the branch pushes to and opens its PR on `origin`.
+    const project = {
+      id: thread.projectId,
+      workspaceRoot: "/repo",
+      updatedAt: "1970-01-01T00:00:00Z",
+      repositoryIdentity: {
+        canonicalKey: "github.com/up/repo",
+        locator: {
+          source: "git-remote",
+          remoteName: "upstream",
+          remoteUrl: "git@github.com:up/repo.git",
+        },
+        displayName: "up/repo",
+        provider: "github",
+        origin: { canonicalKey: "github.com/fork/repo", displayName: "fork/repo" },
+      },
+    } as unknown as Project;
+    const branch = vi.fn(() =>
+      Effect.succeed({
+        number: 389,
+        title: "Feature",
+        url: "https://github.com/fork/repo/pull/389",
+        baseBranch: "main",
+        headBranch: "feature",
+        state: "merged",
+        repositoryKey: "github.com/fork/repo",
+        updatedAt: "1970-01-02T00:00:00.000Z",
+        mergedAt: "1970-01-02T00:00:00.000Z",
+        closedAt: null,
+      } as unknown as GitBranchPullRequest),
+    );
+    const h = harness(thread);
+    const layer = Layer.mergeAll(
+      h.layer,
+      Layer.mock(ProjectService)({
+        snapshot: Effect.succeed({ projects: [project], updatedAt: project.updatedAt }),
+      }),
+      Layer.mock(GitManager)({ branchPullRequest: branch }),
+    );
+    const reactor = yield* make.pipe(Effect.provide(layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(branch).toHaveBeenCalledTimes(1);
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
   }).pipe(Effect.scoped),
 );
 

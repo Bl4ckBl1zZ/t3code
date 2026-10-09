@@ -4078,6 +4078,45 @@ it.effect(
     }),
 );
 
+it.effect("reads hostless references to the checkout's origin fork", () =>
+  Effect.gen(function* () {
+    const requested: string[] = [];
+    const upstream = project({
+      id: "p",
+      title: "Repo",
+      workspaceRoot: "/repo",
+      repository: "up/repo",
+    });
+    const service = yield* makeService({
+      projects: [
+        {
+          ...upstream,
+          repositoryIdentity: {
+            ...upstream.repositoryIdentity!,
+            origin: { canonicalKey: "github.com/fork/repo", displayName: "fork/repo" },
+          },
+        },
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: (input) =>
+            Effect.sync(() => {
+              requested.push(`${input.host}/${input.repository}`);
+              return changeRequest(389, "2026-09-11T00:00:00Z");
+            }),
+        }),
+      ],
+    });
+    yield* service.summary({ projectId: "p" as ProjectId, repository: "Fork/Repo", number: 389 });
+    assert.deepEqual(requested, ["github.com/Fork/Repo"]);
+    assert.isTrue(
+      (yield* service
+        .summary({ projectId: "p" as ProjectId, repository: "other/repo", number: 389 })
+        .pipe(Effect.result))._tag === "Failure",
+    );
+  }),
+);
+
 it.effect("keeps lightweight stack reads separate from hydrated panel stacks", () =>
   Effect.gen(function* () {
     const reads: boolean[] = [];
