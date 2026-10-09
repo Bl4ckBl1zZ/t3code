@@ -9,7 +9,6 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientError, type HttpClientResponse } from "effect/unstable/http";
 
 import type { PreparedConnection } from "../connection/model.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 import {
@@ -43,7 +42,7 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
     ...input,
     group: "orchestration",
     method: "GET",
-    url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/orchestration/shell"),
+    url: (urls) => urls.shellSnapshot(),
     timeoutMs: input.timeoutMs ?? DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS,
     // The body is decoded here so each thread's pull request links can decode after its
     // rows. Every declared error is an `EnvironmentHttpCommonError`, so decoding one keeps

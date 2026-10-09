@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   ProjectId,
+  ThreadId,
   type AuthSessionState,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadDetailSnapshot,
@@ -239,17 +240,33 @@ describe("authenticated environment HTTP requests", () => {
       expect(new Headers(call.init.headers).get("dpop")).toBe("proof-1");
       expect(call.init.credentials).toBeUndefined();
       expect(harness.authorizations).toEqual([{ expectedEnvironmentId: TARGET.environmentId }]);
+      // The proof signs exactly the URL sent; signers drop the query for `htu`.
       expect(harness.proofs).toEqual([
-        {
-          method: loader.method,
-          url: `${CURRENT_ORIGIN}${loader.path}`,
-          accessToken: "current-token",
-        },
+        { method: loader.method, url: call.url, accessToken: "current-token" },
       ]);
       if (loader.name === "V2 thread snapshot") {
         expect(url.searchParams.get("maxVisibleItems")).toBe("20");
       }
       expect(PREPARED.httpAuthorization).toMatchObject({ accessToken: "expired-token" });
+    }),
+  );
+
+  // MCP-created thread ids contain ":", which the request path percent-encodes.
+  // The DPoP proof must sign the URL that is actually sent, or the environment
+  // rejects it as a URL mismatch.
+  const MCP_THREAD_ID = ThreadId.make("mcp:3534bc83-1c17-4a1e-9118-601c2766d355");
+  it.effect("signs the sent URL for a thread snapshot of a thread id that needs encoding", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness(() => Response.json(THREAD));
+      yield* fetchEnvironmentThreadSnapshot({
+        ...harness.input,
+        threadId: MCP_THREAD_ID,
+        maxVisibleItems: 20,
+      }).pipe(Effect.provide(harness.httpLayer));
+
+      const sent = harness.calls[0]!.url;
+      expect(new URL(sent).pathname).toContain("/mcp%3A3534bc83-");
+      expect(harness.proofs.map((proof) => proof.url)).toEqual([sent]);
     }),
   );
 

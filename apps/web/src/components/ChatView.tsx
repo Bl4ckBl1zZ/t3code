@@ -9144,6 +9144,8 @@ function ChatViewContent(props: ChatViewProps) {
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
             onOpenPullRequest={threadDetailsPanelProps.onOpenPullRequest}
+            parentThreadLink={parentThreadLink}
+            onOpenThread={onOpenRelatedThread}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
             onNewThreadInProject={handleNewThreadInActiveProject}
             onOpenProjectSettings={
@@ -9214,7 +9216,7 @@ function ChatViewContent(props: ChatViewProps) {
               </div>
             ) : null}
             {/* Provider status overlays the timeline without changing its content height. */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+            <div className="chat-banner-lane pointer-events-none absolute top-0 z-20">
               <ProviderStatusBanner
                 status={visibleProviderStatus}
                 {...(serverConfig?.environment.capabilities.providerTerminalEnvironment === true

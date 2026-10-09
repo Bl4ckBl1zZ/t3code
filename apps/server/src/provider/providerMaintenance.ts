@@ -24,6 +24,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
 const LATEST_VERSION_CACHE_TTL_MS = 60 * 60 * 1_000;
+// A failed lookup retries soon, so a flaky network cannot hide an update for an hour.
+const LATEST_VERSION_MISSING_TTL_MS = 60 * 1_000;
 const LATEST_VERSION_TIMEOUT_MS = 4_000;
 const HOMEBREW_INFO_TIMEOUT_MS = 10_000;
 const HOMEBREW_INFO_MAX_BYTES = 256 * 1_024;
@@ -814,7 +816,8 @@ export const resolveLatestProviderVersion = Effect.fn("resolveLatestProviderVers
 
   const version = yield* fetchNpmLatestVersion(packageName);
   latestVersionCache.set(packageName, {
-    expiresAt: now + LATEST_VERSION_CACHE_TTL_MS,
+    expiresAt:
+      now + (version === null ? LATEST_VERSION_MISSING_TTL_MS : LATEST_VERSION_CACHE_TTL_MS),
     version,
   });
   return version;

@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   createProviderVersionAdvisory,
@@ -149,6 +149,28 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
       }),
     ),
   );
+
+  it.effect("retries a failed latest-version lookup after a minute instead of an hour", () => {
+    const cache = new Map<
+      string,
+      { readonly expiresAt: number; readonly version: string | null }
+    >();
+    return resolveLatestProviderVersion(manualPackageTool).pipe(
+      Effect.provideService(ProviderVersionCache, cache),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response("unavailable", { status: 503 })),
+          ),
+        ),
+      ),
+      Effect.map((version) => {
+        expect(version).toBeNull();
+        expect(cache.get("@example/package-tool")).toEqual({ expiresAt: 60_000, version: null });
+      }),
+    );
+  });
 
   it.effect("prefers the installer's own latest version over the npm registry", () =>
     resolveLatestProviderVersion({ ...manualPackageTool, latestVersion: "1.2.0" }).pipe(

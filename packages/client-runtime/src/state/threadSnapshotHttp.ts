@@ -9,7 +9,6 @@ import * as Option from "effect/Option";
 import { HttpClient } from "effect/unstable/http";
 
 import type { PreparedConnection } from "../connection/model.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { type RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
@@ -40,24 +39,18 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   /** Windows the snapshot to roughly the last N visible turn items. */
   readonly maxVisibleItems?: number;
 }) {
+  const query = {
+    compactTurnItems: "1",
+    ...(input.maxVisibleItems === undefined ? {} : { maxVisibleItems: input.maxVisibleItems }),
+  };
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "orchestration",
     method: "GET",
-    url: (httpBaseUrl) =>
-      environmentEndpointUrl(httpBaseUrl, `/api/orchestration/threads/${input.threadId}`),
+    url: (urls) => urls.threadSnapshot({ params: { threadId: input.threadId }, query }),
     timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
     request: ({ client, headers }) =>
-      client.threadSnapshot({
-        params: { threadId: input.threadId },
-        query: {
-          compactTurnItems: "1",
-          ...(input.maxVisibleItems === undefined
-            ? {}
-            : { maxVisibleItems: input.maxVisibleItems }),
-        },
-        headers,
-      }),
+      client.threadSnapshot({ params: { threadId: input.threadId }, query, headers }),
   }).pipe(
     // Drop the marker with the restore so nothing can restore twice.
     Effect.map(

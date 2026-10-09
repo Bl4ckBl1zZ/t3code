@@ -93,6 +93,10 @@ successful pick; its hover glow and badge preview the element and color family t
 with the arrow keys or its letter. It does not run while the terminal has focus, and in a browser
 the browser may keep `mod+t` for itself.
 
+`threadPanel.toggle` (`mod+shift+b`) shows or hides the thread details panel. It does not run while
+the terminal has focus. If you already bound `threadPanel.toggle` yourself, your shortcut stays and
+no default is added.
+
 `rightPanel.toggleMaximized` maximizes or restores the open right panel. It has no default shortcut,
 so add one in **Settings** → **Keybindings** if you want to use it.
 
