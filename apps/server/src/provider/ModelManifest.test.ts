@@ -86,7 +86,16 @@ const model = (overrides: Partial<ServerProviderModel>): ServerProviderModel => 
 
 describe("classifyModels", () => {
   it("classifies qualified Codex families without changing their wire ids", () => {
-    const manifest: ModelManifestData = { version: 1, currentModels: { codex: ["gpt-test"] } };
+    const manifest: ModelManifestData = {
+      version: 1,
+      currentModels: { codex: ["gpt-test"] },
+      providers: {
+        codex: {
+          profiles: {},
+          models: [{ slug: "gpt-old", name: "Old", status: "legacy" }],
+        },
+      },
+    };
     const models = [
       model({ slug: "openai.gpt-test", isLegacy: true }),
       model({ slug: "openai.gpt-old" }),
@@ -99,16 +108,23 @@ describe("classifyModels", () => {
       ],
     );
   });
-  it("flags non-current models, clears stale flags, and skips custom models", () => {
+  it("flags only known legacy models, clears stale flags, and skips custom models", () => {
     const manifest: ModelManifestData = {
       version: 1,
       currentModels: { codex: ["current-a", "current-b"] },
+      providers: {
+        codex: {
+          profiles: {},
+          models: [{ slug: "old-model", name: "Old", status: "legacy" }],
+        },
+      },
     };
     const models = [
       model({ slug: "current-a" }),
       // Stale flag from a previous classification pass must be cleared.
       model({ slug: "current-b", isLegacy: true }),
       model({ slug: "old-model" }),
+      model({ slug: "new-release", isLegacy: true }),
       // Custom models are user-defined and never reclassified.
       model({ slug: "my-own-model", isCustom: true }),
     ];
@@ -118,10 +134,25 @@ describe("classifyModels", () => {
         ["current-a", false],
         ["current-b", false],
         ["old-model", true],
+        ["new-release", false],
         ["my-own-model", false],
       ],
     );
   });
+  it.each(["codex", "antigravity"])(
+    "keeps newly discovered %s models current when the manifest has no catalog",
+    (driverKind) => {
+      const models = [model({ slug: "new-release", isLegacy: true })];
+      assert.deepStrictEqual(
+        classifyModels(
+          models,
+          { version: 1, currentModels: { [driverKind]: ["known-current"] } },
+          ProviderDriverKind.make(driverKind),
+        ),
+        [model({ slug: "new-release" })],
+      );
+    },
+  );
 });
 
 const REMOTE_MANIFEST: ModelManifestData = {
@@ -131,6 +162,12 @@ const REMOTE_MANIFEST: ModelManifestData = {
   currentModels: {
     codex: ["gpt-5.4"],
     claudeAgent: ["claude-fable-5"],
+  },
+  providers: {
+    codex: {
+      profiles: {},
+      models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", status: "legacy" }],
+    },
   },
 };
 
