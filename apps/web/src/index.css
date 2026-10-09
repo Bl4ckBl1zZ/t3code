@@ -909,7 +909,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     padding-inline-end: calc(0.75rem + var(--chat-lane-inset-end, 0px));
   }
 
-  .chat-scroll-to-bottom {
+  .chat-scroll-to-bottom,
+  .chat-banner-lane {
     inset-inline-start: 0;
     inset-inline-end: var(--chat-lane-inset-end, 0px);
   }
@@ -933,7 +934,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     transition: padding-inline-end var(--panel-animation-duration) ease-out;
   }
 
-  [data-panel-animations="true"] [data-chat-canvas][data-lane-shifting] .chat-scroll-to-bottom {
+  [data-panel-animations="true"] [data-chat-canvas][data-lane-shifting] .chat-scroll-to-bottom,
+  [data-panel-animations="true"] [data-chat-canvas][data-lane-shifting] .chat-banner-lane {
     transition: inset-inline-end var(--panel-animation-duration) ease-out;
   }
 
