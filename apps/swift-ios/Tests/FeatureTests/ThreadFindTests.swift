@@ -166,15 +166,20 @@ final class ThreadFindTests: XCTestCase {
 
     func testProgressiveEarlyFrameBlocksSteppingUntilTheCountLands() async throws {
         let match = ThreadFindMatch(entryId: "a", runId: nil, occurrence: 0)
-        let server = StubFind(results: [], gated: true)
-        let model = ThreadFindModel()
-        model.open(threadID: "thread", progressive: true, search: server.search)
-        model.setQuery("needle")
-        let continuation = try await server.nextContinuation()
+        // The stream exists before the model asks, so no hand-off can race.
+        let (frames, continuation) = AsyncThrowingStream<ThreadFindResult, Error>.makeStream()
         continuation.yield(ThreadFindResult(complete: false, snapshotSequence: 1, totalMatches: 1, activeIndex: 0, match: match))
         continuation.yield(Self.result(activeIndex: 0, match: ("a", 0)))
         continuation.finish()
+        var progressiveRequests: [Bool] = []
+        let model = ThreadFindModel()
+        model.open(threadID: "thread", progressive: true) { _, progressive in
+            progressiveRequests.append(progressive)
+            return frames
+        }
+        model.setQuery("needle")
         await model.settle()
+        XCTAssertEqual(progressiveRequests, [true])
         XCTAssertTrue(model.canStep)
         XCTAssertEqual(model.countLabel, "1 of 5")
         // Finishing the count kept the match, so it asked for one reveal only.
@@ -260,24 +265,16 @@ private final class StubFind {
     private(set) var requests: [Request] = []
     private var results: [ThreadFindResult]
     private var failuresLeft: Int
-    private let gated: Bool
-    private var continuations: [AsyncThrowingStream<ThreadFindResult, Error>.Continuation] = []
-    private var waiters: [CheckedContinuation<AsyncThrowingStream<ThreadFindResult, Error>.Continuation, Never>] = []
 
-    init(results: [ThreadFindResult], failuresFirst: Int = 0, gated: Bool = false) {
+    init(results: [ThreadFindResult], failuresFirst: Int = 0) {
         self.results = results
         failuresLeft = failuresFirst
-        self.gated = gated
     }
 
     var search: ThreadFindModel.Search {
         { [self] query, progressive in
             requests.append(Request(query: query, progressive: progressive))
             return AsyncThrowingStream { continuation in
-                if gated {
-                    if waiters.isEmpty { continuations.append(continuation) } else { waiters.removeFirst().resume(returning: continuation) }
-                    return
-                }
                 if failuresLeft > 0 {
                     failuresLeft -= 1
                     continuation.finish(throwing: RPCError.remote("Could not search this thread. Please retry."))
@@ -287,11 +284,5 @@ private final class StubFind {
                 continuation.finish()
             }
         }
-    }
-
-    /// The stream a gated search hands out, once the model has asked.
-    func nextContinuation() async throws -> AsyncThrowingStream<ThreadFindResult, Error>.Continuation {
-        if !continuations.isEmpty { return continuations.removeFirst() }
-        return await withCheckedContinuation { waiters.append($0) }
     }
 }
