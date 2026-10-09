@@ -522,7 +522,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compactDisabled: boolean;
   compactDisabledReason: string | null;
   compactBeforeSendTokens: number | null;
-  onSendWithFullHistory: () => void;
+  keepFullHistory: boolean;
+  onToggleKeepFullHistory: () => void;
 }) {
   return (
     <>
@@ -561,7 +562,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
         compactBeforeSendTokens={props.compactBeforeSendTokens}
-        onSendWithFullHistory={props.onSendWithFullHistory}
+        keepFullHistory={props.keepFullHistory}
+        onToggleKeepFullHistory={props.onToggleKeepFullHistory}
       />
     </>
   );
@@ -724,10 +726,12 @@ export interface ChatComposerProps {
   onCompactContext?: (() => void) | undefined;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
-  /** Tokens Enter compacts before sending; null when the next send keeps full history. */
+  /** Tokens a stale session would re-read; null when the thread is not offered compaction. */
   resumeCompactionTokens: number | null;
-  /** Runs `send` as a one-off send that keeps full history instead of compacting first. */
-  onSendWithFullHistory: (send: () => void) => void;
+  /** The Compact chip is off, so the next send keeps full history. */
+  keepFullHistory: boolean;
+  /** Flips the Compact chip for the active thread. */
+  onToggleKeepFullHistory: () => void;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -846,7 +850,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     compactDisabled,
     compactDisabledReason,
     resumeCompactionTokens,
-    onSendWithFullHistory,
+    keepFullHistory,
+    onToggleKeepFullHistory,
     resolvedTheme,
     settings,
     keybindings,
@@ -1678,7 +1683,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable !== null ||
     !composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionLabel =
-    resumeCompactionTokens !== null ? "Open composer to compact and send" : "Send message";
+    resumeCompactionTokens !== null && !keepFullHistory
+      ? "Open composer to compact and send"
+      : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
 
@@ -2528,10 +2535,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       promptRef,
       shouldBlurMobileComposerOnSubmit,
     ],
-  );
-  const sendWithFullHistory = useCallback(
-    () => onSendWithFullHistory(() => submitComposer()),
-    [onSendWithFullHistory, submitComposer],
   );
   const compactThreadContext = useMemo(
     () =>
@@ -3964,8 +3967,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  // Compacting first is only sent from the labeled button, so expand to show it.
-                  if (resumeCompactionTokens !== null) expandMobileComposer();
+                  // Compacting first only sends from the expanded composer, where the chip shows it.
+                  if (resumeCompactionTokens !== null && !keepFullHistory) expandMobileComposer();
                   else submitComposer();
                 }}
               >
@@ -4467,7 +4470,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     (noProviderAvailable ? "Compacting is unavailable right now" : null)
                   }
                   compactBeforeSendTokens={resumeCompactionTokens}
-                  onSendWithFullHistory={sendWithFullHistory}
+                  keepFullHistory={keepFullHistory}
+                  onToggleKeepFullHistory={onToggleKeepFullHistory}
                 />
               </div>
             </div>

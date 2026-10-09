@@ -6498,8 +6498,8 @@ function ChatViewContent(props: ChatViewProps) {
     void sendStandaloneCommand("/compact", "Could not compact the conversation.");
   }, [compactDisabled, sendStandaloneCommand]);
   // Tokens a stale Claude session would re-read on its next turn. While set,
-  // Enter compacts first and the composer's send button says so; "Send with
-  // full history" in its menu skips that once.
+  // the composer shows a Compact chip and Enter compacts first; turning the
+  // chip off sends the next message with full history.
   const resumeCompactionTokens =
     activeContextWindow &&
     !resumeCompactionPermanentlyDismissed &&
@@ -6513,17 +6513,25 @@ function ChatViewContent(props: ChatViewProps) {
     })
       ? activeContextWindow.usedTokens
       : null;
-  // Set only for the synchronous span of a "Send with full history" submit;
-  // onSend reads it before its first await.
-  const keepFullHistoryOnceRef = useRef(false);
-  const sendWithFullHistory = useCallback((send: () => void) => {
-    keepFullHistoryOnceRef.current = true;
-    try {
-      send();
-    } finally {
-      keepFullHistoryOnceRef.current = false;
-    }
+  // Threads whose Compact chip is turned off. A send that starts its turn
+  // clears its thread's entry; a failed send keeps it for the retry.
+  const [fullHistoryThreadKeys, setFullHistoryThreadKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const keepFullHistory = fullHistoryThreadKeys.has(routeThreadKey);
+  const setKeepFullHistory = useCallback((threadKey: string, keep: boolean) => {
+    setFullHistoryThreadKeys((current) => {
+      if (current.has(threadKey) === keep) return current;
+      const next = new Set(current);
+      if (keep) next.add(threadKey);
+      else next.delete(threadKey);
+      return next;
+    });
   }, []);
+  const toggleKeepFullHistory = useCallback(
+    () => setKeepFullHistory(routeThreadKey, !keepFullHistory),
+    [keepFullHistory, routeThreadKey, setKeepFullHistory],
+  );
   // A native /goal keeps the agent working across turns. Stop pauses a Codex
   // goal; once the thread is idle the row offers the native follow-ups.
   const activeGoal = activeThreadShell?.goal ?? null;
@@ -7243,7 +7251,6 @@ function ChatViewContent(props: ChatViewProps) {
       image: ComposerImageAttachment | null;
     },
   ) => {
-    const keepFullHistory = keepFullHistoryOnceRef.current;
     if (needsLoadBalancing) {
       e?.preventDefault();
       toastManager.add({
@@ -7935,6 +7942,7 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        setKeepFullHistory(routeThreadKey, false);
         if (supportsAttachmentUploads) {
           releaseAttachmentUploads(uploadableImagesSnapshot);
         }
@@ -9411,7 +9419,8 @@ function ChatViewContent(props: ChatViewProps) {
                               compactDisabled={compactDisabled}
                               compactDisabledReason={compactDisabledReason}
                               resumeCompactionTokens={resumeCompactionTokens}
-                              onSendWithFullHistory={sendWithFullHistory}
+                              keepFullHistory={keepFullHistory}
+                              onToggleKeepFullHistory={toggleKeepFullHistory}
                               resolvedTheme={resolvedTheme}
                               settings={settings}
                               keybindings={keybindings}
