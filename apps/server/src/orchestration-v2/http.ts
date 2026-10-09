@@ -20,7 +20,7 @@ import * as OrchestrationEventStore from "../persistence/Services/OrchestrationE
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { buildActiveShellSnapshot } from "./ShellStream.ts";
-import { projectThreadProjectionForWire } from "./WireProjection.ts";
+import { threadSnapshotForWire } from "./WireProjection.ts";
 
 function isThreadNotFound(error: unknown): boolean {
   return (
@@ -118,10 +118,10 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 }),
               ),
             );
-          return {
-            snapshotSequence: snapshot.snapshotSequence,
-            projection: projectThreadProjectionForWire(snapshot.projection),
-          };
+          return threadSnapshotForWire({
+            ...snapshot,
+            compactTurnItems: args.query.compactTurnItems === "1",
+          });
         }),
       );
   }),

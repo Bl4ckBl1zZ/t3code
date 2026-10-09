@@ -1,5 +1,6 @@
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { OrchestrationV2ThreadDetailSnapshot, ThreadId } from "@t3tools/contracts";
+import { boundedSnapshotProjection } from "@t3tools/shared/orchestrationV2BoundedSnapshot";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -25,6 +26,8 @@ const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 20_000;
  * Load a thread's detail snapshot over HTTP instead of embedding it in the
  * WebSocket subscription's first frame. The response is gzip-compressible by
  * the transport and keeps the (potentially multi-KB) snapshot off the socket.
+ * Opts into compact turnItems and restores them, so callers always see the
+ * full shape. Older servers ignore the query and send the full shape.
  */
 export const fetchEnvironmentThreadSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentThreadSnapshot",
@@ -47,11 +50,23 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
     request: ({ client, headers }) =>
       client.threadSnapshot({
         params: { threadId: input.threadId },
-        query:
-          input.maxVisibleItems === undefined ? {} : { maxVisibleItems: input.maxVisibleItems },
+        query: {
+          compactTurnItems: "1",
+          ...(input.maxVisibleItems === undefined
+            ? {}
+            : { maxVisibleItems: input.maxVisibleItems }),
+        },
         headers,
       }),
-  });
+  }).pipe(
+    // Drop the marker with the restore so nothing can restore twice.
+    Effect.map(
+      ({ turnItemsOmitLocalVisible, ...snapshot }): OrchestrationV2ThreadDetailSnapshot => ({
+        ...snapshot,
+        projection: boundedSnapshotProjection({ ...snapshot, turnItemsOmitLocalVisible }),
+      }),
+    ),
+  );
 });
 
 export type FetchEnvironmentThreadSnapshotError = RemoteEnvironmentRequestError;

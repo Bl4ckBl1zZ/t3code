@@ -31,7 +31,9 @@ import {
   OrchestrationV2RpcSchemas,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2Subagent,
+  OrchestrationV2SubscribeThreadInput,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2ThreadSnapshotResponse,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
   orchestrationV2BackgroundProcessCount,
@@ -47,6 +49,7 @@ const LegacyShellStreamItem = Schema.Union([
 ]);
 const decodeLegacyShellStreamItem = Schema.decodeUnknownSync(LegacyShellStreamItem);
 const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Command);
+const decodeSubscribeThreadInput = Schema.decodeUnknownSync(OrchestrationV2SubscribeThreadInput);
 const decodeOrchestrationV2TurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const decodeWireItems = Schema.decodeUnknownSync(
   Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),
@@ -821,6 +824,87 @@ describe("orchestration V2 contracts", () => {
       "settled_only",
     );
     expect(() => decode({ ...appOwnedSubagent, completionWake: "sometimes" })).toThrow();
+  });
+
+  it("negotiates compact snapshot turnItems without disturbing older peers", () => {
+    // Older servers strip the unknown opt-in, so they keep sending full turnItems.
+    const decodeLegacySubscribeThreadInput = Schema.decodeUnknownSync(
+      Schema.Struct({ threadId: ThreadId }),
+    );
+    expect(
+      "acceptCompactTurnItems" in
+        decodeLegacySubscribeThreadInput({ threadId: "thread-1", acceptCompactTurnItems: true }),
+    ).toBe(false);
+    expect(
+      decodeSubscribeThreadInput({
+        threadId: "thread-1",
+        acceptCompactTurnItems: true,
+      }).acceptCompactTurnItems,
+    ).toBe(true);
+
+    const projection = {
+      thread: {
+        createdBy: "user",
+        creationSource: "web",
+        id: "thread-1",
+        projectId: "project-1",
+        title: "Thread",
+        providerInstanceId: "codex",
+        modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: "thread-1" },
+        forkedFrom: null,
+        createdAt: DateTime.formatIso(now),
+        updatedAt: DateTime.formatIso(now),
+        archivedAt: null,
+        deletedAt: null,
+      },
+      runs: [],
+      attempts: [],
+      nodes: [],
+      subagents: [],
+      providerSessions: [],
+      providerThreads: [],
+      providerTurns: [],
+      runtimeRequests: [],
+      messages: [],
+      plans: [],
+      turnItems: [],
+      checkpointScopes: [],
+      checkpoints: [],
+      contextHandoffs: [],
+      contextTransfers: [],
+      visibleTurnItems: [],
+      updatedAt: DateTime.formatIso(now),
+    };
+    const [plain, marked] = decodeWireItems([
+      { kind: "snapshot", snapshotSequence: 1, projection },
+      { kind: "snapshot", snapshotSequence: 1, projection, turnItemsOmitLocalVisible: true },
+    ]);
+    // Older servers never send the marker; newer clients treat absence as full turnItems.
+    expect(plain?.kind === "snapshot" && plain.turnItemsOmitLocalVisible).toBe(undefined);
+    expect(marked?.kind === "snapshot" && marked.turnItemsOmitLocalVisible).toBe(true);
+    // The marker only means "omitted"; any other value is a protocol error.
+    expect(() =>
+      decodeWireItems([
+        { kind: "snapshot", snapshotSequence: 1, projection, turnItemsOmitLocalVisible: false },
+      ]),
+    ).toThrow();
+
+    const decodeResponse = Schema.decodeUnknownSync(
+      Schema.toCodecJson(OrchestrationV2ThreadSnapshotResponse),
+    );
+    expect(
+      decodeResponse({ snapshotSequence: 1, projection, turnItemsOmitLocalVisible: true })
+        .turnItemsOmitLocalVisible,
+    ).toBe(true);
+    expect("turnItemsOmitLocalVisible" in decodeResponse({ snapshotSequence: 1, projection })).toBe(
+      false,
+    );
   });
 
   it("decodes thread projections with an ordered turn item rendering stream", () => {

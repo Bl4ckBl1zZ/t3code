@@ -133,6 +133,7 @@ import { readThreadResumeReplay } from "./orchestration-v2/ThreadStream.ts";
 import {
   projectDomainEventForWire,
   projectThreadProjectionForWire,
+  threadSnapshotForWire,
 } from "./orchestration-v2/WireProjection.ts";
 import {
   coalesceThreadStreamFrames,
@@ -848,6 +849,7 @@ const makeWsRpcLayer = (
           readonly afterSequence?: number;
           readonly requestCompletionMarker?: boolean;
           readonly snapshotMaxVisibleItems?: number;
+          readonly acceptCompactTurnItems?: boolean;
         }) {
           yield* Effect.annotateCurrentSpan({
             "orchestration_v2.thread_id": input.threadId,
@@ -882,8 +884,10 @@ const makeWsRpcLayer = (
                 );
               return {
                 kind: "snapshot" as const,
-                snapshotSequence: snapshot.snapshotSequence,
-                projection: projectThreadProjectionForWire(snapshot.projection),
+                ...threadSnapshotForWire({
+                  ...snapshot,
+                  compactTurnItems: input.acceptCompactTurnItems === true,
+                }),
               };
             },
           );

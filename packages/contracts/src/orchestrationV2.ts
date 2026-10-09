@@ -3627,6 +3627,11 @@ export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
    * Full history stays available over the HTTP snapshot endpoint.
    */
   snapshotMaxVisibleItems: Schema.optionalKey(PositiveInt),
+  /**
+   * Allows snapshot frames to omit `projection.turnItems` entries that repeat
+   * local visible rows. See `turnItemsOmitLocalVisible`.
+   */
+  acceptCompactTurnItems: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2SubscribeThreadInput.Type;
 
@@ -3635,6 +3640,21 @@ export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
   projection: OrchestrationV2ThreadProjection,
 });
 export type OrchestrationV2ThreadDetailSnapshot = typeof OrchestrationV2ThreadDetailSnapshot.Type;
+
+/**
+ * Set only for clients that opted in: `projection.turnItems` omits the items of
+ * local visible rows, which lead the full list. Clients must restore them with
+ * `boundedSnapshotProjection` before using or caching the projection.
+ */
+const TurnItemsOmitLocalVisible = Schema.optionalKey(Schema.Literal(true));
+
+/** The HTTP thread snapshot: a detail snapshot, possibly with compact turnItems. */
+export const OrchestrationV2ThreadSnapshotResponse = Schema.Struct({
+  ...OrchestrationV2ThreadDetailSnapshot.fields,
+  turnItemsOmitLocalVisible: TurnItemsOmitLocalVisible,
+});
+export type OrchestrationV2ThreadSnapshotResponse =
+  typeof OrchestrationV2ThreadSnapshotResponse.Type;
 
 const knownDomainEventTypes: ReadonlySet<string> = new Set(
   OrchestrationV2DomainEvent.members.flatMap((member) => {
@@ -3690,6 +3710,7 @@ export const OrchestrationV2ThreadStreamItem = Schema.Union([
     kind: Schema.Literal("snapshot"),
     snapshotSequence: NonNegativeInt,
     projection: OrchestrationV2ThreadProjection,
+    turnItemsOmitLocalVisible: TurnItemsOmitLocalVisible,
   }),
   Schema.Struct({
     kind: Schema.Literal("event"),
