@@ -129,8 +129,6 @@ export interface ThreadDetailScreenProps {
   /** Non-null when older turns exist beyond the loaded window. */
   readonly activeThreadBusy: boolean;
   readonly canStopThread: boolean;
-  /** The turn has settled but its background work still runs and can be stopped. */
-  readonly canStopBackgroundWork: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
@@ -793,7 +791,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               <ThreadActivityPills
                 environmentId={props.environmentId}
                 threadId={props.selectedThread.id}
-                {...(props.canStopBackgroundWork ? { onStop: props.onStopThread } : {})}
               />
               <ThreadQueueControl
                 environmentId={props.environmentId}

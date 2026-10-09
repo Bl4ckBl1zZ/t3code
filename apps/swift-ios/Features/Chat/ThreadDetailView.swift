@@ -1008,9 +1008,6 @@ public struct ThreadDetailView: View {
             onOpenThread: onOpenRelatedThread,
             onMerge: lineageMergeBack,
             onDetach: lineageDetach,
-            onStop: canStopBackgroundWork
-                ? { Task { await model.cancelTurn(threadID: thread.id) } }
-                : nil,
             onStopSubagent: stopSubagent,
             subagentMetadata: detail?.subagentMetadata ?? [:]
         )
@@ -1052,15 +1049,6 @@ public struct ThreadDetailView: View {
 
     /// Background commands for the open thread, finished ones included so the bar
     /// can report an ending that has just landed.
-    /// The turn has settled but background work it started still runs; Stop
-    /// on the status bar ends it.
-    private var canStopBackgroundWork: Bool {
-        guard let detail else { return false }
-        return detail.workflow.backgroundWorkStopRunID != nil
-            && detail.thread.state != .working
-            && detail.thread.state != .queued
-    }
-
     private var backgroundCommands: [ThreadDetailsBackgroundCommand] {
         guard let detail else { return [] }
         return ThreadDetailsBackgroundTasks.backgroundCommands(detail.timelineItems.map(\.item))

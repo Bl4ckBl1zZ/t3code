@@ -683,7 +683,6 @@ function ThreadRouteContent(
           threadSyncStatus={selectedThreadDetailState.status}
           activeThreadBusy={composer.activeThreadBusy}
           canStopThread={composer.interruptibleRunId !== null}
-          canStopBackgroundWork={composer.backgroundWorkStopRunId !== null}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
