@@ -2582,6 +2582,7 @@ struct FeatureThreadRow: View, Equatable {
     private func status(at now: Date) -> some View {
         if let label = thread.homeStatusLabel {
             HStack(spacing: 4) {
+                runningCommandGlyph
                 if let icon = statusIcon {
                     Image(systemName: icon)
                         .imageScale(.small)
@@ -2611,6 +2612,7 @@ struct FeatureThreadRow: View, Equatable {
     @ViewBuilder
     private func dateColumn(at now: Date) -> some View {
         HStack(spacing: 4) {
+            runningCommandGlyph
             if context.showsArchivedBadge {
                 Text("Archived")
                     .font(.caption2.weight(.semibold))
@@ -2633,6 +2635,19 @@ struct FeatureThreadRow: View, Equatable {
         }
         .font(T3Typography.homeMetadata)
         .foregroundStyle(T3Colors.textTertiary)
+    }
+
+    /// A command the thread left running, such as a dev server. Static: it can
+    /// stay up for hours, and a pulse that long is GPU cost for no news. The
+    /// row's accessibility value names the commands instead.
+    @ViewBuilder
+    private var runningCommandGlyph: some View {
+        if !thread.runningBackgroundCommands.isEmpty {
+            Image(systemName: "terminal")
+                .imageScale(.small)
+                .foregroundStyle(T3Colors.statusRunning)
+                .accessibilityHidden(true)
+        }
     }
 
     private func snoozeWake(at now: Date) -> Date? {
@@ -2768,6 +2783,9 @@ struct FeatureThreadRow: View, Equatable {
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
+            if let commands = thread.runningBackgroundCommandsTitle {
+                values.append(commands)
+            }
             if let preview = thread.preview, !preview.isEmpty {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
             }
@@ -2775,6 +2793,9 @@ struct FeatureThreadRow: View, Equatable {
             values.append(thread.backgroundWorkStatusTitle ?? thread.homeStatusLabel ?? "Ready")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
+            }
+            if let commands = thread.runningBackgroundCommandsTitle {
+                values.append(commands)
             }
             values.append("Project \(context.projectName)")
             if let pullRequest = context.pullRequest {

@@ -102,4 +102,30 @@ final class PendingBackgroundWorkTests: XCTestCase {
         XCTAssertNil(thread([Entry(taskId: "dev", description: "vp run dev", kind: .command)], count: 1).backgroundWorkStatusTitle)
         XCTAssertNil(thread(nil, count: 1).backgroundWorkStatusTitle)
     }
+
+    /// A dev server left running keeps the row Ready but still marks it;
+    /// a Background row already names its commands in its status.
+    func testRunningCommandsMarkARowThatIsNotInBackground() {
+        func thread(_ tasks: [Entry]?, count: Int) -> FeatureThread {
+            FeatureThread(
+                id: "thread", projectID: "project", title: "Thread",
+                backgroundWorkCount: count, pendingBackgroundTasks: tasks
+            )
+        }
+        let devServer = thread([Entry(taskId: "dev", description: "vp run dev", kind: .command)], count: 1)
+        XCTAssertEqual(devServer.homeStatus, .ready)
+        XCTAssertEqual(devServer.runningBackgroundCommands.map(\.taskId), ["dev"])
+        XCTAssertEqual(devServer.runningBackgroundCommandsTitle, "Running: vp run dev")
+
+        let mixed = thread([
+            Entry(taskId: "dev", description: "vp run dev", kind: .command),
+            Entry(taskId: "watch", description: "Watch PR checks", kind: .monitor),
+        ], count: 2)
+        XCTAssertEqual(mixed.homeStatus, .background)
+        XCTAssertEqual(mixed.runningBackgroundCommands.count, 1)
+        XCTAssertNil(mixed.runningBackgroundCommandsTitle)
+
+        XCTAssertTrue(thread(nil, count: 1).runningBackgroundCommands.isEmpty)
+        XCTAssertTrue(thread([], count: 0).runningBackgroundCommands.isEmpty)
+    }
 }
