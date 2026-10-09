@@ -3,7 +3,8 @@
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
 A provider is the agent runtime that does the actual work. T3 Code supports several, and the
-orchestration layer does not know which one is behind a thread.
+orchestration layer does not know which one is behind a thread. For a new driver, start with
+[adding a provider](./adding-a-provider.md).
 
 ## Built-in drivers
 
@@ -36,8 +37,9 @@ Two registries separate configuration from live processes:
 [`ProviderService`][service] sits on top. It combines the adapter registry with the provider session
 directory to route session and turn operations for a thread, so callers name a thread, not an agent.
 
-Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
-orchestration, contract, or client change is required for the common case.
+Adding a driver means writing the driver plus adapter and registering both. No orchestration change
+is required for the common case; [adding a provider](./adding-a-provider.md) lists the contract,
+client, and docs entries a new driver still needs.
 
 ## Workspace snapshots
 
