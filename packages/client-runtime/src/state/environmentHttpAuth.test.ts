@@ -240,11 +240,9 @@ describe("authenticated environment HTTP requests", () => {
       expect(new Headers(call.init.headers).get("dpop")).toBe("proof-1");
       expect(call.init.credentials).toBeUndefined();
       expect(harness.authorizations).toEqual([{ expectedEnvironmentId: TARGET.environmentId }]);
-      // The proof signs exactly the URL sent, minus the query that `htu` leaves out.
-      const signedUrl = new URL(call.url);
-      signedUrl.search = "";
+      // The proof signs exactly the URL sent; signers drop the query for `htu`.
       expect(harness.proofs).toEqual([
-        { method: loader.method, url: signedUrl.toString(), accessToken: "current-token" },
+        { method: loader.method, url: call.url, accessToken: "current-token" },
       ]);
       if (loader.name === "V2 thread snapshot") {
         expect(url.searchParams.get("maxVisibleItems")).toBe("20");
@@ -266,10 +264,9 @@ describe("authenticated environment HTTP requests", () => {
         maxVisibleItems: 20,
       }).pipe(Effect.provide(harness.httpLayer));
 
-      const sent = new URL(harness.calls[0]!.url);
-      expect(sent.pathname).toContain("/mcp%3A3534bc83-");
-      sent.search = "";
-      expect(harness.proofs.map((proof) => proof.url)).toEqual([sent.toString()]);
+      const sent = harness.calls[0]!.url;
+      expect(new URL(sent).pathname).toContain("/mcp%3A3534bc83-");
+      expect(harness.proofs.map((proof) => proof.url)).toEqual([sent]);
     }),
   );
 
