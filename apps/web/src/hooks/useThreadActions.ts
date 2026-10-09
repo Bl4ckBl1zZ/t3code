@@ -477,7 +477,8 @@ export function useThreadActions() {
    * and the post-delete route are all decided once up front, so a bulk delete
    * asks at most one question and never routes through a thread it is about
    * to delete. The worktree question follows the delete confirmation setting;
-   * with it off, orphaned worktrees are kept. Results line up with `targets`.
+   * with it off, orphaned worktrees are removed without asking. Results line
+   * up with `targets`.
    */
   const deleteThreads = useCallback(
     async (
@@ -545,7 +546,7 @@ export function useThreadActions() {
       );
 
       const orphanedWorktrees = plans.flatMap((plan) => plan.orphanedWorktrees);
-      let shouldRemoveWorktrees = false;
+      let shouldRemoveWorktrees = !confirmThreadDelete;
       if (orphanedWorktrees.length > 0 && confirmThreadDelete) {
         const confirmation = await confirmOrphanedWorktreeRemoval({
           threadCount: targets.length,
