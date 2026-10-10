@@ -1,6 +1,7 @@
 import { PermissionUpdateNotice } from "../components/PermissionUpdateNotice";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
+import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { isElectron } from "../env";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
@@ -208,6 +209,7 @@ function RootRouteView() {
           {primaryEnvironmentAuthenticated ? (
             <>
               <DesktopAppActivationCoordinator />
+              <DesktopWebLinkCoordinator />
               <SnapShotCoordinator />
             </>
           ) : null}

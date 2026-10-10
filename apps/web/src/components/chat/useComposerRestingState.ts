@@ -5,6 +5,7 @@ import {
   suppressComposerReadingGesture,
 } from "./composerRestingState";
 import { isTimelineScrollTarget } from "./timelineScrollTarget";
+import { observeResize } from "~/lib/observeResize";
 
 export interface ComposerReadingTimeline {
   getElement: () => HTMLElement | null;
@@ -121,10 +122,7 @@ export function useComposerRestingState(
     const resize = () => {
       if (!current!.overflows()) expand();
     };
-    const observer = new ResizeObserver(resize);
-    observer.observe(node);
-    if (node.firstElementChild) observer.observe(node.firstElementChild);
-    return () => observer.disconnect();
+    return observeResize(node.firstElementChild ? [node, node.firstElementChild] : node, resize);
   }, [collapsed, expand, timeline]);
   return { collapsed, expand, eligible, refocusingWindow };
 }

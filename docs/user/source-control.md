@@ -2,6 +2,13 @@
 
 T3 Code connects to your Git hosting provider so you can create pull requests, review code, and manage repositories without leaving the app.
 
+## Review turn changes
+
+A turn's changed files and diff show only the turn's own work. When a turn pulls, merges, or
+rebases, the files Git brought in are left out. A file stays in the list when the turn edited it,
+committed it, or fixed a conflict in it. Use the branch comparison to review everything that changed
+against your base branch. Restore still returns the complete saved workspace.
+
 ## Supported Providers
 
 T3 Code works with the platforms your team already uses:

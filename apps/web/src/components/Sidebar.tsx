@@ -371,7 +371,7 @@ function SidebarWorkspaceSelector(props: {
     <Menu>
       <MenuTrigger
         aria-label={`Switch workspace. Current workspace: ${selected.label}`}
-        className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex h-8 min-w-0 max-w-[calc(100%-var(--workspace-titlebar-content-left)-0.5rem)] cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-sidebar-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring in-data-[on-backdrop]:text-white in-data-[on-backdrop]:hover:bg-white/15 in-data-[on-backdrop]:focus-visible:ring-white/90"
+        className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex h-8 min-w-0 max-w-[calc(100%-var(--workspace-titlebar-content-left)-0.5rem)] cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-sidebar-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring in-data-[on-backdrop]:text-white in-data-[on-backdrop]:hover:bg-white/15 in-data-[on-backdrop]:focus-visible:ring-white/90"
       >
         <T3Wordmark />
         <span className="truncate text-sm font-medium tracking-tight">
@@ -1625,7 +1625,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               type="button"
               aria-label="Unpin thread"
               onClick={handleTogglePinClick}
-              className="group/unpin inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="group/unpin inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             />
           }
         >
@@ -5370,7 +5370,7 @@ export default function Sidebar() {
                                 aria-hidden
                                 className={cn(
                                   "size-3 text-muted-foreground/50 transition-transform",
-                                  workingShelfExpanded && "rotate-180",
+                                  !workingShelfExpanded && "rotate-180",
                                 )}
                               />
                             </button>
@@ -5409,7 +5409,7 @@ export default function Sidebar() {
                                 aria-hidden
                                 className={cn(
                                   "size-3 text-info-foreground transition-transform",
-                                  snoozedShelfExpanded && "rotate-180",
+                                  !snoozedShelfExpanded && "rotate-180",
                                 )}
                               />
                             </button>
@@ -5443,7 +5443,7 @@ export default function Sidebar() {
                                 aria-hidden
                                 className={cn(
                                   "size-3 text-muted-foreground/50 transition-transform",
-                                  settledShelfExpanded && "rotate-180",
+                                  !settledShelfExpanded && "rotate-180",
                                 )}
                               />
                             </button>

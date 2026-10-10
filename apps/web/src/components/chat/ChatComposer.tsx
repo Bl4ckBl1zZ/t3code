@@ -89,11 +89,13 @@ import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag";
+import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import {
   type ComposerAttachment,
   type ComposerImageAttachment,
   type DraftId,
   type PersistedComposerImageAttachment,
+  composerTargetKey,
   hydrateImagesFromPersisted,
   useComposerDraftStore,
   useComposerThreadDraft,
@@ -221,21 +223,18 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
 
-    const observer =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updatePosition);
-    if (observer) {
-      // The composer is centered and capped at a max width, so opening a side
-      // panel slides it sideways without ever resizing it. Watching the anchor
-      // alone would leave the menu behind; the ancestors are what shrink, and
-      // they resize on every frame of the panel animation.
-      observer.observe(anchor);
-      for (let element = anchor.parentElement; element; element = element.parentElement) {
-        observer.observe(element);
-      }
+    // The composer is centered and capped at a max width, so opening a side
+    // panel slides it sideways without ever resizing it. Watching the anchor
+    // alone would leave the menu behind; the ancestors are what shrink, and
+    // they resize on every frame of the panel animation.
+    const observed: Element[] = [anchor];
+    for (let element = anchor.parentElement; element; element = element.parentElement) {
+      observed.push(element);
     }
+    const stopObserving = observeResize(observed, updatePosition);
 
     return () => {
-      observer?.disconnect();
+      stopObserving();
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
@@ -318,6 +317,7 @@ import { ComposerAttachmentChips } from "./ComposerAttachmentChips";
 import { isAttachmentLimitReached } from "./ComposerAttachmentChips.logic";
 import { resolvePastePolicy } from "./composerAttachmentIntake.logic";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { observeResize } from "~/lib/observeResize";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 
@@ -605,6 +605,7 @@ export interface ChatComposerHandle {
   addTerminalContext: (selection: TerminalContextSelection) => void;
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
+    answeringPendingUserInput: boolean;
     prompt: string;
     images: ComposerAttachment[];
     terminalContexts: TerminalContextDraft[];
@@ -822,12 +823,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sendDisabledReason: externalSendDisabledReason,
     isPreparingWorktree,
     environmentUnavailable,
-    activePendingApproval,
+    activePendingApproval: incomingPendingApproval,
     pendingApprovals,
-    pendingUserInputs,
-    activePendingProgress,
+    pendingUserInputs: incomingPendingUserInputs,
+    activePendingProgress: incomingPendingProgress,
     activePendingResolvedAnswers,
-    activePendingIsResponding,
+    activePendingIsResponding: incomingPendingIsResponding,
     activePendingDraftAnswers,
     activePendingQuestionIndex,
     respondingRequestIds,
@@ -885,6 +886,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setThreadError,
     onExpandImage,
   } = props;
+  const {
+    heldRequestIds,
+    onDraftChange: onTypingGuardDraftChange,
+    onFocus: onTypingGuardFocus,
+    onBlur: onTypingGuardBlur,
+    onSend: onTypingGuardSend,
+  } = useComposerTypingGuard(composerTargetKey(composerDraftTarget), [
+    ...pendingApprovals.map((request) => request.requestId),
+    ...incomingPendingUserInputs.map((request) => request.requestId),
+  ]);
+  // Hold composer takeover while the user finishes their thread draft.
+  const activePendingApproval =
+    incomingPendingApproval && !heldRequestIds.has(incomingPendingApproval.requestId)
+      ? incomingPendingApproval
+      : null;
+  const holdingUserInput = incomingPendingUserInputs[0]
+    ? heldRequestIds.has(incomingPendingUserInputs[0].requestId)
+    : false;
+  const pendingUserInputs = holdingUserInput ? [] : incomingPendingUserInputs;
+  const activePendingProgress = holdingUserInput ? null : incomingPendingProgress;
+  const activePendingIsResponding = !holdingUserInput && incomingPendingIsResponding;
   // Editor-style questions (Pi `editor` dialogs) answer with verbatim text:
   // no chips, no suggestion menus, and character-exact cursors.
   const isLiteralPendingAnswer = activePendingProgress?.activeQuestion?.initialAnswer !== undefined;
@@ -2062,8 +2084,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           },
         })
       : undefined;
-    const observer = new ResizeObserver((entries) => {
-      const [entry] = entries;
+    const stopObserving = observeResize(composerForm, (entries) => {
+      const entry = entries.at(-1);
       if (!entry) return;
       const nextCompactness = measureFooterCompactness();
       setIsComposerPrimaryActionsCompact((previous) =>
@@ -2082,9 +2104,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       scheduleStickToBottom();
     });
 
-    observer.observe(composerForm);
     return () => {
-      observer.disconnect();
+      stopObserving();
       stopFade?.();
     };
   }, [
@@ -2197,6 +2218,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
         return;
       }
+      onTypingGuardDraftChange();
       promptRef.current = nextPrompt;
       setPrompt(nextPrompt);
       if (!terminalContextIdListsEqual(composerTerminalContexts, terminalContextIds)) {
@@ -2214,6 +2236,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       resting.expand,
       activePendingProgress?.activeQuestion,
       isLiteralPendingAnswer,
+      onTypingGuardDraftChange,
       pendingUserInputs.length,
       onChangeActivePendingUserInputCustomAnswer,
       promptRef,
@@ -2266,6 +2289,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
       } else {
         setPrompt(next.text);
+        onTypingGuardDraftChange();
       }
       setComposerCursor(nextCursor);
       setComposerTrigger(
@@ -2283,6 +2307,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingUserInput,
       isLiteralPendingAnswer,
       onChangeActivePendingUserInputCustomAnswer,
+      onTypingGuardDraftChange,
       promptRef,
       setPrompt,
     ],
@@ -2521,6 +2546,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
       setComposerSubmissionError(submission.validationMessage);
       if (!submission.didDispatch) return;
+      onTypingGuardSend();
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
       }
@@ -2530,6 +2556,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingProgress,
       blurMobileComposerAfterSend,
       noProviderAvailable,
+      onTypingGuardSend,
       onSend,
       phase,
       promptRef,
@@ -3397,9 +3424,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!isComposerResting || !footer) return;
     const measure = () => setRestingFooterWidth(Math.ceil(footer.getBoundingClientRect().width));
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(footer);
-    return () => observer.disconnect();
+    return observeResize(footer, measure);
   }, [isComposerResting]);
 
   // ------------------------------------------------------------------
@@ -3539,6 +3564,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
       },
       getSendContext: () => ({
+        answeringPendingUserInput: activePendingProgress !== null,
         prompt: promptRef.current,
         images: composerImagesRef.current,
         terminalContexts: composerTerminalContextsRef.current,
@@ -3565,6 +3591,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
     }),
     [
+      activePendingProgress,
       expandRestingComposer,
       activeThread,
       addComposerImages,
@@ -3891,12 +3918,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }}
           className={cn(
             "relative rounded-[20px] transition-[background-color] duration-200",
-            isDragOverComposer ? "bg-accent/45 ring-1 ring-primary/70" : null,
+            isDragOverComposer ? "bg-accent/45 ring-1 ring-inset ring-primary/70" : null,
             environmentUnavailable || projectSelectionRequired ? "opacity-75" : null,
             composerProviderState.composerSurfaceClassName,
           )}
           onFocusCapture={(event) => {
             const activeElement = event.target;
+            if (
+              activeElement instanceof Element &&
+              activeElement.closest('[data-testid="composer-editor"]')
+            ) {
+              onTypingGuardFocus();
+            }
             if (
               activeElement instanceof Element &&
               activeElement.closest('[data-chat-resting-composer-controls="true"]')
@@ -3916,7 +3949,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             }
             setIsComposerFocused(true);
           }}
-          onBlurCapture={() => {
+          onBlurCapture={(event) => {
+            if (
+              event.target instanceof Element &&
+              event.target.closest('[data-testid="composer-editor"]')
+            ) {
+              onTypingGuardBlur();
+            }
             scheduleComposerCollapseCheck();
           }}
         >
@@ -4087,51 +4126,45 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
               )}
 
-            {!isComposerCollapsedMobile &&
-              !isComposerApprovalState &&
-              pendingUserInputs.length === 0 && (
-                <ComposerAttachmentChips
-                  pendingCaptures={pendingCaptures}
-                  attachments={composerImages
-                    .filter(
-                      (image) =>
-                        !isComposerResting ||
-                        image.type !== "image" ||
-                        captureIds.includes(image.id),
-                    )
-                    .filter(
-                      (image) =>
-                        !composerPreviewAnnotations.some(
-                          (annotation) => annotation.id === image.id,
-                        ),
-                    )
-                    .map((image) => ({
-                      id: image.id,
-                      type: image.type,
-                      name: image.name,
-                      mimeType: image.mimeType,
-                      sizeBytes: image.sizeBytes,
-                      ...(image.type === "image" && image.source ? { source: image.source } : {}),
-                      previewUrl: image.previewUrl,
-                      upload:
-                        uploadsByImageId[image.id]?.environmentId === environmentId
-                          ? uploadsByImageId[image.id]
-                          : undefined,
-                    }))}
-                  nonPersistedIds={nonPersistedComposerImageIdSet}
-                  onRemove={removeComposerImage}
-                  onRetry={(id) => {
-                    const image = composerImages.find((item) => item.id === id);
-                    if (image) retryAttachmentUpload({ environmentId, image });
-                  }}
-                  onPreview={(id) => {
-                    const preview = buildExpandedImagePreview(composerImages, id);
-                    if (!preview) return;
-                    onExpandImage(preview);
-                  }}
-                  onFocusEditor={focusComposer}
-                />
-              )}
+            {!isComposerCollapsedMobile && !isComposerApprovalState && (
+              <ComposerAttachmentChips
+                pendingCaptures={pendingCaptures}
+                attachments={composerImages
+                  .filter(
+                    (image) =>
+                      !isComposerResting || image.type !== "image" || captureIds.includes(image.id),
+                  )
+                  .filter(
+                    (image) =>
+                      !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
+                  )
+                  .map((image) => ({
+                    id: image.id,
+                    type: image.type,
+                    name: image.name,
+                    mimeType: image.mimeType,
+                    sizeBytes: image.sizeBytes,
+                    ...(image.type === "image" && image.source ? { source: image.source } : {}),
+                    previewUrl: image.previewUrl,
+                    upload:
+                      uploadsByImageId[image.id]?.environmentId === environmentId
+                        ? uploadsByImageId[image.id]
+                        : undefined,
+                  }))}
+                nonPersistedIds={nonPersistedComposerImageIdSet}
+                onRemove={removeComposerImage}
+                onRetry={(id) => {
+                  const image = composerImages.find((item) => item.id === id);
+                  if (image) retryAttachmentUpload({ environmentId, image });
+                }}
+                onPreview={(id) => {
+                  const preview = buildExpandedImagePreview(composerImages, id);
+                  if (!preview) return;
+                  onExpandImage(preview);
+                }}
+                onFocusEditor={focusComposer}
+              />
+            )}
 
             <div
               className={cn("relative", isComposerResting && "flex min-w-0 items-center gap-1")}

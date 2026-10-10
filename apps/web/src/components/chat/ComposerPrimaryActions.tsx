@@ -100,7 +100,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     <button
       type="button"
       className={cn(
-        "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-2xs inset-shadow-white/16 transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-black/8 active:shadow-none",
+        "flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-2xs inset-shadow-white/16 transition-colors duration-150 hover:bg-destructive active:inset-shadow-black/8 active:shadow-none [&_svg]:pointer-events-none",
         insidePendingAction
           ? "size-8 sm:size-7"
           : showSendWhileRunning && hasSendableContent
@@ -299,7 +299,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             <button
               type="button"
               className={cn(
-                "flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-64 [&_svg]:pointer-events-none [&_svg]:size-3.5",
+                "flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-64 [&_svg]:pointer-events-none [&_svg]:size-3.5",
                 keepFullHistory
                   ? "border-border text-muted-foreground hover:text-foreground"
                   : "border-warning/40 text-warning hover:bg-warning/8",

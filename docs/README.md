@@ -13,6 +13,7 @@
 - [Mobile appearance](./user/mobile-appearance.md)
 - [Environment themes](./user/environment-theme.md)
 - [Remote access](./user/remote-access.md)
+- [Use T3 Code as your default browser](./user/default-browser.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Disk space](./user/storage.md)

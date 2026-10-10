@@ -11,6 +11,7 @@ import {
 } from "@t3tools/shared/usageFormat";
 import { cn } from "~/lib/utils";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
+import { observeResize } from "~/lib/observeResize";
 
 const VIEW_WIDTH = 960;
 const VIEW_HEIGHT = 260;
@@ -324,12 +325,9 @@ export function UsageProviderChart({
 
     const plot = plotRef.current;
     const tooltip = tooltipRef.current;
-    if (plot === null || tooltip === null || typeof ResizeObserver === "undefined") return;
+    if (plot === null || tooltip === null) return;
 
-    const observer = new ResizeObserver(positionTooltip);
-    observer.observe(plot);
-    observer.observe(tooltip);
-    return () => observer.disconnect();
+    return observeResize([plot, tooltip], positionTooltip);
   }, [hoverIndex, positionTooltip]);
 
   const handleMove = useCallback(

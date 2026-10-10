@@ -86,7 +86,7 @@ export function MessageFileAttachmentTile(props: {
               type="button"
               className={cn(
                 shared,
-                "w-full hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
+                "w-full hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
               )}
               aria-label={`Preview ${attachment.name}, ${kind}, ${size}`}
               onClick={() => {
@@ -137,7 +137,7 @@ export function MessageFileAttachmentTile(props: {
             aria-label={`Open ${attachment.name}, ${kind}, ${size}`}
             className={cn(
               shared,
-              "outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
+              "outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
             )}
           />
         }

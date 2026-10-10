@@ -84,7 +84,7 @@ const serviceLayers = (input: {
   readonly ratesDocument?: unknown;
   readonly environment?: NodeJS.ProcessEnv;
 }) =>
-  ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
+  ServerConfig.layerTest(process.cwd(), NodePath.join(input.home, input.prefix)).pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
     Layer.provideMerge(
@@ -384,6 +384,35 @@ describe("UsageService", () => {
           summary.sources.find((source) => source.fingerprint.provider === "grok")?.fingerprint
             .resolvedHomePath,
           NodePath.join(home, "grok", "sessions"),
+        );
+      }).pipe(Effect.scoped),
+  );
+
+  it.live.skipIf(HostProcessPlatform.defaultValue() === "win32" || process.getuid?.() === 0)(
+    "reports unreadable transcripts as partial and recovers once they can be read",
+    () =>
+      Effect.gen(function* () {
+        const { transcript, settings, home } = yield* setup;
+        const unreadable = NodePath.join(NodePath.dirname(transcript), "other.jsonl");
+        yield* Effect.promise(async () => {
+          await NodeFSP.writeFile(transcript, claudeLine(1, 5));
+          await NodeFSP.writeFile(unreadable, claudeLine(2, 7));
+          await NodeFSP.chmod(unreadable, 0);
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* UsageService.make;
+          const partial = yield* service.readSummary(WINDOW);
+          assert.strictEqual(totalOutputTokens(partial), 5);
+          assert.strictEqual(partial.sources[0]?.status, "partial");
+
+          yield* Effect.promise(() => NodeFSP.chmod(unreadable, 0o600));
+          const healthy = yield* service.readSummary(WINDOW);
+          assert.strictEqual(totalOutputTokens(healthy), 12);
+          assert.strictEqual(healthy.sources[0]?.status, "ok");
+          assert.isNull(healthy.sources[0]?.message);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(serviceLayers({ prefix: "usage-service-unreadable", home, settings })),
         );
       }).pipe(Effect.scoped),
   );

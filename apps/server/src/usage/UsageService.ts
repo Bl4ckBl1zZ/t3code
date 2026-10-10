@@ -473,6 +473,7 @@ export const make = Effect.gen(function* () {
     provider: UsageProviderKind,
   ): Effect.Effect<{
     readonly records: readonly UsageRecord[];
+    readonly failed?: true;
     readonly update?: { readonly entry: CachedFile; readonly replaces: CachedFile | undefined };
   }> =>
     Effect.gen(function* () {
@@ -508,6 +509,7 @@ export const make = Effect.gen(function* () {
       if (parsed === null)
         return {
           records: cached?.provider === provider ? [...cached.records, ...cached.tailRecords] : [],
+          failed: true,
         };
 
       // Stored already de-duplicated within the file, which is 99% of all
@@ -537,6 +539,8 @@ export const make = Effect.gen(function* () {
     readonly files:
       | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
       | null;
+    readonly status?: UsageSource["status"];
+    readonly message?: string;
   }
 
   const collectDirs = Effect.fn("UsageService.collectDirs")(function* (
@@ -558,7 +562,7 @@ export const make = Effect.gen(function* () {
         scanned.push({ provider, dir, volumeId, files: null });
         continue;
       }
-      const files = yield* Effect.promise(() =>
+      const { files, failedPaths } = yield* Effect.promise(() =>
         listTranscriptFiles(dir, windowStartMs, fileName === undefined ? undefined : { fileName }),
       );
       // A cold parse waits on disk reads, so a few files in flight read
@@ -587,7 +591,20 @@ export const make = Effect.gen(function* () {
         }
         return { path, records };
       });
-      scanned.push({ provider, dir, volumeId, files: parsedFiles });
+      // Unread files keep their cached usage, but the total may be short.
+      const unread = failedPaths + read.filter((file) => file.failed).length;
+      scanned.push({
+        provider,
+        dir,
+        volumeId,
+        files: parsedFiles,
+        ...(unread > 0
+          ? {
+              status: "partial",
+              message: `${unread} transcript path(s) could not be read; usage may be incomplete.`,
+            }
+          : {}),
+      });
     }
     return scanned;
   });
@@ -688,7 +705,10 @@ export const make = Effect.gen(function* () {
     });
     const sharedSessions = sharedCodexSessions(filesByDir.flat());
 
-    for (const [index, { provider, dir, volumeId, files }] of scannedDirs.entries()) {
+    for (const [
+      index,
+      { provider, dir, volumeId, files, status, message },
+    ] of scannedDirs.entries()) {
       let scannedFiles = 0;
       let skippedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
@@ -730,12 +750,13 @@ export const make = Effect.gen(function* () {
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
         // Clients exclude missing sources, so saved records remain an available source.
-        status: files === null && scannedFiles === 0 ? "missing" : "ok",
+        status: files === null && scannedFiles === 0 ? "missing" : (status ?? "ok"),
         scannedFiles,
         skippedFiles,
         malformedRecords: 0,
         distinctSessions: sessionIds.size,
-        message: files === null ? "No transcript directory on this environment." : null,
+        message:
+          message ?? (files === null ? "No transcript directory on this environment." : null),
       });
     }
 

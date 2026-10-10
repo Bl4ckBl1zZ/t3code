@@ -51,6 +51,7 @@ import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanel
 import { FaviconImage } from "./preview/PreviewFaviconIcon";
 import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
+import { observeResize } from "~/lib/observeResize";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -802,14 +803,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     if (!viewport) return;
 
     const content = viewport.firstElementChild;
-    const resizeObserver = new ResizeObserver(updateTabScrollState);
-    resizeObserver.observe(viewport);
-    if (content) resizeObserver.observe(content);
+    const stopObserving = observeResize(
+      content ? [viewport, content] : viewport,
+      updateTabScrollState,
+    );
     viewport.addEventListener("scroll", updateTabScrollState, { passive: true });
     updateTabScrollState();
 
     return () => {
-      resizeObserver.disconnect();
+      stopObserving();
       viewport.removeEventListener("scroll", updateTabScrollState);
     };
   }, [updateTabScrollState]);

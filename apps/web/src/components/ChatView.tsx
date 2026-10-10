@@ -120,6 +120,7 @@ import {
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  Fragment,
   lazy,
   memo,
   Suspense,
@@ -260,6 +261,7 @@ import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
   CheckCircle2Icon,
+  MessageCircleIcon,
   ChevronDownIcon,
   GitBranchIcon,
   PaperclipIcon,
@@ -371,6 +373,7 @@ import {
   useServerConfigs,
   useThreadProjection,
   useThreadShell,
+  useChildThreadInputs,
   useThreadRefs,
   useThreadVisibleTurnItems,
   waitForThreadShell,
@@ -491,7 +494,7 @@ import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
-import { Button } from "./ui/button";
+import { Button, InlineButton } from "./ui/button";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -513,6 +516,7 @@ import {
   supportsDesktopAppUpdate,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { observeResize } from "~/lib/observeResize";
 
 // Never part of timeline row data — see cancelTimelineLiveFollowForUserNavigation.
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
@@ -1769,11 +1773,7 @@ function ChatViewContent(props: ChatViewProps) {
     };
 
     updateHeight();
-    if (typeof ResizeObserver === "undefined") return;
-
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(composerOverlayElement);
-    return () => observer.disconnect();
+    return observeResize(composerOverlayElement, updateHeight);
   }, [composerOverlayElement, publishComposerOverlayHeight]);
 
   const terminalUiState = useTerminalUiStateStore((state) =>
@@ -5020,6 +5020,13 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().toggleThreadPanel(activeThreadRef, threadPanelPresentation);
   }, [activeThreadRef, threadPanelPresentation]);
+  // A thread started for a link the OS opened shows its browser maximized, like a browser window.
+  useEffect(() => {
+    if (!canMaximizeRightPanel) return;
+    if (useRightPanelStore.getState().consumeMaximizeRequest(routeThreadRef)) {
+      setMaximizedRightPanelThreadKey(routeThreadKey);
+    }
+  }, [canMaximizeRightPanel, routeThreadKey, routeThreadRef]);
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel) return;
     setMaximizedRightPanelThreadKey((threadKey) =>
@@ -6572,9 +6579,54 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     };
   }, [activeGoal, activeThread, isWorking, sendStandaloneCommand]);
+  const childThreadInputs = useChildThreadInputs(activeThreadRef);
+  const openChildThread = useCallback(
+    (threadId: ThreadId) => {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+      });
+    },
+    [environmentId, navigate],
+  );
+  const childInputBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    const first = childThreadInputs[0];
+    const parentAwaitingUser =
+      activePendingApproval || activePendingUserInput || activeThreadShell?.hasPendingUserInput;
+    if (!first || parentAwaitingUser) return null;
+    return {
+      id: `child-input:${first.id}`,
+      variant: "info",
+      priority: "activity",
+      icon: <MessageCircleIcon />,
+      title:
+        childThreadInputs.length === 1
+          ? "Subagent needs input"
+          : `${childThreadInputs.length} subagents need input`,
+      description: childThreadInputs.map((child, index) => (
+        <Fragment key={child.id}>
+          {index > 0 ? ", " : null}
+          <InlineButton tone="muted" onClick={() => openChildThread(child.id)}>
+            {child.title}
+          </InlineButton>
+        </Fragment>
+      )),
+      actions: (
+        <Button size="xs" variant="ghost" onClick={() => openChildThread(first.id)}>
+          Open question
+        </Button>
+      ),
+    };
+  }, [
+    childThreadInputs,
+    activePendingApproval,
+    activePendingUserInput,
+    activeThreadShell?.hasPendingUserInput,
+    openChildThread,
+  ]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
-    const goalItems = goalBannerItem === null ? [] : [goalBannerItem];
+    const goalItems = [childInputBannerItem, goalBannerItem].filter((item) => item !== null);
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [...limitRecoveryItems, ...systemComposerBannerItems, ...goalItems];
     }
@@ -6624,6 +6676,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
+    childInputBannerItem,
     goalBannerItem,
     limitRecoveryBanner,
     handleRestoreThreadBranch,
@@ -7354,7 +7407,8 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
-    if (activePendingProgress) {
+    const sendCtx = composerRef.current?.getSendContext();
+    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
         return;
@@ -7362,7 +7416,6 @@ function ChatViewContent(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;

@@ -33,6 +33,7 @@ import {
   resolvePreviewMiniPlayerFrame,
   resolvePreviewMiniPlayerSourceSize,
 } from "./previewMiniPlayerLayout";
+import { observeResize } from "~/lib/observeResize";
 
 interface PointerGesture {
   readonly pointerId: number;
@@ -137,10 +138,7 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
       );
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
+    return observeResize(element, measure);
   }, []);
 
   const beginGesture = (

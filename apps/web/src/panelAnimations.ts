@@ -3,6 +3,7 @@ import { type PanelAnimationDurationMs } from "@t3tools/contracts/settings";
 
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useClientSettings } from "./hooks/useSettings";
+import { observeResize } from "./lib/observeResize";
 
 const PanelAnimationSuppressionContext = createContext(false);
 
@@ -49,7 +50,8 @@ export function observeResponsiveBreakpointFade(options: {
   let expanded = container.getBoundingClientRect().width >= breakpointPx;
   let animation: Animation | null = null;
 
-  const observer = new ResizeObserver(([entry]) => {
+  const stopObserving = observeResize(container, (entries) => {
+    const entry = entries.at(-1);
     if (!entry) return;
     const nextExpanded = entry.contentRect.width >= breakpointPx;
     if (nextExpanded === expanded) return;
@@ -61,9 +63,8 @@ export function observeResponsiveBreakpointFade(options: {
     });
   });
 
-  observer.observe(container);
   return () => {
-    observer.disconnect();
+    stopObserving();
     animation?.cancel();
   };
 }

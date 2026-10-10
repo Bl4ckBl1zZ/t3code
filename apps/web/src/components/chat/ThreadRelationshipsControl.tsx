@@ -735,7 +735,7 @@ export function ThreadRelationshipsPanel(props: {
                   <ChevronDownIcon
                     className={cn(
                       "size-3 shrink-0 text-muted-foreground transition-transform",
-                      subagentsExpanded && "rotate-180",
+                      !subagentsExpanded && "rotate-180",
                     )}
                   />
                 </button>

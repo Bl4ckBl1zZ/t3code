@@ -11,6 +11,7 @@ import {
   resolveThreadDetailsCardLayout,
   type ThreadDetailsCardDensity,
 } from "./threadDetailsCardLayout";
+import { observeResize } from "~/lib/observeResize";
 
 /**
  * One card owns its placement: docked at the chat canvas' top right while a
@@ -89,9 +90,7 @@ export function ThreadDetailsCard({
       });
     };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
+    return observeResize(element, measure);
   }, [contentElement, density, measurementKey]);
   const card = (
     <div

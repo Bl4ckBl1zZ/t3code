@@ -814,7 +814,7 @@ export function ProviderInstanceCard({
         <button
           type="button"
           className={cn(
-            "flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
             !enabled && !selected && "opacity-60",
           )}
           onClick={onSelect}

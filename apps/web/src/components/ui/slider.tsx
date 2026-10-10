@@ -63,7 +63,7 @@ export function StepSlider({
             <SliderPrimitive.Thumb
               className={cn(
                 "size-3.5 rounded-full bg-primary shadow-sm outline-none",
-                "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+                "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1",
                 "data-[dragging]:scale-110",
               )}
             />
