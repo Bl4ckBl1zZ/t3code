@@ -5370,7 +5370,7 @@ export default function Sidebar() {
                                 aria-hidden
                                 className={cn(
                                   "size-3 text-muted-foreground/50 transition-transform",
-                                  workingShelfExpanded && "rotate-180",
+                                  !workingShelfExpanded && "rotate-180",
                                 )}
                               />
                             </button>
@@ -5409,7 +5409,7 @@ export default function Sidebar() {
                                 aria-hidden
                                 className={cn(
                                   "size-3 text-info-foreground transition-transform",
-                                  snoozedShelfExpanded && "rotate-180",
+                                  !snoozedShelfExpanded && "rotate-180",
                                 )}
                               />
                             </button>
@@ -5443,7 +5443,7 @@ export default function Sidebar() {
                                 aria-hidden
                                 className={cn(
                                   "size-3 text-muted-foreground/50 transition-transform",
-                                  settledShelfExpanded && "rotate-180",
+                                  !settledShelfExpanded && "rotate-180",
                                 )}
                               />
                             </button>
