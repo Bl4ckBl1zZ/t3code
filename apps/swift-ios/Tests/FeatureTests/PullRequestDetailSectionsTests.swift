@@ -53,6 +53,58 @@ struct PullRequestDetailSectionsTests {
         )
     }
 
+    // MARK: - Comment filter (upstream 6cd02e98f7)
+
+    private func thread(id: String, commentIDs: [String], resolved: Bool, author: String = "octocat") -> PullRequestReviewThread {
+        PullRequestReviewThread(
+            id: id, path: "file.swift", line: 1, side: "right", isResolved: resolved, isOutdated: false,
+            comments: commentIDs.map {
+                PullRequestThreadComment(id: $0, author: PullRequestActor(login: author, name: nil, avatarUrl: nil),
+                    body: "", createdAt: "2026-08-01T10:00:00Z", url: nil)
+            },
+            commentCount: nil, nextCommentsCursor: nil)
+    }
+
+    @Test
+    func filterHidesBotsAndFinishedRemarksByDefault() {
+        var flagged = comment(id: "flagged", createdAt: "2026-08-01T10:00:00Z")
+        flagged = PullRequestComment(id: flagged.id, kind: flagged.kind,
+            author: PullRequestActor(login: "reviewer", name: nil, avatarUrl: nil, isBot: true),
+            body: flagged.body, createdAt: flagged.createdAt, url: nil, path: nil, reviewState: nil)
+        var source = activity(comments: [
+            comment(id: "person", createdAt: "2026-08-01T10:00:00Z"),
+            comment(id: "suffixed", createdAt: "2026-08-01T10:00:00Z", author: "ci[bot]"),
+            flagged,
+            comment(id: "in-resolved", createdAt: "2026-08-01T10:00:00Z", kind: .reviewComment),
+            comment(id: "in-open", createdAt: "2026-08-01T10:00:00Z", kind: .reviewComment),
+            comment(id: "dismissed", createdAt: "2026-08-01T10:00:00Z", kind: .review, reviewState: "DISMISSED"),
+        ])
+        source.reviewThreads = [
+            thread(id: "resolved", commentIDs: ["in-resolved"], resolved: true),
+            thread(id: "open", commentIDs: ["in-open"], resolved: false),
+            thread(id: "bot", commentIDs: ["by-bot"], resolved: false, author: "ci[bot]"),
+        ]
+
+        let hidden = PullRequestDetailSections.filtered(source, by: PullRequestCommentFilter())
+        #expect(hidden.activity.comments.map(\.id) == ["person", "in-open"])
+        #expect(hidden.activity.reviewThreads.map(\.id) == ["open"])
+        #expect(hidden.hiddenComments == 4)
+
+        let bots = PullRequestDetailSections.filtered(source, by: PullRequestCommentFilter(bots: true))
+        #expect(bots.activity.comments.map(\.id) == ["person", "suffixed", "flagged", "in-open"])
+        #expect(bots.activity.reviewThreads.map(\.id) == ["open", "bot"])
+
+        let all = PullRequestDetailSections.filtered(source, by: PullRequestCommentFilter(bots: true, resolved: true))
+        #expect(all.activity == source)
+        #expect(all.hiddenComments == 0)
+    }
+
+    @Test
+    func hiddenNoteCountsWhatTheFilterKeepsOffScreen() {
+        #expect(PullRequestCommentFilter.hiddenNote(1) == "The only comment is hidden by the filter.")
+        #expect(PullRequestCommentFilter.hiddenNote(3) == "All 3 comments are hidden by the filter.")
+    }
+
     // MARK: - Timeline
 
     @Test

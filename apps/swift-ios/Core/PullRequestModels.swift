@@ -13,6 +13,8 @@ public struct PullRequestActor: Codable, Equatable, Sendable {
     public let name: String?
     /// Nil where a host does not report one, which is what initials fall back to.
     public let avatarUrl: String?
+    /// Nil where the host does not say; a `[bot]` login suffix still marks one.
+    public var isBot: Bool? = nil
 }
 
 public struct PullRequestLabel: Codable, Equatable, Sendable {
@@ -149,12 +151,12 @@ public struct PullRequestActivity: Codable, Equatable, Sendable {
     /// completed reviewers that its basic detail does not.
     public let author: PullRequestActor?
     public let reviewers: [PullRequestActor]?
-    public let comments: [PullRequestComment]
+    public var comments: [PullRequestComment]
     /// How many remarks the host itself counts; never less than `comments` holds.
     public let commentCount: Int
     /// The read stopped at a bound of its own before the host ran out.
     public let commentsTruncated: Bool
-    public let reviewThreads: [PullRequestReviewThread]
+    public var reviewThreads: [PullRequestReviewThread]
     public let commits: [PullRequestCommit]
 }
 

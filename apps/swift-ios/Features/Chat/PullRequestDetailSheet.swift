@@ -25,6 +25,8 @@ struct PullRequestDetailSheet: View {
     @SwiftUI.Environment(\.pullRequestHandoff) private var handoff
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @SwiftUI.Environment(\.openURL) private var openURL
+    @AppStorage(PullRequestCommentFilter.botsKey) private var showsBotComments = false
+    @AppStorage(PullRequestCommentFilter.resolvedKey) private var showsResolvedComments = false
     @State private var handoffSelection: PullRequestHandoffSelection?
     @State private var handoffKind: PullRequestHandoffKind?
     @State private var handoffMode = PullRequestCheckoutMode.worktree
@@ -890,9 +892,17 @@ struct PullRequestDetailSheet: View {
     @ViewBuilder
     private func timeline(_ activity: PullRequestActivity?, detail: PullRequestDetail) -> some View {
         if let activity {
-            let entries = PullRequestDetailSections.timeline(activity)
+            let filtered = PullRequestDetailSections.filtered(activity, by: PullRequestCommentFilter(
+                bots: showsBotComments, resolved: showsResolvedComments))
+            let entries = PullRequestDetailSections.timeline(filtered.activity)
             VStack(alignment: .leading, spacing: 20) {
-                if entries.isEmpty {
+                if !activity.comments.isEmpty || !activity.reviewThreads.isEmpty {
+                    commentFilterBar(hidden: filtered.hiddenComments)
+                }
+                if entries.isEmpty, filtered.hiddenComments > 0 {
+                    ContentUnavailableView("Comments Hidden", systemImage: "line.3.horizontal.decrease.circle",
+                        description: Text(PullRequestCommentFilter.hiddenNote(filtered.hiddenComments)))
+                } else if entries.isEmpty {
                     ContentUnavailableView("No Activity Yet", systemImage: "bubble.left.and.bubble.right")
                 } else {
                     ThreadSheetCard {
@@ -913,7 +923,7 @@ struct PullRequestDetailSheet: View {
                         }
                     }
                 }
-                if !activity.reviewThreads.isEmpty {
+                if !filtered.activity.reviewThreads.isEmpty {
                     let context = conversationContext(detail, activity: activity)
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Conversations")
@@ -921,7 +931,7 @@ struct PullRequestDetailSheet: View {
                             .foregroundStyle(T3Colors.textSecondary)
                             .padding(.horizontal, 16)
                             .accessibilityAddTraits(.isHeader)
-                        ForEach(activity.reviewThreads) { thread in
+                        ForEach(filtered.activity.reviewThreads) { thread in
                             PullRequestThreadCard(thread: thread,
                                 access: context.access,
                                 canReply: context.canReply,
@@ -949,6 +959,27 @@ struct PullRequestDetailSheet: View {
                 }
             }
         }
+    }
+
+    /// Bot remarks and finished conversations stay out of the way until asked
+    /// for; the count says how many remarks that keeps off screen.
+    private func commentFilterBar(hidden: Int) -> some View {
+        HStack {
+            if hidden > 0 {
+                Text("\(hidden) hidden")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
+            Spacer()
+            Menu {
+                Toggle("Bot Comments", isOn: $showsBotComments)
+                Toggle("Resolved or Dismissed", isOn: $showsResolvedComments)
+            } label: {
+                Label("Show", systemImage: "line.3.horizontal.decrease.circle")
+                    .font(T3Typography.supporting)
+            }
+        }
+        .padding(.horizontal, 16)
     }
 
     @ViewBuilder
