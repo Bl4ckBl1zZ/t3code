@@ -50,6 +50,7 @@ it.effect("materializes the baseline and summarizes V2 checkpoints with numstat"
           hasCheckpointRef,
           captureCheckpoint: () => Effect.void,
           diffCheckpoints,
+          listAuthoredPaths: () => Effect.succeed(null),
         }),
       ),
     ),
