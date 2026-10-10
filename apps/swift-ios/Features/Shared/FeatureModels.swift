@@ -119,7 +119,7 @@ public enum FeaturePermissionUpdate: String, Sendable, Equatable, Hashable, Coda
 /// One way to reach a saved environment, as Settings lists it.
 public struct FeatureEnvironmentRoute: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
-    /// "LAN", "Tailscale", "T3 Connect", "This device", or a host name.
+    /// "LAN", "Tailscale", "VPN", "T3 Connect", "This device", or a host name.
     public var label: String
     /// The address, or nil for T3 Connect.
     public var address: String?
@@ -151,6 +151,7 @@ public struct FeatureEnvironmentRoute: Identifiable, Sendable, Equatable, Hashab
         switch label {
         case "LAN": return "wifi"
         case "Tailscale": return "point.3.connected.trianglepath.dotted"
+        case "VPN": return "lock.shield"
         case "This device": return "iphone"
         default: return "globe"
         }

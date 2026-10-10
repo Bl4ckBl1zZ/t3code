@@ -713,9 +713,9 @@ public struct ThreadDetailView: View {
         readingHistoryThreadID == thread.id
     }
 
-    /// The transcript and the chrome that floats over it: the connection and
-    /// agents bars under the navigation bar, and the dock — jump to latest,
-    /// queue, tasks and composer — over the bottom edge.
+    /// The transcript and the chrome that floats over it: the connection,
+    /// parent link, and agents bars under the navigation bar, and the dock —
+    /// jump to latest, queue, tasks and composer — over the bottom edge.
     private func timeline(_ detail: FeatureThreadDetail, isLoading: Bool) -> some View {
         ZStack(alignment: .top) {
             transcriptArea(detail, isLoading: isLoading)
@@ -730,6 +730,13 @@ public struct ThreadDetailView: View {
                     ) {
                         _ = await model.activateEnvironment(environmentID)
                     }
+                }
+                if let parent = ThreadParentLink.resolve(
+                    thread: currentThread,
+                    lineage: detail.workflow.thread,
+                    threads: model.snapshot.threads
+                ) {
+                    ThreadParentLinkButton(link: parent) { openRelatedThread(parent.threadID) }
                 }
                 relationshipsBanner
             }

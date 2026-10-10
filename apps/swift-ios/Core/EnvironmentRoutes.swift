@@ -1,19 +1,31 @@
 import Foundation
 
 /// The network a route travels over, ranked so a newly added route lands
-/// after every saved route of the same or a faster kind.
-public enum EnvironmentRouteNetwork: Int, Comparable, Sendable {
+/// after every saved route of the same or a faster kind. Tailscale and other
+/// VPNs rank the same.
+public enum EnvironmentRouteNetwork: Comparable, Sendable {
     case loopback
     case lan
     case tailnet
+    case vpn
     case publicInternet
     case relay
 
-    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+    private var rank: Int {
+        switch self {
+        case .loopback: 0
+        case .lan: 1
+        case .tailnet, .vpn: 2
+        case .publicInternet: 3
+        case .relay: 4
+        }
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rank < rhs.rank }
 }
 
 /// One way to reach a saved environment: T3 Connect, or a direct URL on the
-/// LAN, a tailnet, or the internet.
+/// LAN, a tailnet or another VPN, or the internet.
 ///
 /// A saved environment holds several routes in preference order. The client
 /// connects over the first one that answers as that environment and moves back
@@ -38,6 +50,10 @@ public struct EnvironmentRoute: Codable, Equatable, Hashable, Identifiable, Send
     /// rather than one the user paired. Learned routes are replaced when the
     /// server reports a different address and are never offered for removal.
     public var learned: Bool
+    /// Set while the server reports this address on its Tailscale interface.
+    /// A bare 100.64.0.0/10 address could belong to any VPN, so only this
+    /// confirmation labels one "Tailscale".
+    public var tailscaleConfirmed: Bool
 
     public init(
         id: String,
@@ -45,7 +61,8 @@ public struct EnvironmentRoute: Codable, Equatable, Hashable, Identifiable, Send
         webSocketBaseURL: URL,
         kind: EnvironmentKind,
         credentialID: String,
-        learned: Bool = false
+        learned: Bool = false,
+        tailscaleConfirmed: Bool = false
     ) {
         self.id = id
         self.httpBaseURL = httpBaseURL
@@ -53,6 +70,7 @@ public struct EnvironmentRoute: Codable, Equatable, Hashable, Identifiable, Send
         self.kind = kind
         self.credentialID = credentialID
         self.learned = learned
+        self.tailscaleConfirmed = tailscaleConfirmed
     }
 
     /// A route the user paired or connected through T3 Connect.
@@ -83,17 +101,20 @@ public struct EnvironmentRoute: Codable, Equatable, Hashable, Identifiable, Send
         if isRelay { return .relay }
         let host = httpBaseURL.host ?? ""
         if HostClassification.isLoopback(host) { return .loopback }
-        if HostClassification.isTailnet(host) { return .tailnet }
+        if tailscaleConfirmed || HostClassification.isTailnet(host) { return .tailnet }
+        if HostClassification.isSharedAddressSpace(host) { return .vpn }
         return HostClassification.isPrivateNetwork(host) ? .lan : .publicInternet
     }
 
-    /// Short user-facing description: "LAN", "Tailscale", "T3 Connect", or a host.
+    /// Short user-facing description: "LAN", "Tailscale", "VPN", "T3 Connect",
+    /// or a host.
     public var label: String {
         switch network {
         case .relay: "T3 Connect"
         case .loopback: "This device"
         case .lan: "LAN"
         case .tailnet: "Tailscale"
+        case .vpn: "VPN"
         case .publicInternet: httpBaseURL.host ?? "Remote link"
         }
     }
@@ -114,7 +135,7 @@ public struct EnvironmentRoute: Codable, Equatable, Hashable, Identifiable, Send
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, httpBaseURL, webSocketBaseURL, kind, credentialID, learned
+        case id, httpBaseURL, webSocketBaseURL, kind, credentialID, learned, tailscaleConfirmed
     }
 
     public init(from decoder: any Decoder) throws {
@@ -125,6 +146,7 @@ public struct EnvironmentRoute: Codable, Equatable, Hashable, Identifiable, Send
         kind = try container.decode(EnvironmentKind.self, forKey: .kind)
         credentialID = try container.decode(String.self, forKey: .credentialID)
         learned = try container.decodeIfPresent(Bool.self, forKey: .learned) ?? false
+        tailscaleConfirmed = try container.decodeIfPresent(Bool.self, forKey: .tailscaleConfirmed) ?? false
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -135,6 +157,7 @@ public struct EnvironmentRoute: Codable, Equatable, Hashable, Identifiable, Send
         try container.encode(kind, forKey: .kind)
         try container.encode(credentialID, forKey: .credentialID)
         if learned { try container.encode(true, forKey: .learned) }
+        if tailscaleConfirmed { try container.encode(true, forKey: .tailscaleConfirmed) }
     }
 }
 
@@ -193,9 +216,12 @@ public enum EnvironmentRoutes {
     /// route, the T3 Connect credential for relay. A learned route the server
     /// still reports keeps its place, so the user's order holds; one it no
     /// longer reports is dropped, so a changed LAN address replaces the old
-    /// one. Routes the user saved are never touched, an address already saved
-    /// is not learned twice, and loopback addresses (which name whichever
-    /// device opens them) are ignored.
+    /// one. Routes the user saved are never removed or moved, an address
+    /// already saved is not learned twice, and loopback addresses (which name
+    /// whichever device opens them) are ignored. Any direct route the server
+    /// reports is marked Tailscale while the server finds it on its Tailscale
+    /// interface, so a route paired by its numeric Tailscale address keeps
+    /// that label.
     public static func mergingLearned(
         into routes: [EnvironmentRoute],
         activeRoute: EnvironmentRoute,
@@ -204,6 +230,7 @@ public enum EnvironmentRoutes {
     ) -> [EnvironmentRoute]? {
         var reportedOrigins: [String] = []
         var reportedURLs: [String: URL] = [:]
+        var tailscaleOrigins = Set<String>()
         for endpoint in reported {
             guard let url = URL(string: endpoint.httpBaseUrl),
                   let scheme = url.scheme?.lowercased(),
@@ -214,18 +241,26 @@ public enum EnvironmentRoutes {
             let origin = EnvironmentRoute.origin(url)
             if reportedURLs[origin] == nil { reportedOrigins.append(origin) }
             reportedURLs[origin] = url
+            if endpoint.kind == .tailnet { tailscaleOrigins.insert(origin) }
         }
 
         var known = Set(
             routes.filter { !$0.learned && !$0.isRelay }
                 .map { EnvironmentRoute.origin($0.httpBaseURL) }
         )
-        let kept = routes.filter { route in
-            guard route.learned else { return true }
+        let kept = routes.compactMap { route -> EnvironmentRoute? in
             let origin = EnvironmentRoute.origin(route.httpBaseURL)
-            guard reportedURLs[origin] != nil, !known.contains(origin) else { return false }
+            var route = route
+            guard route.learned else {
+                if !route.isRelay, reportedURLs[origin] != nil {
+                    route.tailscaleConfirmed = tailscaleOrigins.contains(origin)
+                }
+                return route
+            }
+            guard reportedURLs[origin] != nil, !known.contains(origin) else { return nil }
             known.insert(origin)
-            return true
+            route.tailscaleConfirmed = tailscaleOrigins.contains(origin)
+            return route
         }
         var next = kept
         for origin in reportedOrigins where !known.contains(origin) {
@@ -243,7 +278,8 @@ public enum EnvironmentRoutes {
                     // token it borrows.
                     kind: activeRoute.kind == .managedDPoP ? .managedDPoP : .bearer,
                     credentialID: activeRoute.credentialID,
-                    learned: true
+                    learned: true,
+                    tailscaleConfirmed: tailscaleOrigins.contains(origin)
                 ),
                 into: next
             )
@@ -253,7 +289,9 @@ public enum EnvironmentRoutes {
 
     // Compares addresses too: a scheme or port change keeps no id stable.
     private static func signature(_ routes: [EnvironmentRoute]) -> [String] {
-        routes.map { route in "\(route.id) \(route.httpBaseURL.absoluteString)" }
+        routes.map { route in
+            "\(route.id) \(route.httpBaseURL.absoluteString) \(route.tailscaleConfirmed)"
+        }
     }
 
     /// `ws://host[:port]/` for an `http` address, `wss://` for `https`.
