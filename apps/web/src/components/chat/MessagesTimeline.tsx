@@ -1274,7 +1274,7 @@ function TimelineMinimap({
           />
           <button
             aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
-            className="absolute inset-y-0 left-0 w-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+            className="absolute inset-y-0 left-0 w-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
             onBlur={() => setActiveIndex(null)}
             onClick={(event) => {
               if (timelineMinimapEventTargetsPreview(event.target)) {
@@ -2846,7 +2846,7 @@ function LiveWorkGroupSection({
         type="button"
         aria-expanded={expanded}
         onClick={toggleExpanded}
-        className="flex min-h-7 w-full items-center gap-2 rounded-md px-1 text-left text-xs text-foreground/80 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+        className="flex min-h-7 w-full items-center gap-2 rounded-md px-1 text-left text-xs text-foreground/80 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
       >
         <ChevronRightIcon
           aria-hidden

@@ -172,6 +172,11 @@ export default defineConfig({
         },
       },
       {
+        // State indicators paint inward; decorative rings keep their own geometry.
+        files: ["apps/web/src/**"],
+        rules: { "t3code/no-outset-state-indicators": "error" },
+      },
+      {
         // The registration helpers that only accept handlers built by McpToolAccess.
         files: ["apps/server/src/mcp/McpHttpServer.ts"],
         rules: { "t3code/no-raw-mcp-registration": "off" },

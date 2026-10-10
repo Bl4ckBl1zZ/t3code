@@ -5,6 +5,7 @@ import noGlobalProcessRuntime from "./rules/no-global-process-runtime.ts";
 import noInlineSchemaCompile from "./rules/no-inline-schema-compile.ts";
 import noManualEffectRuntimeInTests from "./rules/no-manual-effect-runtime-in-tests.ts";
 import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
+import noOutsetStateIndicators from "./rules/no-outset-state-indicators.ts";
 import noRawMcpRegistration from "./rules/no-raw-mcp-registration.ts";
 import noUnscopedHas from "./rules/no-unscoped-has.ts";
 import preferCatchTags from "./rules/prefer-catch-tags.ts";
@@ -21,6 +22,7 @@ export default definePlugin({
     "no-inline-schema-compile": noInlineSchemaCompile,
     "no-manual-effect-runtime-in-tests": noManualEffectRuntimeInTests,
     "no-native-title-tooltip": noNativeTitleTooltip,
+    "no-outset-state-indicators": noOutsetStateIndicators,
     "no-raw-mcp-registration": noRawMcpRegistration,
     "no-unscoped-has": noUnscopedHas,
     "prefer-catch-tags": preferCatchTags,

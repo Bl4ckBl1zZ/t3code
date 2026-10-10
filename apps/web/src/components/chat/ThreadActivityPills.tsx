@@ -26,7 +26,7 @@ type ActivityPanel = "agents" | "background";
 const VISIBLE_ORB_LIMIT = 3;
 
 const PILL_CLASS_NAME =
-  "chat-status-pill group pointer-events-auto flex cursor-pointer items-center gap-1.5 rounded-full py-1 ps-3 pe-2 text-muted-foreground text-xs transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 data-popup-open:text-foreground";
+  "chat-status-pill group pointer-events-auto flex cursor-pointer items-center gap-1.5 rounded-full py-1 ps-3 pe-2 text-muted-foreground text-xs transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 data-popup-open:text-foreground";
 
 function PillChevron() {
   return (

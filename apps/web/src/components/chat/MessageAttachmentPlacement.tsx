@@ -65,7 +65,7 @@ export function MessageAttachmentPlacement(props: {
               aria-label={`Open ${workspacePath}`}
               disabled={props.onOpenWorkspaceFile === undefined}
               onClick={() => props.onOpenWorkspaceFile?.(workspacePath)}
-              className="min-w-0 flex-1 rounded px-1 py-0.5 text-left font-mono text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:hover:text-muted-foreground"
+              className="min-w-0 flex-1 rounded px-1 py-0.5 text-left font-mono text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:hover:text-muted-foreground"
             />
           }
         >

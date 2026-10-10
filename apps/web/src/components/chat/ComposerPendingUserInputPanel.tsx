@@ -187,7 +187,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             isCollapsed ? "Show the question and its options" : "Hide the question and its options"
           }
           data-pending-user-input-toggle={isCollapsed ? "collapsed" : "expanded"}
-          className="group -my-1 flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-left outline-none transition-colors duration-150 hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-primary/25"
+          className="group -my-1 flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-left outline-none transition-colors duration-150 hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25"
         >
           <span className="text-secondary-label text-[11px] font-semibold tracking-widest uppercase group-hover:text-foreground">
             {activeQuestion.header}
@@ -242,7 +242,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   progress.selectedOptionLabels.includes(option.value ?? option.label));
               const shortcutKey = index < 9 ? index + 1 : null;
               const className = cn(
-                "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-primary/25",
+                "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
                 isSelected
                   ? "border-primary/30 bg-primary/8 text-foreground"
                   : "border-transparent bg-muted/22 text-foreground/85 hover:border-border/45 hover:bg-muted/34",

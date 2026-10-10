@@ -235,7 +235,7 @@ function ProjectSettingsBreadcrumb({ projectKey }: { projectKey: string }) {
             aria-haspopup="menu"
             aria-label="Switch project"
             onClick={openProjectMenu}
-            className="group/project-title inline-flex min-w-0 max-w-64 cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+            className="group/project-title inline-flex min-w-0 max-w-64 cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <span className="min-w-0 truncate">{selected.displayName}</span>
             <ChevronDownIcon
@@ -968,7 +968,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                   render={
                     <button
                       aria-label="Copy checkout path"
-                      className="group flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                      className="group flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       type="button"
                       onClick={() =>
                         copyPathToClipboard(selectedCheckout.workspaceRoot, {

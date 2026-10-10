@@ -173,7 +173,7 @@ export function ComposerAttachmentChips(props: {
                         tabIndex={0}
                         role="button"
                         aria-label={label}
-                        className="flex h-full w-full items-center gap-2 px-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="flex h-full w-full items-center gap-2 px-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                         onKeyDown={(event) => {
                           if (event.key !== "Backspace" && event.key !== "Delete") return;
                           event.preventDefault();
