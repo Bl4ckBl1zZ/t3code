@@ -6585,6 +6585,7 @@ function ChatViewContent(props: ChatViewProps) {
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
         variant: "info",
+        compact: true,
         icon: <GitBranchIcon />,
         title: (
           <span className="flex min-w-0 items-baseline gap-1.5">
