@@ -18,7 +18,7 @@ export function createIncrementalHighlighter(
   highlighter: DiffsHighlighter,
   language: string,
   theme: DiffThemeName,
-): (code: string) => ReturnType<DiffsHighlighter["codeToHast"]> {
+): (code: string) => string {
   const options = { lang: language, theme };
   const newline = { type: "text" as const, value: "\n" };
   let cached:
