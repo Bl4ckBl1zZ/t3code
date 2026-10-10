@@ -40,8 +40,11 @@ struct PendingBackgroundWorkPresentation: Equatable, Sendable {
         if items.count == 1, let only = items.first {
             let noun = Self.singular(only.kind)
             let named = only.label != noun
+            // A monitor's own name already says what it waits on, such as a
+            // pull request watch.
+            let waitingOn = only.kind == .monitor ? "" : "Waiting on \(noun) "
             title = waiting
-                ? (named ? "Waiting on \(noun) \(only.label)" : "Waiting on a \(noun)")
+                ? (named ? "\(waitingOn)\(only.label)" : "Waiting on a \(noun)")
                 : (named ? "Running: \(only.label)" : "Running a \(noun)")
         } else {
             var kinds: [Kind] = []

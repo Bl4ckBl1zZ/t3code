@@ -131,6 +131,7 @@ struct FeatureComposerView: View {
     @State private var showsStash = false
     @State private var isStashing = false
     @State private var historyError: ComposerHistoryError?
+    @State private var typingGuard = ComposerTypingGuard()
     private let onSend: () -> Void
     private let onStop: () -> Void
     /// Set while a stale Claude session would re-read this many tokens: Send
@@ -218,11 +219,11 @@ struct FeatureComposerView: View {
         self.onUserInputSubmit = onUserInputSubmit
     }
 
-    // The body is staged in three pieces only so the type checker can follow
+    // The body is staged in four pieces only so the type checker can follow
     // the modifier chain: content and its presentations, then the voice and
-    // focus choreography, then lifecycle.
+    // focus choreography, then the typing guard, then lifecycle.
     var body: some View {
-        voiceBehavior
+        typingGuardBehavior
             .onChange(of: composerTrigger?.query) { highlightedSuggestion = 0 }
             .onChange(of: isWorking) { _, working in
                 if !working { stopRequested = false }
@@ -409,6 +410,29 @@ struct FeatureComposerView: View {
             }
     }
 
+    /// Feeds `ComposerTypingGuard` what the reader does, and lets held
+    /// requests through once they pause.
+    private var typingGuardBehavior: some View {
+        voiceBehavior
+            .onChange(of: pendingRequestIDs, initial: true) { _, ids in
+                typingGuard.requests(ids, now: .now)
+            }
+            .onChange(of: historyDraftKey) {
+                typingGuard.reset()
+                typingGuard.requests(pendingRequestIDs, now: .now)
+            }
+            .onChange(of: storedText) { typingGuard.typed(now: .now) }
+            .onChange(of: focused.wrappedValue, initial: true) { _, isFocused in
+                if isFocused { typingGuard.focus() } else { typingGuard.blur() }
+            }
+            .task(id: typingGuard.releasesAt) {
+                guard let releasesAt = typingGuard.releasesAt else { return }
+                try? await Task.sleep(for: .seconds(max(0, releasesAt.timeIntervalSinceNow)))
+                guard !Task.isCancelled else { return }
+                typingGuard.release()
+            }
+    }
+
     /// Points the shared coordinator at this composer. Reading and writing the
     /// draft goes through the binding rather than a snapshot, because a
     /// transcript can land long after the recording started.
@@ -464,18 +488,18 @@ struct FeatureComposerView: View {
                 ThreadWorkingStatusBar(status: workingStatus)
             }
 
-            if let approval = pendingApprovals.first, let onApprovalDecision {
+            if let approval = shownApprovals.first, let onApprovalDecision {
                 FeatureComposerApprovalPanel(
                     approval: approval,
                     position: 1,
-                    total: pendingApprovals.count,
+                    total: shownApprovals.count,
                     isResponding: isResolvingRequest,
                     onDecision: { decision in
                         onApprovalDecision(approval.id, decision)
                     },
                     onCancelTurn: onStop
                 )
-            } else if let input = pendingUserInputs.first, let onUserInputSubmit {
+            } else if let input = shownUserInputs.first, let onUserInputSubmit {
                 FeatureComposerUserInputPanel(
                     input: input,
                     isResponding: isResolvingRequest,
@@ -921,6 +945,7 @@ struct FeatureComposerView: View {
     /// server queues behind a running turn.
     private func sendFollowUp(steer: Bool) {
         guard canSend, !isSending else { return }
+        typingGuard.release()
         if steer, offersFollowUpChoice, let steering {
             steering.onSteer()
         } else {
@@ -1275,7 +1300,7 @@ struct FeatureComposerView: View {
 
     private var historyAvailable: Bool {
         !isSending && !isStashing && !voice.state.isBusy && !showsCommandMenu
-            && pendingApprovals.isEmpty && pendingUserInputs.isEmpty
+            && shownApprovals.isEmpty && shownUserInputs.isEmpty
     }
 
     private var canStashDraft: Bool {
@@ -1361,12 +1386,25 @@ struct FeatureComposerView: View {
 
     // MARK: - State
 
+    private var pendingRequestIDs: [String] {
+        pendingApprovals.map(\.id) + pendingUserInputs.map(\.id)
+    }
+
+    /// The requests not held back while the reader types; see `ComposerTypingGuard`.
+    private var shownApprovals: [FeatureApproval] {
+        pendingApprovals.filter { !typingGuard.held.contains($0.id) }
+    }
+
+    private var shownUserInputs: [FeatureUserInput] {
+        pendingUserInputs.filter { !typingGuard.held.contains($0.id) }
+    }
+
     /// Compact only the draft's line count. The editor, controls and mic never leave the tree.
     private var isRestingWhileReading: Bool {
         readingHistory && !forceExpanded && !focused.wrappedValue
             && !voice.state.isBusy && !isPickingAttachment
             && mediaSurface == nil && attachments.isEmpty && !attachmentPreparation.isPreparing
-            && pendingApprovals.isEmpty && pendingUserInputs.isEmpty && !isSending && !isStashing
+            && shownApprovals.isEmpty && shownUserInputs.isEmpty && !isSending && !isStashing
     }
 
     private var isExpanded: Bool {
@@ -1451,8 +1489,8 @@ struct FeatureComposerView: View {
 
     private var showsCommandMenu: Bool {
         isExpanded
-            && pendingApprovals.isEmpty
-            && pendingUserInputs.isEmpty
+            && shownApprovals.isEmpty
+            && shownUserInputs.isEmpty
             && composerTrigger != nil
             && dismissedSuggestionText != text
     }

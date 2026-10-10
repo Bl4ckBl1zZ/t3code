@@ -386,6 +386,9 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// excluded from both workspaces: they are steps inside their parent, not
     /// work of their own.
     public var relationshipToParent: String?
+    /// The scoped id of the thread this one was spawned from or forked off.
+    /// Nil for a root thread and on rows cached before the field.
+    public var parentThreadID: String? = nil
     /// The wire `creationSource`: `provider` marks a thread the provider
     /// spawned on its own. Nil on rows cached before the field.
     public var creationSource: String? = nil
@@ -479,6 +482,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         supportsSnooze: Bool? = nil,
         workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
+        parentThreadID: String? = nil,
         creationSource: String? = nil,
         isRegeneratingTitle: Bool = false,
         supportsTitleRegeneration: Bool? = nil,
@@ -540,6 +544,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.supportsSnooze = supportsSnooze
         self.workInboxRole = workInboxRole
         self.relationshipToParent = relationshipToParent
+        self.parentThreadID = parentThreadID
         self.creationSource = creationSource
         self.isRegeneratingTitle = isRegeneratingTitle
         self.supportsTitleRegeneration = supportsTitleRegeneration

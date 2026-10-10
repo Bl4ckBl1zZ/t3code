@@ -22,6 +22,25 @@ enum PullRequestStatusTone: Equatable, Sendable {
     case neutral
 }
 
+/// What the conversation shows beyond people's open remarks. Both start hidden,
+/// as on web, and the choice is kept per device.
+struct PullRequestCommentFilter: Equatable, Sendable {
+    static let botsKey = "pullRequestCommentFilter.bots"
+    static let resolvedKey = "pullRequestCommentFilter.resolved"
+
+    var bots = false
+    /// Remarks in resolved conversations and dismissed reviews.
+    var resolved = false
+
+    static func isBot(_ actor: PullRequestActor?) -> Bool {
+        actor?.isBot == true || actor?.login.hasSuffix("[bot]") == true
+    }
+
+    static func hiddenNote(_ count: Int) -> String {
+        count == 1 ? "The only comment is hidden by the filter." : "All \(count) comments are hidden by the filter."
+    }
+}
+
 /// A review that says something about the change itself, rather than only
 /// carrying remarks. `COMMENTED` is not one of these: it is a remark with a
 /// review attached, not a verdict.
@@ -399,6 +418,32 @@ enum PullRequestDetailSections {
             if left != right { return left < right }
             return lhs.offset < rhs.offset
         }.map(\.element)
+    }
+
+    /// The remarks and conversations the reader's filter keeps, and how many
+    /// remarks it hides. A resolved bot remark is hidden until both are shown.
+    static func filtered(
+        _ activity: PullRequestActivity,
+        by filter: PullRequestCommentFilter
+    ) -> (activity: PullRequestActivity, hiddenComments: Int) {
+        let threadByCommentID = Dictionary(
+            activity.reviewThreads.flatMap { thread in thread.comments.map { ($0.id, thread) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let comments = activity.comments.filter { comment in
+            let finished = threadByCommentID[comment.id]?.isResolved == true
+                || PullRequestReviewOutcome(reviewState: comment.reviewState) == .dismissed
+            return (filter.bots || !PullRequestCommentFilter.isBot(comment.author))
+                && (filter.resolved || !finished)
+        }
+        let threads = activity.reviewThreads.filter { thread in
+            (filter.bots || !PullRequestCommentFilter.isBot(thread.comments.first?.author))
+                && (filter.resolved || !thread.isResolved)
+        }
+        var kept = activity
+        kept.comments = comments
+        kept.reviewThreads = threads
+        return (kept, activity.comments.count - comments.count)
     }
 
     /// A note for remarks the host holds that the read stopped short of.

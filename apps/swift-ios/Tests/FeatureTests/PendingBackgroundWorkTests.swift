@@ -45,6 +45,11 @@ final class PendingBackgroundWorkTests: XCTestCase {
             "Waiting on subagent Review src/math.ts"
         )
         XCTAssertEqual(title([Entry(taskId: "a", kind: .monitor)]), "Waiting on a monitor")
+        // Upstream 0c4012055d: a named monitor says what it waits on itself.
+        XCTAssertEqual(
+            title([Entry(taskId: "a", description: "Watching PR #12 checks", kind: .monitor)]),
+            "Watching PR #12 checks"
+        )
         XCTAssertNil(PendingBackgroundWorkPresentation([]))
     }
 
