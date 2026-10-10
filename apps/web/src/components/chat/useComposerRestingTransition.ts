@@ -1,5 +1,6 @@
 import { useRef, useCallback, useLayoutEffect, useEffect, type RefObject } from "react";
 import { shouldAnimateComposerRestingTransition } from "../composerFooterLayout";
+import { observeResize } from "~/lib/observeResize";
 
 const COMPOSER_RESTING_TRANSITION_CLEANUP_BUFFER_MS = 50;
 const COMPOSER_RESTING_TRANSITION_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
@@ -390,10 +391,10 @@ export function useComposerRestingTransition(
 
   useLayoutEffect(() => {
     const element = elementRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
+    if (!element) return;
 
     const body = element.querySelector<HTMLElement>('[data-chat-composer-body="true"]');
-    const observer = new ResizeObserver((entries) => {
+    return observeResize(body ? [element, body] : element, (entries) => {
       if (animationRef.current) {
         if (body && entries.some((entry) => entry.target === body)) {
           transitionToCurrentGeometry(false);
@@ -418,9 +419,6 @@ export function useComposerRestingTransition(
         actionFromBottom: actionTop === undefined ? null : elementRect.bottom - actionTop,
       };
     });
-    observer.observe(element);
-    if (body) observer.observe(body);
-    return () => observer.disconnect();
   }, [transitionToCurrentGeometry]);
 
   useEffect(() => {

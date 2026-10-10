@@ -7,6 +7,7 @@ import noManualEffectRuntimeInTests from "./rules/no-manual-effect-runtime-in-te
 import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import noOutsetStateIndicators from "./rules/no-outset-state-indicators.ts";
 import noRawMcpRegistration from "./rules/no-raw-mcp-registration.ts";
+import noRawResizeObserver from "./rules/no-raw-resize-observer.ts";
 import noUnscopedHas from "./rules/no-unscoped-has.ts";
 import preferCatchTags from "./rules/prefer-catch-tags.ts";
 import requireCenteredScrollGutter from "./rules/require-centered-scroll-gutter.ts";
@@ -24,6 +25,7 @@ export default definePlugin({
     "no-native-title-tooltip": noNativeTitleTooltip,
     "no-outset-state-indicators": noOutsetStateIndicators,
     "no-raw-mcp-registration": noRawMcpRegistration,
+    "no-raw-resize-observer": noRawResizeObserver,
     "no-unscoped-has": noUnscopedHas,
     "prefer-catch-tags": preferCatchTags,
     "require-centered-scroll-gutter": requireCenteredScrollGutter,

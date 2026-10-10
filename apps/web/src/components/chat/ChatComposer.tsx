@@ -223,21 +223,18 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
 
-    const observer =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updatePosition);
-    if (observer) {
-      // The composer is centered and capped at a max width, so opening a side
-      // panel slides it sideways without ever resizing it. Watching the anchor
-      // alone would leave the menu behind; the ancestors are what shrink, and
-      // they resize on every frame of the panel animation.
-      observer.observe(anchor);
-      for (let element = anchor.parentElement; element; element = element.parentElement) {
-        observer.observe(element);
-      }
+    // The composer is centered and capped at a max width, so opening a side
+    // panel slides it sideways without ever resizing it. Watching the anchor
+    // alone would leave the menu behind; the ancestors are what shrink, and
+    // they resize on every frame of the panel animation.
+    const observed: Element[] = [anchor];
+    for (let element = anchor.parentElement; element; element = element.parentElement) {
+      observed.push(element);
     }
+    const stopObserving = observeResize(observed, updatePosition);
 
     return () => {
-      observer?.disconnect();
+      stopObserving();
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
@@ -320,6 +317,7 @@ import { ComposerAttachmentChips } from "./ComposerAttachmentChips";
 import { isAttachmentLimitReached } from "./ComposerAttachmentChips.logic";
 import { resolvePastePolicy } from "./composerAttachmentIntake.logic";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { observeResize } from "~/lib/observeResize";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 
@@ -2086,8 +2084,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           },
         })
       : undefined;
-    const observer = new ResizeObserver((entries) => {
-      const [entry] = entries;
+    const stopObserving = observeResize(composerForm, (entries) => {
+      const entry = entries.at(-1);
       if (!entry) return;
       const nextCompactness = measureFooterCompactness();
       setIsComposerPrimaryActionsCompact((previous) =>
@@ -2106,9 +2104,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       scheduleStickToBottom();
     });
 
-    observer.observe(composerForm);
     return () => {
-      observer.disconnect();
+      stopObserving();
       stopFade?.();
     };
   }, [
@@ -3427,9 +3424,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!isComposerResting || !footer) return;
     const measure = () => setRestingFooterWidth(Math.ceil(footer.getBoundingClientRect().width));
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(footer);
-    return () => observer.disconnect();
+    return observeResize(footer, measure);
   }, [isComposerResting]);
 
   // ------------------------------------------------------------------

@@ -172,6 +172,16 @@ export default defineConfig({
         },
       },
       {
+        // React commits state set in a raw ResizeObserver callback after the paint, so derived
+        // layout lands a frame late. observeResize flushes every observed resize in one render.
+        files: ["apps/web/src/**"],
+        excludeFiles: [
+          "apps/web/src/lib/observeResize.ts",
+          "**/*.{test,spec}.{ts,tsx,js,jsx,mts,cts,mjs,cjs}",
+        ],
+        rules: { "t3code/no-raw-resize-observer": "error" },
+      },
+      {
         // State indicators paint inward; decorative rings keep their own geometry.
         files: ["apps/web/src/**"],
         rules: { "t3code/no-outset-state-indicators": "error" },

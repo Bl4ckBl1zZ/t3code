@@ -8,7 +8,6 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
-import { flushSync } from "react-dom";
 
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { ChatCanvasContext } from "./ChatCanvasContext";
@@ -17,6 +16,7 @@ import {
   resolveChatCanvasLayout,
   type ChatCanvasDetailsCard,
 } from "./chatCanvasLayout";
+import { observeResize } from "~/lib/observeResize";
 
 /**
  * Owns the available conversation space. The docked workspace card only
@@ -79,10 +79,7 @@ export function ChatCanvas({
       );
     };
     measure();
-    const observer = new ResizeObserver(() => flushSync(measure));
-    observer.observe(element);
-    observer.observe(probe);
-    return () => observer.disconnect();
+    return observeResize([element, probe], measure);
   }, []);
   const context = useMemo(() => {
     const container = { width: measurements.width, height: measurements.height };

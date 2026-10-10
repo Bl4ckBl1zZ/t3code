@@ -1,6 +1,7 @@
-import { type RefObject, useEffect, useLayoutEffect, useState } from "react";
+import { type RefObject, useLayoutEffect, useState } from "react";
 
 import { type ResizableWidthHandlers, useResizableWidth } from "./useResizableWidth";
+import { observeResize } from "../lib/observeResize";
 
 export interface PreviewPanelInlineSize {
   readonly width: number;
@@ -62,45 +63,38 @@ function useClampedMaxWidth(
   hostRef: RefObject<HTMLDivElement | null> | undefined,
   enabled: boolean,
 ): number {
-  const [vw, setVw] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
-  const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
-  useEffect(() => {
+  const [maxWidth, setMaxWidth] = useState(() =>
+    getPreviewPanelMaxWidth(typeof window === "undefined" ? 1280 : window.innerWidth),
+  );
+  useLayoutEffect(() => {
     if (typeof window === "undefined") return;
+    const row = (enabled ? hostRef?.current?.parentElement : null) ?? null;
+    // Measure before first paint: the persisted width must be clamped against
+    // the row on the initial render, not one observer tick later (the panel
+    // would flash over-wide on every mount). Only the derived cap is stored: the
+    // row resizes every frame of a sidebar drag, but the cap rarely moves, and an
+    // unchanged cap skips re-rendering the panel's owner.
+    const measure = () => {
+      setMaxWidth(getPreviewPanelMaxWidth(window.innerWidth, row?.clientWidth));
+    };
+    measure();
     let frame = 0;
     const onResize = () => {
-      // Coalesce rapid resize events into one rAF tick.
       if (frame !== 0) return;
       frame = window.requestAnimationFrame(() => {
         frame = 0;
-        setVw(window.innerWidth);
+        measure();
       });
     };
     window.addEventListener("resize", onResize);
+    const stopObserving = row ? observeResize(row, measure) : undefined;
     return () => {
       window.removeEventListener("resize", onResize);
       if (frame !== 0) window.cancelAnimationFrame(frame);
-    };
-  }, []);
-  useLayoutEffect(() => {
-    if (!enabled || !hostRef) return;
-    const parent = hostRef.current?.parentElement;
-    if (!parent) return;
-    // Measure before first paint: the persisted width must be clamped
-    // against the row on the initial render, not one observer tick later
-    // (the panel would flash over-wide on every mount). clientWidth is
-    // integral, so sub-pixel resize deltas bail out of re-rendering.
-    const measure = () => {
-      setContainerWidth(parent.clientWidth);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(parent);
-    return () => {
-      observer.disconnect();
+      stopObserving?.();
     };
   }, [hostRef, enabled]);
-  return getPreviewPanelMaxWidth(vw, containerWidth);
+  return maxWidth;
 }
 
 export function getPreviewPanelMaxWidth(viewportWidth: number, containerWidth?: number): number {

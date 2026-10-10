@@ -65,6 +65,7 @@ import {
 import { Separator } from "./ui/separator";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import { ComposerSurface } from "./chat/ComposerSurface";
+import { observeResize } from "~/lib/observeResize";
 
 interface BranchToolbarProps {
   composerControlsHostRef?: ((element: HTMLDivElement | null) => void) | undefined;
@@ -543,11 +544,10 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 
   useEffect(() => {
     if (!element) return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
+    const stopObserving = observeResize(element, measure);
     document.fonts.addEventListener("loadingdone", measure);
     return () => {
-      observer.disconnect();
+      stopObserving();
       document.fonts.removeEventListener("loadingdone", measure);
     };
   }, [element, measure]);
