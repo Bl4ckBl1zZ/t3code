@@ -790,6 +790,7 @@ public struct ThreadDetailView: View {
                                 composer(detail)
                             }
                         } else {
+                            childInputBanner(detail)
                             planFollowUpBanner(detail)
                             composer(detail)
                         }
@@ -956,6 +957,18 @@ public struct ThreadDetailView: View {
                 isBlocked: isSending || isEnvironmentOffline,
                 onOpenPlan: { isShowingPlan = true }
             )
+        }
+    }
+
+    /// A subagent below this thread waits on a question. Hidden while this
+    /// thread waits on the reader itself, whose own request comes first.
+    @ViewBuilder
+    private func childInputBanner(_ detail: FeatureThreadDetail) -> some View {
+        if detail.approvals.isEmpty, detail.userInputs.isEmpty, currentThread.state != .waitingForInput {
+            let children = ChildThreadInputs.waiting(under: thread.id, in: model.snapshot.threads)
+            if !children.isEmpty {
+                ChildThreadInputBanner(children: children, onOpen: openRelatedThread)
+            }
         }
     }
 

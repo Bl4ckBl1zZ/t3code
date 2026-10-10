@@ -6466,6 +6466,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
+            parentThreadID: thread.lineage.parentThreadId.map {
+                FeatureScopedID.thread(environmentID: environment.id, wireID: $0)
+            },
             creationSource: thread.creationSource,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
@@ -6659,6 +6662,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             // both lists rather than showing it beside the work that spawned it.
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
+            parentThreadID: thread.lineage.parentThreadId.map {
+                FeatureScopedID.thread(environmentID: environment.id, wireID: $0)
+            },
             creationSource: thread.creationSource,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
