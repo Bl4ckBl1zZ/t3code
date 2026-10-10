@@ -89,11 +89,13 @@ import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag";
+import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import {
   type ComposerAttachment,
   type ComposerImageAttachment,
   type DraftId,
   type PersistedComposerImageAttachment,
+  composerTargetKey,
   hydrateImagesFromPersisted,
   useComposerDraftStore,
   useComposerThreadDraft,
@@ -605,6 +607,7 @@ export interface ChatComposerHandle {
   addTerminalContext: (selection: TerminalContextSelection) => void;
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
+    answeringPendingUserInput: boolean;
     prompt: string;
     images: ComposerAttachment[];
     terminalContexts: TerminalContextDraft[];
@@ -822,12 +825,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sendDisabledReason: externalSendDisabledReason,
     isPreparingWorktree,
     environmentUnavailable,
-    activePendingApproval,
+    activePendingApproval: incomingPendingApproval,
     pendingApprovals,
-    pendingUserInputs,
-    activePendingProgress,
+    pendingUserInputs: incomingPendingUserInputs,
+    activePendingProgress: incomingPendingProgress,
     activePendingResolvedAnswers,
-    activePendingIsResponding,
+    activePendingIsResponding: incomingPendingIsResponding,
     activePendingDraftAnswers,
     activePendingQuestionIndex,
     respondingRequestIds,
@@ -885,6 +888,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setThreadError,
     onExpandImage,
   } = props;
+  const {
+    heldRequestIds,
+    onDraftChange: onTypingGuardDraftChange,
+    onFocus: onTypingGuardFocus,
+    onBlur: onTypingGuardBlur,
+    onSend: onTypingGuardSend,
+  } = useComposerTypingGuard(composerTargetKey(composerDraftTarget), [
+    ...pendingApprovals.map((request) => request.requestId),
+    ...incomingPendingUserInputs.map((request) => request.requestId),
+  ]);
+  // Hold composer takeover while the user finishes their thread draft.
+  const activePendingApproval =
+    incomingPendingApproval && !heldRequestIds.has(incomingPendingApproval.requestId)
+      ? incomingPendingApproval
+      : null;
+  const holdingUserInput = incomingPendingUserInputs[0]
+    ? heldRequestIds.has(incomingPendingUserInputs[0].requestId)
+    : false;
+  const pendingUserInputs = holdingUserInput ? [] : incomingPendingUserInputs;
+  const activePendingProgress = holdingUserInput ? null : incomingPendingProgress;
+  const activePendingIsResponding = !holdingUserInput && incomingPendingIsResponding;
   // Editor-style questions (Pi `editor` dialogs) answer with verbatim text:
   // no chips, no suggestion menus, and character-exact cursors.
   const isLiteralPendingAnswer = activePendingProgress?.activeQuestion?.initialAnswer !== undefined;
@@ -2197,6 +2221,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
         return;
       }
+      onTypingGuardDraftChange();
       promptRef.current = nextPrompt;
       setPrompt(nextPrompt);
       if (!terminalContextIdListsEqual(composerTerminalContexts, terminalContextIds)) {
@@ -2214,6 +2239,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       resting.expand,
       activePendingProgress?.activeQuestion,
       isLiteralPendingAnswer,
+      onTypingGuardDraftChange,
       pendingUserInputs.length,
       onChangeActivePendingUserInputCustomAnswer,
       promptRef,
@@ -2266,6 +2292,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
       } else {
         setPrompt(next.text);
+        onTypingGuardDraftChange();
       }
       setComposerCursor(nextCursor);
       setComposerTrigger(
@@ -2283,6 +2310,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingUserInput,
       isLiteralPendingAnswer,
       onChangeActivePendingUserInputCustomAnswer,
+      onTypingGuardDraftChange,
       promptRef,
       setPrompt,
     ],
@@ -2521,6 +2549,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
       setComposerSubmissionError(submission.validationMessage);
       if (!submission.didDispatch) return;
+      onTypingGuardSend();
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
       }
@@ -2530,6 +2559,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingProgress,
       blurMobileComposerAfterSend,
       noProviderAvailable,
+      onTypingGuardSend,
       onSend,
       phase,
       promptRef,
@@ -3539,6 +3569,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
       },
       getSendContext: () => ({
+        answeringPendingUserInput: activePendingProgress !== null,
         prompt: promptRef.current,
         images: composerImagesRef.current,
         terminalContexts: composerTerminalContextsRef.current,
@@ -3565,6 +3596,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
     }),
     [
+      activePendingProgress,
       expandRestingComposer,
       activeThread,
       addComposerImages,
@@ -3899,6 +3931,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             const activeElement = event.target;
             if (
               activeElement instanceof Element &&
+              activeElement.closest('[data-testid="composer-editor"]')
+            ) {
+              onTypingGuardFocus();
+            }
+            if (
+              activeElement instanceof Element &&
               activeElement.closest('[data-chat-resting-composer-controls="true"]')
             )
               return;
@@ -3916,7 +3954,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             }
             setIsComposerFocused(true);
           }}
-          onBlurCapture={() => {
+          onBlurCapture={(event) => {
+            if (
+              event.target instanceof Element &&
+              event.target.closest('[data-testid="composer-editor"]')
+            ) {
+              onTypingGuardBlur();
+            }
             scheduleComposerCollapseCheck();
           }}
         >

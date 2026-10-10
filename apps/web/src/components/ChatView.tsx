@@ -7354,7 +7354,8 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
-    if (activePendingProgress) {
+    const sendCtx = composerRef.current?.getSendContext();
+    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
         return;
@@ -7362,7 +7363,6 @@ function ChatViewContent(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;
