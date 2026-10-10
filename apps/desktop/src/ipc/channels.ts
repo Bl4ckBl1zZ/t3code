@@ -101,6 +101,8 @@ export const PREVIEW_IMPORT_COOKIES_CHANNEL = "preview:import-cookies";
 export const PREVIEW_FULL_DISK_ACCESS_CHANNEL = "preview:full-disk-access";
 
 export const SNAP_SHOT_EVENT_CHANNEL = "desktop:snap-shot-event";
+export const WEB_LINK_OPEN_CHANNEL = "desktop:web-link-open";
+export const WEB_LINK_READY_CHANNEL = "desktop:web-link-ready";
 export const SETUP_SNAP_SHOT_CHANNEL = "desktop:setup-snap-shot";
 export const PREVIEW_SNAP_SHOT_CONFIG_CHANNEL = "desktop:preview-snap-shot-config";
 export const APPLY_SNAP_SHOT_CONFIG_CHANNEL = "desktop:apply-snap-shot-config";

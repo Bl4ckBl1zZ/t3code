@@ -1,4 +1,5 @@
 import { createClerkBridge } from "@clerk/electron";
+import * as NodeURL from "node:url";
 import { storage } from "@clerk/electron/storage";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -13,6 +14,7 @@ import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopWebLinks from "./DesktopWebLinks.ts";
 
 declare const __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
 
@@ -48,7 +50,10 @@ export class DesktopClerk extends Context.Service<
     readonly configure: Effect.Effect<
       void,
       never,
-      ElectronApp.ElectronApp | ElectronWindow.ElectronWindow | Scope.Scope
+      | ElectronApp.ElectronApp
+      | ElectronWindow.ElectronWindow
+      | DesktopWebLinks.DesktopWebLinks
+      | Scope.Scope
     >;
   }
 >()("@t3tools/desktop/app/DesktopClerk") {}
@@ -123,6 +128,7 @@ export const make = Effect.gen(function* () {
     configure: Effect.gen(function* () {
       const electronApp = yield* ElectronApp.ElectronApp;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const webLinks = yield* DesktopWebLinks.DesktopWebLinks;
       const context = yield* Effect.context<ElectronWindow.ElectronWindow>();
       const runPromise = Effect.runPromiseWith(context);
 
@@ -136,6 +142,18 @@ export const make = Effect.gen(function* () {
         return yield* Effect.interrupt;
       }
 
+      // As the default browser, macOS hands T3 Code every web link through open-url.
+      yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
+        if (!DesktopWebLinks.isWebLink(url)) return;
+        event.preventDefault();
+        void runPromise(webLinks.receive(url));
+      });
+      // A browser opens HTML files too, which macOS hands over by path.
+      yield* electronApp.on("open-file", (event: { preventDefault: () => void }, path: string) => {
+        if (!DesktopWebLinks.isWebPageFile(path)) return;
+        event.preventDefault();
+        void runPromise(webLinks.receive(NodeURL.pathToFileURL(path).href));
+      });
       yield* electronApp.on("second-instance", () => {
         void runPromise(
           Effect.gen(function* () {
