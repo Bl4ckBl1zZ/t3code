@@ -613,8 +613,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       }
       // The browser starts its operation timer after delivery. Allow its timeout
       // response to arrive before treating the entire host as unresponsive.
-      const responseTimeoutMs =
-        input.updateCurrentTab === false ? timeoutMs : timeoutMs + HOST_RESPONSE_GRACE_MS;
+      const responseTimeoutMs = timeoutMs + HOST_RESPONSE_GRACE_MS;
       const result = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(responseTimeoutMs));
       return yield* Option.match(result, {
         onNone: () =>
