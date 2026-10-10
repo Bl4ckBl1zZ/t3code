@@ -4126,51 +4126,45 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
               )}
 
-            {!isComposerCollapsedMobile &&
-              !isComposerApprovalState &&
-              pendingUserInputs.length === 0 && (
-                <ComposerAttachmentChips
-                  pendingCaptures={pendingCaptures}
-                  attachments={composerImages
-                    .filter(
-                      (image) =>
-                        !isComposerResting ||
-                        image.type !== "image" ||
-                        captureIds.includes(image.id),
-                    )
-                    .filter(
-                      (image) =>
-                        !composerPreviewAnnotations.some(
-                          (annotation) => annotation.id === image.id,
-                        ),
-                    )
-                    .map((image) => ({
-                      id: image.id,
-                      type: image.type,
-                      name: image.name,
-                      mimeType: image.mimeType,
-                      sizeBytes: image.sizeBytes,
-                      ...(image.type === "image" && image.source ? { source: image.source } : {}),
-                      previewUrl: image.previewUrl,
-                      upload:
-                        uploadsByImageId[image.id]?.environmentId === environmentId
-                          ? uploadsByImageId[image.id]
-                          : undefined,
-                    }))}
-                  nonPersistedIds={nonPersistedComposerImageIdSet}
-                  onRemove={removeComposerImage}
-                  onRetry={(id) => {
-                    const image = composerImages.find((item) => item.id === id);
-                    if (image) retryAttachmentUpload({ environmentId, image });
-                  }}
-                  onPreview={(id) => {
-                    const preview = buildExpandedImagePreview(composerImages, id);
-                    if (!preview) return;
-                    onExpandImage(preview);
-                  }}
-                  onFocusEditor={focusComposer}
-                />
-              )}
+            {!isComposerCollapsedMobile && !isComposerApprovalState && (
+              <ComposerAttachmentChips
+                pendingCaptures={pendingCaptures}
+                attachments={composerImages
+                  .filter(
+                    (image) =>
+                      !isComposerResting || image.type !== "image" || captureIds.includes(image.id),
+                  )
+                  .filter(
+                    (image) =>
+                      !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
+                  )
+                  .map((image) => ({
+                    id: image.id,
+                    type: image.type,
+                    name: image.name,
+                    mimeType: image.mimeType,
+                    sizeBytes: image.sizeBytes,
+                    ...(image.type === "image" && image.source ? { source: image.source } : {}),
+                    previewUrl: image.previewUrl,
+                    upload:
+                      uploadsByImageId[image.id]?.environmentId === environmentId
+                        ? uploadsByImageId[image.id]
+                        : undefined,
+                  }))}
+                nonPersistedIds={nonPersistedComposerImageIdSet}
+                onRemove={removeComposerImage}
+                onRetry={(id) => {
+                  const image = composerImages.find((item) => item.id === id);
+                  if (image) retryAttachmentUpload({ environmentId, image });
+                }}
+                onPreview={(id) => {
+                  const preview = buildExpandedImagePreview(composerImages, id);
+                  if (!preview) return;
+                  onExpandImage(preview);
+                }}
+                onFocusEditor={focusComposer}
+              />
+            )}
 
             <div
               className={cn("relative", isComposerResting && "flex min-w-0 items-center gap-1")}
