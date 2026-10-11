@@ -158,7 +158,13 @@ describe("thread relationships", () => {
 
   it.each([
     ["running", "running"],
+    ["waiting", "waiting"],
+    ["queued", "queued"],
+    ["failed", "failed"],
+    ["interrupted", "interrupted"],
+    ["cancelled", "cancelled"],
     ["completed", "completed"],
+    ["rolled_back", "interrupted"],
   ])(
     "shows a subagent whose child thread is %s as %s after its delegated task settled",
     (childStatus, expected) => {
@@ -170,6 +176,7 @@ describe("thread relationships", () => {
           {
             id: child,
             status: childStatus,
+            latestRunId: "run-child-followup",
             forkedFrom: null,
             lineage: { parentThreadId: parent, relationshipToParent: "subagent" },
           },

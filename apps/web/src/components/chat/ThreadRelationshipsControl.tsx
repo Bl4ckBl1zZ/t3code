@@ -140,22 +140,35 @@ function subagentTiming(subagent: OrchestrationV2Subagent): AgentElapsedTiming {
 }
 
 /**
- * A delegated task settles with its first run, but the parent can keep sending
- * the child follow-ups. While the child thread has a live run, the row's timer
- * and hover card follow that run instead of the settled task.
+ * The row's timer and hover card follow current child work, including queued
+ * follow-ups whose provider turn has not started yet.
  */
-function liveSubagent(
+function currentSubagent(
   subagent: OrchestrationV2Subagent | undefined,
   childThread: OrchestrationV2ThreadShell | null | undefined,
 ): OrchestrationV2Subagent | undefined {
-  const liveStatus = liveThreadRunStatus(childThread);
-  if (!subagent || !liveStatus) return subagent;
+  if (!subagent || !childThread) return subagent;
+  const liveStatus =
+    liveThreadRunStatus(childThread) ?? (childThread.status === "queued" ? "queued" : null);
+  const newerRun =
+    childThread.latestRunRequestedAt != null &&
+    DateTime.toEpochMillis(childThread.latestRunRequestedAt) >
+      DateTime.toEpochMillis(subagent.completedAt ?? subagent.startedAt ?? subagent.updatedAt);
+  if (!liveStatus && !newerRun) return subagent;
+  const status = liveStatus ?? childThread.status;
   return {
     ...subagent,
-    status: liveStatus === "running" || liveStatus === "waiting" ? liveStatus : "pending",
-    startedAt: childThread?.activityRunStartedAt ?? null,
-    completedAt: null,
-    // The settled task's output belongs to its first run, not this one.
+    status:
+      status === "preparing" || status === "starting" || status === "queued" || status === "idle"
+        ? "pending"
+        : status === "rolled_back"
+          ? "interrupted"
+          : status,
+    startedAt: liveStatus
+      ? (childThread.activityRunStartedAt ?? null)
+      : (childThread.latestRunStartedAt ?? null),
+    completedAt: liveStatus ? null : (childThread.latestRunCompletedAt ?? null),
+    // The task's output belongs to its recorded run, not newer child work.
     progress: undefined,
     result: null,
   };
@@ -362,7 +375,7 @@ export function ThreadRelationshipsPanel(props: {
             title: node?.thread?.title ?? threadId,
             isSubagent,
           });
-          const subagent = liveSubagent(
+          const subagent = currentSubagent(
             showOrb ? subagentByChildThreadId.get(threadId) : undefined,
             node?.thread,
           );
