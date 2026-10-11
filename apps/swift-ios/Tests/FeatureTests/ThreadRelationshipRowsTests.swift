@@ -58,6 +58,35 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         )
     }
 
+    /// Ports "shows a subagent whose child thread is %s as %s after its
+    /// delegated task settled": the edge follows the child's own work.
+    func testASubagentEdgeFollowsItsChildThreadAfterTheTaskSettled() {
+        func edgeStatus(child status: String, latestRunID: String?) -> String? {
+            var child = shell("thread-child", status: status, parent: "thread-parent", relationship: "subagent")
+            child.latestRunID = latestRunID
+            let graph = ThreadRelationships.deriveGraph(
+                threads: [shell("thread-parent"), child],
+                ownerThreadID: "thread-parent",
+                subagents: [
+                    ThreadRelationshipSubagentLink(id: "subagent-1", childThreadID: "thread-child", status: "completed")
+                ]
+            )
+            return graph.edges.first { $0.kind == .subagent }?.status
+        }
+        let cases = [
+            ("running", "running"), ("waiting", "waiting"), ("queued", "queued"), ("failed", "failed"),
+            ("interrupted", "interrupted"), ("cancelled", "cancelled"), ("completed", "completed"),
+            ("rolled_back", "interrupted"),
+        ]
+        for (childStatus, expected) in cases {
+            XCTAssertEqual(edgeStatus(child: childStatus, latestRunID: "run-child-followup"), expected, childStatus)
+        }
+        // A live run counts even before the shell names a latest run; without
+        // either, the settled task speaks for the child.
+        XCTAssertEqual(edgeStatus(child: "running", latestRunID: nil), "running")
+        XCTAssertEqual(edgeStatus(child: "failed", latestRunID: nil), "completed")
+    }
+
     func testCombinesSubagentAndTransferEdgesWithArchivedShellState() {
         let graph = ThreadRelationships.deriveGraph(
             threads: [

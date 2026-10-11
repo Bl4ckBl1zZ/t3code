@@ -36,6 +36,9 @@ public struct ThreadRelationshipShell: Equatable, Hashable, Sendable, Identifiab
     public let forkedFromRunThreadID: String?
     public let archivedAt: String?
     public let deletedAt: String?
+    /// The thread's latest app run. Set only from a live shell; a child with
+    /// one describes its own work, so a subagent edge follows its status.
+    public var latestRunID: String? = nil
 
     public init(
         id: String,
@@ -68,6 +71,7 @@ public struct ThreadRelationshipShell: Equatable, Hashable, Sendable, Identifiab
             archivedAt: shell.archivedAt,
             deletedAt: shell.deletedAt
         )
+        latestRunID = shell.latestRunId
     }
 
     /// The projection's own thread. `status` is not part of `AppThread`, so the
@@ -374,6 +378,15 @@ public enum ThreadRelationships {
         func addEdge(_ edge: ThreadRelationshipEdge) {
             ensureNode(edge.sourceThreadID)
             ensureNode(edge.targetThreadID)
+            var edge = edge
+            if edge.kind == .subagent, edge.status == "rolled_back" {
+                edge = ThreadRelationshipEdge(
+                    sourceThreadID: edge.sourceThreadID,
+                    targetThreadID: edge.targetThreadID,
+                    kind: edge.kind,
+                    status: "interrupted"
+                )
+            }
             if let index = edgeIndexByKey[edge.key] {
                 edges[index] = edge
             } else {
@@ -399,12 +412,15 @@ public enum ThreadRelationships {
         if let ownerThreadID {
             for subagent in subagents {
                 guard let childThreadID = subagent.childThreadID else { continue }
+                // The row describes the child conversation, including queued
+                // follow-ups and their outcomes. A child without an app run
+                // still uses its task.
                 addEdge(
                     ThreadRelationshipEdge(
                         sourceThreadID: ownerThreadID,
                         targetThreadID: childThreadID,
                         kind: .subagent,
-                        status: subagent.status
+                        status: subagentEdgeStatus(subagent, child: nodes[childThreadID]?.thread)
                     )
                 )
             }
@@ -423,6 +439,21 @@ public enum ThreadRelationships {
 
         return ThreadRelationshipGraph(nodes: nodes, edges: edges)
     }
+
+    /// Ported from `deriveThreadRelationshipGraph`: a live run on the child
+    /// outranks the task's status, and so does the child's own latest run once
+    /// it has one, since the parent can keep sending it follow-ups.
+    static func subagentEdgeStatus(
+        _ subagent: ThreadRelationshipSubagentLink,
+        child: ThreadRelationshipShell?
+    ) -> String {
+        guard let child else { return subagent.status }
+        if liveThreadRunStatuses.contains(child.status) { return child.status }
+        return child.latestRunID != nil ? child.status : subagent.status
+    }
+
+    /// `LIVE_THREAD_RUN_STATUSES`: a thread shell's status while a run is in flight.
+    static let liveThreadRunStatuses: Set<String> = ["preparing", "starting", "running", "waiting"]
 
     /// One row per directly related thread, first edge wins.
     public static func immediateRelationships(
@@ -625,12 +656,10 @@ public extension ThreadRelationships {
             return subagent.startedAt != nil && stoppableStatuses.contains(subagent.status)
         }
         guard subagent.origin == "app_owned" else { return false }
-        if let childThreadStatus, liveRunStatuses.contains(childThreadStatus) { return true }
+        if let childThreadStatus, liveThreadRunStatuses.contains(childThreadStatus) { return true }
         return subagent.startedAt != nil && stoppableStatuses.contains(subagent.status)
     }
 
-    /// `LIVE_THREAD_RUN_STATUSES`: a thread shell's status while a run is in flight.
-    private static let liveRunStatuses: Set<String> = ["preparing", "starting", "running", "waiting"]
     private static let stoppableStatuses: Set<String> = ["pending", "running", "waiting"]
 }
 
