@@ -199,6 +199,30 @@ describe("makeManagedServerProvider", () => {
         }),
       ).pipe(Effect.provide(AlwaysRunTestLayer)),
   );
+  it.effect("does not enrich a disabled provider's snapshot", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let enrichmentCalls = 0;
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Effect.succeed({ enabled: false }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          refreshOnInterval: false,
+          initialSnapshot: () => Effect.succeed({ ...initialSnapshot, enabled: false }),
+          checkProvider: Effect.succeed({ ...refreshedSnapshot, enabled: false }),
+          enrichSnapshot: () => {
+            enrichmentCalls += 1;
+            return Effect.void;
+          },
+        });
+
+        yield* provider.refresh;
+
+        assert.strictEqual(enrichmentCalls, 0);
+      }),
+    ).pipe(Effect.provide(AlwaysRunTestLayer)),
+  );
   it.effect("keeps the last good limits after a failed read only for the same workspace", () =>
     Effect.scoped(
       Effect.gen(function* () {
