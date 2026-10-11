@@ -34,7 +34,10 @@ import {
   ProviderAdapterRegistryLookupError,
   ProviderAdapterRegistryV2,
 } from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
+import {
+  ThreadLaunchBaseRefError,
+  ThreadLaunchService,
+} from "../orchestration-v2/ThreadLaunchService.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectService } from "../project/ProjectService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
@@ -677,6 +680,7 @@ describe("OrchestratorMcpService", () => {
     parentProjection: OrchestrationV2ThreadProjection,
     launches: Array<Record<string, unknown>>,
     worktreePaths: ReadonlyArray<string> = [],
+    checkWorktreeBase: ThreadLaunchService["Service"]["checkWorktreeBase"] = () => Effect.void,
   ) =>
     Layer.mergeAll(
       NodeServices.layer,
@@ -698,6 +702,7 @@ describe("OrchestratorMcpService", () => {
         ] as never),
       }),
       Layer.mock(ThreadLaunchService)({
+        checkWorktreeBase,
         launch: (input) =>
           Effect.sync(() => {
             launches.push(input as unknown as Record<string, unknown>);
@@ -855,6 +860,56 @@ describe("OrchestratorMcpService", () => {
       assert.equal(refused.code, "invalid_request");
       assert.equal(launches.length, 0);
       yield* launch(ownWorktree);
+      assert.equal(launches.length, 1);
+    }),
+  );
+
+  it.effect("a launch into a new worktree creates nothing when its base ref has no commit", () =>
+    Effect.gen(function* () {
+      const parentProjection = launchParent();
+      const launches: Array<Record<string, unknown>> = [];
+      const launchFrom = (baseRef: string) =>
+        Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          return yield* service.launchThread(launchScope(parentProjection.thread.id), {
+            title: "Fix",
+            workspaceStrategy: { type: "worktree", baseRef, startFromOrigin: false },
+          });
+        }).pipe(
+          Effect.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(
+                launchDependencies(
+                  parentProjection,
+                  launches,
+                  [],
+                  ({ projectId, workspaceStrategy }) =>
+                    workspaceStrategy.type === "worktree" &&
+                    workspaceStrategy.baseRef === "t3/renamed"
+                      ? Effect.fail(
+                          new ThreadLaunchBaseRefError({
+                            projectId,
+                            projectTitle: "Client target",
+                            workspaceRoot: "/projects/client-target",
+                            baseRef: workspaceStrategy.baseRef,
+                          }),
+                        )
+                      : Effect.void,
+                ),
+              ),
+            ),
+          ),
+        );
+
+      const refused = yield* launchFrom("t3/renamed").pipe(Effect.flip);
+      assert.equal(refused.code, "invalid_request");
+      assert.include(
+        refused.message,
+        'Base ref "t3/renamed" does not resolve to a commit in project "Client target" (/projects/client-target). No thread was created.',
+      );
+      assert.equal(launches.length, 0);
+
+      yield* launchFrom("main");
       assert.equal(launches.length, 1);
     }),
   );

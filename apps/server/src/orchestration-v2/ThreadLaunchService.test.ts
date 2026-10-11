@@ -3,6 +3,7 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
+  GitCommandError,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -72,6 +73,7 @@ interface HarnessOptions {
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly providers?: ReadonlyArray<ServerProvider>;
+  readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -125,6 +127,7 @@ function makeHarness(options: HarnessOptions = {}) {
       removeWorktree: () => Effect.void,
       resolveRemoteTrackingCommit: () =>
         Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
+      ...options.git,
     }),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
       runForThread: runSetup,
@@ -1247,6 +1250,111 @@ it.effect("schedules an accepted preparing message exactly once across concurren
       assert.isTrue(second.resumed);
       assert.equal(harness.runSetup.mock.calls.length, 1);
       yield* Deferred.succeed(allowSetup, undefined);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect.each([
+  { name: "is missing", baseRef: "t3/renamed", startFromOrigin: false, origin: true },
+  {
+    name: "has no origin to come from",
+    baseRef: "t3/renamed",
+    startFromOrigin: true,
+    origin: false,
+  },
+  {
+    name: "is a previous checkout there never was",
+    baseRef: "-",
+    startFromOrigin: false,
+    origin: true,
+  },
+])("refuses a new worktree whose base ref $name", (testCase) =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      hasCommit: ({ refName }) => Effect.succeed(refName === "HEAD"),
+      git: {
+        remoteExists: () => Effect.succeed(testCase.origin),
+        hasRefNamed: () => Effect.succeed(false),
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const error = yield* launches
+        .checkWorktreeBase({
+          projectId,
+          workspaceStrategy: {
+            type: "worktree",
+            baseRef: testCase.baseRef,
+            startFromOrigin: testCase.startFromOrigin,
+          },
+        })
+        .pipe(Effect.flip);
+      assert.deepInclude(error, {
+        _tag: "ThreadLaunchBaseRefError",
+        projectId,
+        baseRef: testCase.baseRef,
+      });
+      assert.equal(
+        error.message,
+        `Base ref "${testCase.baseRef}" does not resolve to a commit in project "Project" (/repo).`,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect.each([
+  { name: "a base ref that resolves", baseRef: "main", commits: ["main", "HEAD"] },
+  // Provisioning fetches it; the ref may exist nowhere else yet.
+  {
+    name: "a base ref only origin has",
+    baseRef: "remote-only",
+    startFromOrigin: true,
+    commits: ["HEAD"],
+  },
+  // `git worktree add` starts from a remote-tracking branch of that name.
+  {
+    name: "a base ref a remote branch carries",
+    baseRef: "remote-only",
+    commits: ["HEAD"],
+    remoteBranch: true,
+  },
+  // Provisioning runs such a repository without a worktree.
+  { name: "a repository with no commits yet", baseRef: "main", commits: [] },
+  { name: "the previous checkout", baseRef: "-", commits: ["@{-1}", "HEAD"] },
+  { name: "a commit search", baseRef: ":/fix", commits: ["HEAD"] },
+  { name: "a folder that is not a repository", baseRef: "main", commits: null },
+])("leaves $name to the launch", (testCase) =>
+  Effect.gen(function* () {
+    const { commits } = testCase;
+    const harness = makeHarness({
+      git: {
+        remoteExists: () => Effect.succeed(true),
+        hasRefNamed: () => Effect.succeed(testCase.remoteBranch === true),
+      },
+      hasCommit: ({ refName }) =>
+        commits === null
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "GitWorkflowService.hasCommit",
+                command: "git rev-parse",
+                cwd: "/repo",
+                detail: "Not a Git repository.",
+              }),
+            )
+          : Effect.succeed(commits.includes(refName)),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.checkWorktreeBase({
+        projectId,
+        workspaceStrategy: {
+          type: "worktree",
+          baseRef: testCase.baseRef,
+          ...(testCase.startFromOrigin === undefined
+            ? {}
+            : { startFromOrigin: testCase.startFromOrigin }),
+        },
+      });
     }).pipe(Effect.provide(harness.layer));
   }),
 );

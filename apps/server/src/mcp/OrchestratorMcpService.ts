@@ -2152,6 +2152,24 @@ const make = Effect.gen(function* () {
         if (workspaceStrategy.type === "existing_worktree") {
           yield* assertProjectWorktree(project.workspaceRoot, workspaceStrategy.worktreePath);
         }
+        // A base ref that cannot resolve would leave the launch without its
+        // worktree, so it is refused while the agent can still act on it.
+        if (workspaceStrategy.type === "worktree") {
+          yield* threadLaunch
+            .checkWorktreeBase({ projectId, workspaceStrategy })
+            .pipe(
+              Effect.mapError((error) =>
+                failure(
+                  "invalid_request",
+                  `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
+                    workspaceStrategy.startFromOrigin === true
+                      ? "; the project has no origin remote to fetch it from."
+                      : ", or set startFromOrigin:true if it exists only on origin."
+                  }`,
+                ),
+              ),
+            );
+        }
         const providers = yield* loadProviders;
         const target = yield* resolveTargetRechecking({
           // A client has no model of its own, so it inherits the project's default.
