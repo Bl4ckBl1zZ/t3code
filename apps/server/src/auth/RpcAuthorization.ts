@@ -4,6 +4,8 @@ import {
   authScopeRequiredResponse,
   ServerSettingsPatch,
   requiredScopesForServerSettingsPatch,
+  requiredScopesForProjectMutation,
+  ProjectMutation,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
   AuthEnvironmentMaintainScope,
@@ -215,6 +217,8 @@ const requiredScopesForSettingsUpdate = (payload: unknown) =>
 
 const decodeAssetCreateUrl = Schema.decodeUnknownSync(AssetCreateUrlInput);
 
+const decodeProjectMutation = Schema.decodeUnknownSync(ProjectMutation);
+
 const requiredScopesForRpcCall = (
   method: string,
   payload: unknown,
@@ -236,6 +240,9 @@ const requiredScopesForRpcCall = (
     ];
   }
   if (method === WS_METHODS.serverUpdateSettings) return requiredScopesForSettingsUpdate(payload);
+  if (method === WS_METHODS.projectsMutate) {
+    return requiredScopesForProjectMutation(decodeProjectMutation(payload));
+  }
   const guarded = clientRpcRequiredScopes(method, payload);
   if (guarded.length > 0) return guarded;
   return [requiredScopeForRpcMethod(method)];
