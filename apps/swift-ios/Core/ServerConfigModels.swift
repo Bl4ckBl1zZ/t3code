@@ -887,6 +887,9 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     /// The folder behind this environment's Scratch project, for threads with
     /// no project. Present only on servers that answer `projects.ensureScratch`.
     public var scratchWorkspaceRoot: String? = nil
+    /// The folder holding projects started from just a name. Present only on
+    /// servers that answer `projects.createNew`.
+    public var newProjectsRoot: String? = nil
     /// LAN and tailnet addresses the server listens on, learned as extra
     /// routes to it. Absent on servers that predate it; elements this build
     /// cannot decode are dropped.
@@ -919,6 +922,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
         case threadFind, threadFindProgressive
         case scratchWorkspaceRoot
+        case newProjectsRoot
         case directEndpoints
     }
 
@@ -947,6 +951,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         threadFind = try container.decodeIfPresent(Bool.self, forKey: .threadFind)
         threadFindProgressive = try container.decodeIfPresent(Bool.self, forKey: .threadFindProgressive)
         scratchWorkspaceRoot = try container.decodeIfPresent(String.self, forKey: .scratchWorkspaceRoot)
+        newProjectsRoot = try container.decodeIfPresent(String.self, forKey: .newProjectsRoot)
         // Forward-compatible like the contract: an endpoint kind this build
         // does not know is dropped, and a malformed list never fails the config.
         directEndpoints = (try? container.decodeIfPresent(
@@ -974,6 +979,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         try container.encodeIfPresent(threadFind, forKey: .threadFind)
         try container.encodeIfPresent(threadFindProgressive, forKey: .threadFindProgressive)
         try container.encodeIfPresent(scratchWorkspaceRoot, forKey: .scratchWorkspaceRoot)
+        try container.encodeIfPresent(newProjectsRoot, forKey: .newProjectsRoot)
         try container.encodeIfPresent(directEndpoints, forKey: .directEndpoints)
     }
 }

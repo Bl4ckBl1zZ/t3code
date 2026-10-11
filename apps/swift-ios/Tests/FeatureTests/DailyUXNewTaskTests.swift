@@ -136,6 +136,34 @@ struct DailyUXNewTaskTests {
         )
     }
 
+    /// Ports the `resolveNewThreadEnvMode` cases in projectSettings.test.ts.
+    @Test
+    func aNewProjectStartsItsFirstThreadInItsFolder() {
+        func mode(
+            _ environmentDefault: FeatureWorkspaceMode = .worktree,
+            path: String? = "/home/me/.t3/projects/pinball",
+            root: String? = "/home/me/.t3/projects",
+            hasThreads: Bool = false
+        ) -> FeatureWorkspaceMode {
+            NewTaskWorkspaceDefaults.newThreadMode(
+                environmentDefault: environmentDefault,
+                projectPath: path,
+                newProjectsRoot: root,
+                projectHasThreads: hasThreads
+            )
+        }
+        #expect(mode() == .local)
+        #expect(mode(root: "/home/me/.t3/projects/") == .local)
+        #expect(mode(path: "C:\\Users\\me\\.t3\\projects\\pinball", root: "C:\\Users\\me\\.t3\\projects") == .local)
+        // Once it has a thread, or anywhere outside that folder, the default stands.
+        #expect(mode(hasThreads: true) == .worktree)
+        #expect(mode(path: "/code/app") == .worktree)
+        #expect(mode(path: "/home/me/.t3/projects/pinball/nested") == .worktree)
+        #expect(mode(path: "/home/me/.t3/projects") == .worktree)
+        #expect(mode(root: nil) == .worktree)
+        #expect(mode(.local) == .local)
+    }
+
     @Test
     func mobileModeChoicesOnlyExposeSupportedValues() {
         #expect(FeatureRuntimeMode.allCases == [.fullAccess])

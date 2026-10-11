@@ -1564,6 +1564,9 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     /// The machine's merge method ("merge", "squash" or "rebase"); nil reuses
     /// the method last chosen on each device.
     public var pullRequestMergeMethod: String? = nil
+    /// The server's folder for projects started from just a name; see
+    /// ``NewTaskWorkspaceDefaults/newThreadMode(environmentDefault:projectPath:newProjectsRoot:projectHasThreads:)``.
+    public var newProjectsRoot: String? = nil
 
     mutating func setPullRequestMergeMethod(_ method: String?, supported: Bool) {
         supportsPullRequestMergeMethod = supported ? true : nil

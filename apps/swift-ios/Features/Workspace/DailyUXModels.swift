@@ -259,6 +259,23 @@ enum DailyUXCreationContext {
         return snapshot.preferencesByEnvironment?[environmentID]
             ?? FeatureEnvironmentPreferences()
     }
+
+    /// The workspace mode a new task in `project` starts in: the server's
+    /// default, except in a just-created project that has no thread yet.
+    static func defaultWorkspaceMode(
+        for project: FeatureProject?,
+        in snapshot: FeatureSnapshot
+    ) -> FeatureWorkspaceMode {
+        let preferences = environmentPreferences(for: project, in: snapshot)
+        return NewTaskWorkspaceDefaults.newThreadMode(
+            environmentDefault: preferences.defaultWorkspaceMode,
+            projectPath: project?.path,
+            newProjectsRoot: preferences.newProjectsRoot,
+            projectHasThreads: project.map { project in
+                snapshot.threads.contains { $0.projectID == project.id }
+            } ?? false
+        )
+    }
 }
 
 /// The Working section beta: busy threads fold into a Working shelf on Home

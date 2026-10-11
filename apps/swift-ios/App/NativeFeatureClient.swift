@@ -5799,6 +5799,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 enableAgentBrowserAccess: serverSettings.enableAgentBrowserAccess,
                 claudeAutoCompactWindow: serverSettings.claudeAutoCompactWindow
             )
+            mapped.newProjectsRoot = serverConfigsByEnvironmentID[environment.id]?.newProjectsRoot
             mapped.setPullRequestMergeMethod(serverSettings.pullRequestMergeMethod,
                 supported: serverConfigsByEnvironmentID[environment.id]?.environment?.capabilities.pullRequestMergeMethodDefaults == true)
             preferences[environment.id] = mapped

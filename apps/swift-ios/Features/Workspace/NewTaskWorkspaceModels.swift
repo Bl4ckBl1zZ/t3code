@@ -54,6 +54,35 @@ public struct FeatureWorkspaceBranch: Identifiable, Sendable, Equatable, Hashabl
 }
 
 enum NewTaskWorkspaceDefaults {
+    /// Ported from `resolveNewThreadEnvMode` in packages/shared/src/projectSettings.ts.
+    /// A project the server made from just a name (a folder directly inside
+    /// `newProjectsRoot`) has only its first commit, so until it has a thread
+    /// a new thread works in the project checkout even when the server's
+    /// default is a new worktree.
+    static func newThreadMode(
+        environmentDefault: FeatureWorkspaceMode,
+        projectPath: String?,
+        newProjectsRoot: String?,
+        projectHasThreads: Bool
+    ) -> FeatureWorkspaceMode {
+        guard environmentDefault == .worktree, !projectHasThreads,
+              let projectPath, let newProjectsRoot else { return environmentDefault }
+        let root = normalizedPath(newProjectsRoot)
+        let folder = normalizedPath(projectPath)
+        let separator: Character = root.contains("\\") ? "\\" : "/"
+        let prefix = root.last == separator ? root : root + String(separator)
+        guard folder.hasPrefix(prefix), folder.count > prefix.count,
+              !folder.dropFirst(prefix.count).contains(separator) else { return environmentDefault }
+        return .local
+    }
+
+    /// Trailing separators dropped, so `/a/b/` and `/a/b` compare equal.
+    private static func normalizedPath(_ path: String) -> String {
+        var trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.count > 1, trimmed.last == "/" || trimmed.last == "\\" { trimmed.removeLast() }
+        return trimmed
+    }
+
     static func localBranch(in branches: [FeatureWorkspaceBranch]) -> FeatureWorkspaceBranch? {
         branches.first { $0.isCurrent }
             ?? branches.first { $0.isDefault && !$0.isRemote }
