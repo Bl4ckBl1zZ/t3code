@@ -3305,7 +3305,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let prependedMessages = !threadChanged
                 && newIDs.count > previousIDs.count
                 && Array(newIDs.suffix(previousIDs.count)) == previousIDs
-            let shouldFollowBottom = isInitialLoad || (wasNearBottom && !foldChoiceChanged)
+            // A fold toggled at the end keeps the end in view while rows
+            // re-measure. Anywhere else, the visible rows hold their place.
+            let shouldFollowBottom = isInitialLoad || wasNearBottom
             // The coordinator is the one place that knows a new row landed
             // while the reader was elsewhere; the jump button shows it.
             if threadChanged {
@@ -3377,7 +3379,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     if shouldFollowBottom {
                         self.scrollToBottom(
                             collectionView,
-                            animated: !isInitialLoad && lastIDChanged
+                            animated: !isInitialLoad && lastIDChanged && !foldChoiceChanged
                         )
                     } else if let prependAnchor {
                         self.restore(prependAnchor, in: collectionView, dataSource: dataSource)
