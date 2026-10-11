@@ -1023,6 +1023,8 @@ public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifia
     /// whose root node their own node descends from, and a superseded attempt
     /// hides the interrupt result recorded on this node.
     public var rootNodeId: String? = nil
+    /// Stamped when the attempt ends; a steer stamps it as it is dispatched.
+    public var completedAt: OrchestrationV2Timestamp? = nil
 }
 
 public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {

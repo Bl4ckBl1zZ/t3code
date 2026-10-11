@@ -208,6 +208,36 @@ final class ThreadTimelineStructureTests: XCTestCase {
         XCTAssertEqual(expanded.byAnchorID["reply-1"]?.isExpanded, true)
     }
 
+    /// A reply that finished before the steer was whole, so its attempt is not
+    /// folded as partial output. One the steer closed, or one followed by more
+    /// work, was cut off.
+    func testAReplyFinishedBeforeTheSteerIsCompleteAndItsAttemptStaysOpen() {
+        let steeredAt = Date(timeIntervalSince1970: 1_000)
+        let whole = ThreadTimelineAttempt(id: "att-1", runID: "run-1", status: "superseded", completedAt: steeredAt)
+        let cutOff = ThreadTimelineAttempt(id: "att-2", runID: "run-2", status: "superseded", completedAt: steeredAt)
+        let trailing = ThreadTimelineAttempt(id: "att-3", runID: "run-3", status: "superseded", completedAt: steeredAt)
+        let outputs: [ThreadAttemptFolding.Output] = [
+            .init(entryID: "work-1", attempt: whole, replyCompletedAt: nil),
+            .init(entryID: "reply-1", attempt: whole, replyCompletedAt: steeredAt.addingTimeInterval(-5)),
+            // Closed by the steer: completed after the attempt was replaced.
+            .init(entryID: "reply-2", attempt: cutOff, replyCompletedAt: steeredAt.addingTimeInterval(1)),
+            // A finished reply followed by more work: the attempt was still going.
+            .init(entryID: "reply-3", attempt: trailing, replyCompletedAt: steeredAt.addingTimeInterval(-5)),
+            .init(entryID: "work-3", attempt: trailing, replyCompletedAt: nil),
+        ]
+        XCTAssertEqual(ThreadAttemptFolding.completeReplyEntryIDs(outputs: outputs), ["reply-1"])
+
+        let candidates: [ThreadAttemptFolding.Candidate] = [
+            .init(entryID: "work-1", attempt: whole),
+            .init(entryID: "reply-1", attempt: whole),
+            .init(entryID: "reply-2", attempt: cutOff),
+        ]
+        let folds = ThreadAttemptFolding.folds(
+            candidates: candidates, failedRunIDs: [], completeAttemptIDs: ["att-1"], expandedKeys: []
+        )
+        XCTAssertEqual(Set(folds.hiddenIDs.keys), ["reply-2"])
+    }
+
     /// The fold works on the real feed too, and still applies when the reader
     /// asked for every turn's activity to stay open.
     func testTheFeedFoldsASupersededAttemptEvenWhenActivityIsAlwaysExpanded() {
