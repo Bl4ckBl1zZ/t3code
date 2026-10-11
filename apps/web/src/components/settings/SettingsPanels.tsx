@@ -3591,7 +3591,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps = {}) {
     resolveSelectedProviderEnvironmentId(options, null, primary?.environmentId ?? null);
   const selected = options.find((environment) => environment.environmentId === environmentId);
   return (
-    <SettingsPageContainer width="wide">
+    <SettingsPageContainer>
       <div className="flex flex-wrap items-center gap-2" aria-label="Provider settings environment">
         {options.map((environment) => (
           <Button
