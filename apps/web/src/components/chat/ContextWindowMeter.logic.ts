@@ -14,7 +14,8 @@ import {
 import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
 /** Claude's own resume prompt thresholds: a session idle this long and this large. */
-const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
+// Used when the provider did not report its cache TTL: Claude's 1h cache plus slack.
+const CLAUDE_RESUME_COMPACTION_FALLBACK_MS = 70 * 60_000;
 const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
 
 /**
@@ -71,6 +72,7 @@ export function shouldOfferResumeCompaction(input: {
   readonly provider: string | null | undefined;
   readonly usedTokens: number | null | undefined;
   readonly updatedAt: string | null | undefined;
+  readonly promptCacheTtlMs?: number | undefined;
   readonly now: string;
 }): boolean {
   if (
@@ -85,7 +87,7 @@ export function shouldOfferResumeCompaction(input: {
   return (
     Number.isFinite(updatedAt) &&
     Number.isFinite(now) &&
-    now - updatedAt >= CLAUDE_RESUME_COMPACTION_MINUTES * 60_000
+    now - updatedAt >= (input.promptCacheTtlMs ?? CLAUDE_RESUME_COMPACTION_FALLBACK_MS)
   );
 }
 

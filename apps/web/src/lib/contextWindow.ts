@@ -1,5 +1,6 @@
 import type {
   OrchestrationV2ProviderThread,
+  OrchestrationV2ProviderTurn,
   OrchestrationV2ProviderTurnTokenUsage,
   OrchestrationV2TurnItem,
   ThreadTokenUsageSnapshot,
@@ -50,6 +51,22 @@ export function formatProviderDisplayName(provider: string | null | undefined): 
  * then the provider thread's standing usage, then the last compaction item --
  * which only ever says how full the window was at that one moment.
  */
+/** Newest usage report across a thread's provider turns. Snapshots order turns
+    by provider thread, not time, so pick by timestamp. */
+export function latestProviderTurnTokenUsage(
+  turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "tokenUsage">>,
+): OrchestrationV2ProviderTurnTokenUsage | null {
+  let latest: OrchestrationV2ProviderTurnTokenUsage | null = null;
+  for (const { tokenUsage } of turns) {
+    if (tokenUsage === undefined) continue;
+    // Ties go to the later entry, since live upserts append.
+    if (latest === null || Date.parse(tokenUsage.updatedAt) >= Date.parse(latest.updatedAt)) {
+      latest = tokenUsage;
+    }
+  }
+  return latest;
+}
+
 export function deriveLatestContextWindowSnapshot(
   entries: ReadonlyArray<{
     readonly item: OrchestrationV2TurnItem;

@@ -9054,6 +9054,31 @@ describe("ClaudeAdapterV2 context usage", () => {
     assert.equal(usage.maxTokens, 200_000);
     assert.equal(usage.usedTokens, 110);
   });
+
+  it("reports the prompt cache TTL the response wrote", () => {
+    const ttlFor = (cache_creation: {
+      ephemeral_1h_input_tokens: number;
+      ephemeral_5m_input_tokens: number;
+    }) =>
+      claudeProviderTurnTokenUsage(
+        { input_tokens: 1, output_tokens: 1, cache_creation },
+        CLAUDE_TEST_MODEL_SELECTION,
+        "2026-08-29T00:00:00.000Z",
+      ).promptCacheTtlMs;
+
+    assert.strictEqual(
+      ttlFor({ ephemeral_1h_input_tokens: 2_000, ephemeral_5m_input_tokens: 300 }),
+      60 * 60_000,
+    );
+    assert.strictEqual(
+      ttlFor({ ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 300 }),
+      5 * 60_000,
+    );
+    assert.strictEqual(
+      ttlFor({ ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 }),
+      undefined,
+    );
+  });
 });
 
 describe("ClaudeAdapterV2 viewed images", () => {
