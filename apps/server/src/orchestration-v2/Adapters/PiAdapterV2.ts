@@ -1113,8 +1113,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           status,
           completedAt: completed ? emittedAt : null,
         } as const;
-        if (toolName === "bash") {
-          const exitCode = recordNumber(recordField(resultRecord, "details"), "exitCode");
+        if (toolName === "bash" || toolName === "powershell") {
+          const exitCode =
+            recordNumber(recordField(resultRecord, "structuredContent"), "exit_code") ??
+            recordNumber(recordField(resultRecord, "details"), "exitCode");
           yield* emit({
             type: "turn_item.updated",
             driver: PI_PROVIDER,
