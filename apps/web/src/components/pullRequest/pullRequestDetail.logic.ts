@@ -674,6 +674,29 @@ export function handoffReviewComments(
   ];
 }
 
+/** Each host's change request route, matched only when a number follows it. */
+const CHANGE_REQUEST_ROUTES: ReadonlyArray<readonly [route: string, label: string]> = [
+  ["/-/merge_requests/", "GitLab"],
+  ["/pullrequest/", "Azure DevOps"],
+  ["/pull-requests/", "Bitbucket"],
+  ["/pull/", "GitHub"],
+];
+
+/** The name of the host a change request URL is on, for copy about that change request. */
+export function changeRequestHostLabel(url: string): string {
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return "the host";
+  }
+  for (const [route, label] of CHANGE_REQUEST_ROUTES) {
+    const at = path.indexOf(route);
+    if (at > 0 && /^\d+(?:\/|$)/u.test(path.slice(at + route.length))) return label;
+  }
+  return "the host";
+}
+
 /**
  * The task for handing a pull request's review findings to a fresh thread. Everything derived
  * from the pull request is explicitly marked untrusted: review bodies and check output are
@@ -762,7 +785,9 @@ export function buildFixFindingsHandoff(input: {
         ? ["Failing checks:", ...includedChecks.map((check) => `> ${check}`)]
         : []),
       ...(input.commentsTruncated
-        ? ["The conversation was truncated; more review comments may exist on GitHub."]
+        ? [
+            `The conversation was truncated; more review comments may exist on ${changeRequestHostLabel(input.url)}.`,
+          ]
         : []),
       ...(omitted > 0 ? [`${omitted} further findings were omitted.`] : []),
       ...(includedThreads.length === 0 &&

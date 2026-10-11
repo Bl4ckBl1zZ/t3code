@@ -13,6 +13,7 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
+  changeRequestHostLabel,
   groupPullRequestTimelineConversations,
   handoffPrompt,
   handoffReviewComments,
@@ -637,6 +638,23 @@ describe("pull request timeline", () => {
       ["event", "1baf7bdcafe"],
       ["event", "created"],
     ]);
+  });
+});
+
+describe("changeRequestHostLabel", () => {
+  it("names the host a change request URL is on, and falls back to the host", () => {
+    expect(changeRequestHostLabel("https://github.com/acme/web/pull/42")).toBe("GitHub");
+    expect(changeRequestHostLabel("https://gitlab.example.com/acme/web/-/merge_requests/7")).toBe(
+      "GitLab",
+    );
+    expect(changeRequestHostLabel("https://dev.azure.com/acme/web/_git/web/pullrequest/9")).toBe(
+      "Azure DevOps",
+    );
+    expect(changeRequestHostLabel("https://bitbucket.org/acme/web/pull-requests/3")).toBe(
+      "Bitbucket",
+    );
+    expect(changeRequestHostLabel("https://example.com/acme/web/pull/latest")).toBe("the host");
+    expect(changeRequestHostLabel("not a url")).toBe("the host");
   });
 });
 
