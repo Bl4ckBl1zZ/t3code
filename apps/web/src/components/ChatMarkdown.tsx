@@ -2014,6 +2014,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         : null;
       if (!fileLinkMeta) {
         const faviconHost = resolveExternalWebLinkHost(href);
+        const hasText = hastHasText(node);
         const isSameDocumentLink = href?.startsWith("#") ?? false;
         const unresolvedPathHref = faviconHost || isSameDocumentLink ? null : pathLikeHref(href);
         const onClick = props.onClick;
@@ -2021,6 +2022,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         const link = (
           <a
             {...props}
+            data-markdown-image-link={!hasText || undefined}
             href={href}
             target={isSameDocumentLink ? undefined : "_blank"}
             rel={isSameDocumentLink ? undefined : "noopener noreferrer"}
