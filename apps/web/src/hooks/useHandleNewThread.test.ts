@@ -72,7 +72,8 @@ vi.mock("@t3tools/client-runtime/environment", () => ({
 }));
 vi.mock("@t3tools/contracts", () => ({ DEFAULT_RUNTIME_MODE: "default" }));
 vi.mock("@t3tools/shared/threadEnvMode", () => ({
-  resolveDefaultThreadEnvMode: (input: {
+  // The new-project rule has its own tests in threadEnvMode.test.ts.
+  resolveNewThreadEnvMode: (input: {
     readonly projectFile: "local" | "worktree" | null;
     readonly globalDefault: "local" | "worktree";
   }) => input.projectFile ?? input.globalDefault,
@@ -123,6 +124,7 @@ vi.mock("../state/entities", () => ({
     },
   ],
   readThreadShell: () => null,
+  readThreadShells: () => [],
   useProjects: () => [],
   useThread: () => null,
 }));

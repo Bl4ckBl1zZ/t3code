@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isDefaultThreadEnvModeSettled, resolveDefaultThreadEnvMode } from "./threadEnvMode.ts";
+import {
+  isDefaultThreadEnvModeSettled,
+  resolveDefaultThreadEnvMode,
+  resolveNewThreadEnvMode,
+} from "./threadEnvMode.ts";
 
 describe("resolveDefaultThreadEnvMode", () => {
   it("prefers the project setting over t3.json over the global default", () => {
@@ -61,5 +65,46 @@ describe("isDefaultThreadEnvModeSettled", () => {
         projectFilePending: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveNewThreadEnvMode", () => {
+  const newProject = {
+    projectSetting: null,
+    projectFile: null,
+    globalDefault: "worktree" as const,
+    workspaceRoot: "/data/projects/pinball-stats",
+    newProjectsRoot: "/data/projects/",
+    projectHasThreads: false,
+  };
+
+  it("starts a new project's first thread in its checkout", () => {
+    expect(resolveNewThreadEnvMode(newProject)).toBe("local");
+    expect(
+      resolveNewThreadEnvMode({
+        ...newProject,
+        workspaceRoot: "C:\\Data\\Projects\\Pinball-Stats",
+        newProjectsRoot: "c:/data/projects",
+      }),
+    ).toBe("local");
+  });
+
+  it("keeps the configured default once the project has a thread or is not a new project", () => {
+    expect(resolveNewThreadEnvMode({ ...newProject, projectHasThreads: true })).toBe("worktree");
+    expect(resolveNewThreadEnvMode({ ...newProject, workspaceRoot: "/data/projects" })).toBe(
+      "worktree",
+    );
+    expect(
+      resolveNewThreadEnvMode({ ...newProject, workspaceRoot: "/data/projects/a/nested" }),
+    ).toBe("worktree");
+    expect(resolveNewThreadEnvMode({ ...newProject, workspaceRoot: "/data/projects-old/a" })).toBe(
+      "worktree",
+    );
+    expect(resolveNewThreadEnvMode({ ...newProject, newProjectsRoot: undefined })).toBe("worktree");
+  });
+
+  it("lets a project setting or a t3.json keep worktree mode", () => {
+    expect(resolveNewThreadEnvMode({ ...newProject, projectSetting: "worktree" })).toBe("worktree");
+    expect(resolveNewThreadEnvMode({ ...newProject, projectFile: "worktree" })).toBe("worktree");
   });
 });

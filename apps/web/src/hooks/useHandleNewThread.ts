@@ -28,8 +28,14 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
-import { readProjects, readThreadShell, useProjects, useThreadShell } from "../state/entities";
+import { resolveNewThreadEnvMode } from "@t3tools/shared/threadEnvMode";
+import {
+  readProjects,
+  readThreadShell,
+  readThreadShells,
+  useProjects,
+  useThreadShell,
+} from "../state/entities";
 import {
   hasExplicitComposerModelSelection,
   resolveNewThreadModelSelectionOverride,
@@ -217,7 +223,7 @@ export function useNewThreadHandler() {
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
         const consultProjectFile = project !== undefined && project.defaultThreadEnvMode == null;
-        return resolveDefaultThreadEnvMode({
+        return resolveNewThreadEnvMode({
           projectSetting: project?.defaultThreadEnvMode,
           projectFile: consultProjectFile
             ? await readT3ProjectFileDefaultThreadEnvMode(
@@ -226,6 +232,13 @@ export function useNewThreadHandler() {
               )
             : null,
           globalDefault: targetSettings.defaultThreadEnvMode,
+          workspaceRoot: project?.workspaceRoot ?? null,
+          newProjectsRoot: targetConfig?.newProjectsRoot,
+          projectHasThreads: readThreadShells().some(
+            (thread) =>
+              thread.environmentId === projectRef.environmentId &&
+              thread.projectId === projectRef.projectId,
+          ),
         });
       };
       const logicalProjectKey = project

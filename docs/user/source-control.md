@@ -25,7 +25,7 @@ T3 Code works with the platforms your team already uses:
 **Start from a name**
 
 - Open the Command Palette (`Cmd/Ctrl + K`) → **New project**, or **Add Project** → **New project**, and type a name
-- T3 Code makes a Git repository in `~/.t3/projects` (the `projects` folder of your T3 data directory) with a README, an icon, and a first commit, then opens a new thread in it. The folder is named after the project, like `pinball-stats` for "Pinball Stats"
+- T3 Code makes a Git repository in `~/.t3/projects` (the `projects` folder of your T3 data directory) with a README, an icon, and a first commit, then opens a new thread in it. Until the project has a thread, new threads work in its folder, even when your default is a new worktree. The folder is named after the project, like `pinball-stats` for "Pinball Stats"
 - Turn on **Create private repository** to also publish it. It goes to GitHub or GitLab, whichever is signed in on that machine; when both are, pick the host beside the toggle. If Git has no name or email on that machine, the project is created without the first commit
 
 **Clone repositories directly**
