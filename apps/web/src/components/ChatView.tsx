@@ -1685,9 +1685,6 @@ function ChatViewContent(props: ChatViewProps) {
   // Rollbacks this view dispatched. The server records one that failed after
   // every retry on the thread; only those this view asked for become an error.
   const dispatchedRollbackRequestIdsRef = useRef(new Set<string>());
-  const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
-    null,
-  );
   const [respondingRequestIds, setRespondingRequestIds] = useState<RuntimeRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     RuntimeRequestId[]
@@ -2169,8 +2166,7 @@ function ChatViewContent(props: ChatViewProps) {
     renderedRightPanelSurface?.kind === "file" ? renderedRightPanelSurface : null;
 
   const canMaximizeRightPanel = rightPanelOpen && !shouldUsePlanSidebarSheet;
-  const rightPanelMaximized =
-    canMaximizeRightPanel && maximizedRightPanelThreadKey === routeThreadKey;
+  const rightPanelMaximized = canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
   // The details card reports where it fits: inline in the chat canvas' margin, or a popover.
   const [threadPanelPresentation, setThreadPanelPresentation] =
@@ -4647,7 +4643,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, dismissPlanSidebarForCurrentTurn, planSidebarOpen]);
   const closePlanSidebar = useCallback(() => {
     if (!activeThreadRef) return;
-    setMaximizedRightPanelThreadKey(null);
+    useRightPanelStore.getState().setMaximized(activeThreadRef, false);
     useRightPanelStore.getState().close(activeThreadRef);
     dismissPlanSidebarForCurrentTurn();
   }, [activeThreadRef, dismissPlanSidebarForCurrentTurn]);
@@ -4844,7 +4840,7 @@ function ChatViewContent(props: ChatViewProps) {
           .getState()
           .open(activeThreadRef, activeRightPanelSurface.resourceId);
       }
-      setMaximizedRightPanelThreadKey(null);
+      useRightPanelStore.getState().setMaximized(activeThreadRef, false);
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeRightPanelSurface, activeThreadRef]);
@@ -5024,15 +5020,13 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     if (!canMaximizeRightPanel) return;
     if (useRightPanelStore.getState().consumeMaximizeRequest(routeThreadRef)) {
-      setMaximizedRightPanelThreadKey(routeThreadKey);
+      useRightPanelStore.getState().setMaximized(routeThreadRef, true);
     }
-  }, [canMaximizeRightPanel, routeThreadKey, routeThreadRef]);
+  }, [canMaximizeRightPanel, routeThreadRef]);
   const toggleRightPanelMaximized = useCallback(() => {
-    if (!canMaximizeRightPanel) return;
-    setMaximizedRightPanelThreadKey((threadKey) =>
-      threadKey === routeThreadKey ? null : routeThreadKey,
-    );
-  }, [canMaximizeRightPanel, routeThreadKey]);
+    if (!canMaximizeRightPanel || !activeThreadRef) return;
+    useRightPanelStore.getState().setMaximized(activeThreadRef, !rightPanelMaximized);
+  }, [activeThreadRef, canMaximizeRightPanel, rightPanelMaximized]);
   // Read when a right-panel shortcut fires, not on render, so focus is current.
   const getRightPanelShortcutContext = useCallback(
     () => ({
