@@ -197,8 +197,9 @@ If both kinds are set, the access token wins. Saved credentials always win over 
 ## Finding a thread by its linked pull request
 
 On web and desktop, sidebar search and the command palette match the linked PR number
-(such as **#287**), repository plus number, or URL. This searches links already attached to
-threads; it does not query the source-control host.
+(such as **#287**), repository plus number, or URL, and the same for the PR open on the thread's
+branch. A result found through a PR shows its number, colored by its state. This searches PRs
+already known to the thread; it does not query the source-control host.
 
 Remote **Open in editor** also supports Zed and JetBrains IDEs over SSH when the environment
 advertises an SSH target and the editor is installed on the client machine. JetBrains IDEs open

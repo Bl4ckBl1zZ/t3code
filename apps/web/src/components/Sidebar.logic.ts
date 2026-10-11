@@ -1089,6 +1089,22 @@ const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
  * by `threadSearchMatchKey`). Keeping the input order means lifecycle ordering
  * (active, snoozed, settled) remains stable while the user narrows the list.
  */
+/**
+ * Whether a PR's search terms contain every whitespace-separated token of the
+ * query. Search results use this to pick the PR number to show, so it has to
+ * accept the multi-token queries the command palette matches on.
+ */
+export function pullRequestMatchesSearchQuery(
+  pullRequest: Parameters<typeof threadPullRequestSearchTerms>[0],
+  query: string,
+): boolean {
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+  const normalizedQuery = normalize(query);
+  if (normalizedQuery.length === 0) return false;
+  const haystack = normalize(threadPullRequestSearchTerms(pullRequest).join(" "));
+  return normalizedQuery.split(" ").every((token) => haystack.includes(token));
+}
+
 export function searchSidebarThreads<
   T extends {
     readonly environmentId: EnvironmentId;

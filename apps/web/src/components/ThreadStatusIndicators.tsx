@@ -1,5 +1,8 @@
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
-import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequestChains";
+import {
+  resolveThreadCurrentPullRequestLink,
+  visibleThreadPullRequests,
+} from "@t3tools/shared/threadPullRequestChains";
 import { ConnectedEnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import {
   scopeProjectRef,
@@ -26,11 +29,13 @@ import { vcsEnvironment } from "../state/vcs";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
 import {
+  pullRequestMatchesSearchQuery,
   resolveThreadLastVisitedAt,
   resolveThreadStatusPill,
   type ThreadStatusPill,
 } from "./Sidebar.logic";
 import type { SidebarThreadSummary } from "../types";
+import { cn } from "../lib/utils";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -695,4 +700,55 @@ export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSumma
       ) : null}
     </span>
   );
+}
+
+/**
+ * The number of the PR a search query matched, shown on a thread search result so a hit found
+ * through its PR says which one. Linked PRs read their cached snapshot; the legacy link and the
+ * branch PR read their detail.
+ */
+export function ThreadSearchPullRequestNumber({
+  thread,
+  query,
+  settled = false,
+}: {
+  thread: SidebarThreadSummary;
+  query: string;
+  settled?: boolean;
+}) {
+  const matchedLink = visibleThreadPullRequests(thread.pullRequests ?? []).find((pr) =>
+    pullRequestMatchesSearchQuery({ pullRequests: [pr] }, query),
+  );
+  const fallbackCandidates =
+    (thread.pullRequests ?? []).length === 0
+      ? [thread.linkedPullRequest, thread.branchPullRequest]
+      : [thread.branchPullRequest];
+  const legacyReference = matchedLink
+    ? undefined
+    : fallbackCandidates.find(
+        (pr) => pr != null && pullRequestMatchesSearchQuery({ linkedPullRequest: pr }, query),
+      );
+  const legacyStatus = useLinkedThreadPullRequest(
+    legacyReference ? thread.environmentId : null,
+    legacyReference,
+  );
+  const reference = matchedLink ?? legacyReference;
+  const linked = matchedLink ? linkedPullRequestSnapshotStatus(matchedLink) : legacyStatus;
+  const status = prStatusIndicator(linked?.pr ?? null, linked?.sourceControlProvider);
+  return reference ? (
+    <span
+      className={cn(
+        "shrink-0 text-xs tabular-nums",
+        settled
+          ? cn(
+              "text-secondary-label transition-colors",
+              linked?.pr && settledPrHoverColorClass(linked.pr.state),
+            )
+          : (status?.colorClass ?? "text-secondary-label"),
+      )}
+      aria-label={status?.tooltip ?? `Pull request #${reference.number}`}
+    >
+      #{reference.number}
+    </span>
+  ) : null;
 }

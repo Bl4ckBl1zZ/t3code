@@ -238,6 +238,7 @@ import {
   type ThreadChangeRequestSnapshot,
   type TerminalStatusIndicator,
   useLinkedThreadPullRequest,
+  ThreadSearchPullRequestNumber,
 } from "./ThreadStatusIndicators";
 import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { resolveAutoDeleteAtMs } from "@t3tools/shared/threadAutoDelete";
@@ -2292,6 +2293,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               tabIndex={-1}
               aria-selected={props.isHighlighted}
               aria-current={accessibility.current}
+              aria-describedby={`${props.resultId}-pr`}
               aria-label={accessibility.label}
               onMouseMove={props.onHighlight}
               onClick={props.onSelect}
@@ -2316,6 +2318,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-2.5">
               <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+              <span id={`${props.resultId}-pr`} className="contents">
+                <ThreadSearchPullRequestNumber thread={thread} query={props.searchQuery} />
+              </span>
               <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
                 {threadTimeLabel(thread)}
               </span>
