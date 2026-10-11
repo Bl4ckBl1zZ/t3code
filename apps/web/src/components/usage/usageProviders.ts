@@ -1,6 +1,6 @@
 import { ProviderDriverKind, type UsageProviderKind } from "@t3tools/contracts";
 
-import { ClaudeAI, GrokIcon, type Icon, OpenAI } from "../Icons";
+import { ClaudeAI, GrokIcon, type Icon, OpenAI, PiAgentIcon } from "../Icons";
 
 type UsageProviderPresentation = {
   readonly label: string;
@@ -34,6 +34,12 @@ export const PROVIDER_PRESENTATION = {
     color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
     mark: GrokIcon,
     driverKind: ProviderDriverKind.make("grok"),
+  },
+  pi: {
+    label: "Pi",
+    color: "#4d9f8a",
+    mark: PiAgentIcon,
+    driverKind: ProviderDriverKind.make("pi"),
   },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 

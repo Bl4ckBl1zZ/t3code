@@ -241,10 +241,15 @@ export class UsageAggregator {
     return true;
   }
 
-  /** A mapped record buckets and prices as its target model. */
+  /**
+   * A mapped record buckets and prices as its target model. The target's own
+   * rate applies, so a provider-specific `rateModel` is dropped.
+   */
   #mapModel(record: UsageRecord): UsageRecord {
     const model = this.#options.modelAliases?.get(record.model);
-    return model === undefined ? record : { ...record, model };
+    if (model === undefined) return record;
+    const { rateModel: _rateModel, ...rest } = record;
+    return { ...rest, model };
   }
 
   /**

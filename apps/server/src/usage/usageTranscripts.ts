@@ -19,6 +19,11 @@ export interface UsageRecord {
   readonly provider: UsageProviderKind;
   readonly timestampMs: number;
   readonly model: string;
+  /**
+   * Rate-table key when the display model carries a prefix or tier the table
+   * does not know, such as Pi's `anthropic/claude-sonnet-4`. Defaults to `model`.
+   */
+  readonly rateModel?: string;
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
   readonly reportedCostUsd: number | null;
@@ -69,6 +74,8 @@ export function totalTokens(totals: UsageTokenTotals): number {
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
   if (provider === "claude") return line.includes('"usage"');
   if (provider === "grok") return line.includes('"turn_completed"');
+  // Pi's session header carries no usage but names the session for later lines.
+  if (provider === "pi") return line.includes('"usage"') || line.includes('"session"');
   return line.includes('"token_count"');
 }
 
@@ -520,6 +527,130 @@ export function parseGrokRecord(parsed: unknown): readonly UsageRecord[] {
     });
   }
   return results;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pi                                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** Pi names the session once, in the file's header line. */
+export interface PiScanState {
+  sessionId: string;
+}
+
+export function initialPiScanState(): PiScanState {
+  return { sessionId: "" };
+}
+
+function piObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function piName(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The usage-bearing source of one Pi session entry: assistant and tool-result
+ * messages, standalone `usage` entries (cache warming), compactions, and
+ * branch summaries. Other entries carry no billable usage.
+ */
+function piUsageSource(entry: Record<string, unknown>): {
+  readonly usage: Record<string, unknown>;
+  readonly provider?: string;
+  readonly model?: string;
+} | null {
+  const type = entry["type"];
+  if (type === "message") {
+    const message = piObject(entry["message"]);
+    const usage = piObject(message?.["usage"]);
+    if (message === null || usage === null) return null;
+    if (message["role"] === "toolResult") return { usage };
+    if (message["role"] !== "assistant") return null;
+    const provider = piName(message["provider"]);
+    const model = piName(message["model"]);
+    if (provider === undefined || model === undefined) return null;
+    const responseModel = message["responseModel"];
+    if (responseModel !== undefined && piName(responseModel) === undefined) return null;
+    return { usage, provider, model: piName(responseModel) ?? model };
+  }
+  const usage = piObject(entry["usage"]);
+  if (usage === null) return null;
+  if (type === "usage") {
+    const provider = piName(entry["provider"]);
+    const model = piName(entry["model"]);
+    return provider === undefined || model === undefined ? null : { usage, provider, model };
+  }
+  return type === "compaction" || type === "branch_summary" ? { usage } : null;
+}
+
+/** Parses one line of a Pi session file under `~/.pi/agent/sessions`. */
+export function parsePiLine(line: string, state: PiScanState): readonly UsageRecord[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  return parsePiRecord(parsed, state);
+}
+
+export function parsePiRecord(parsed: unknown, state: PiScanState): readonly UsageRecord[] {
+  const entry = piObject(parsed);
+  if (entry === null) return [];
+  const id = piName(entry["id"]);
+  if (id === undefined) return [];
+  if (entry["type"] === "session") {
+    state.sessionId = id;
+    return [];
+  }
+  const timestamp = entry["timestamp"];
+  if (typeof timestamp !== "string") return [];
+  const source = piUsageSource(entry);
+  if (source === null) return [];
+  const timestampMs = parseTimestampMs(timestamp);
+  if (timestampMs === null) return [];
+  const { usage } = source;
+  const cost = usage["cost"];
+  if (cost !== undefined && piObject(cost) === null) return [];
+  // Pi's auxiliary tool and summary records carry no model attribution. Match
+  // Pi's own breakdown rather than assigning them to the conversation model.
+  const rateModel = source.model;
+  const model =
+    source.provider === undefined ? "Tools/summaries" : `${source.provider}/${source.model}`;
+  const outputTokens = int(usage["output"]);
+  const totals: UsageTokenTotals = {
+    // Pi's input/cache counters are already disjoint.
+    uncachedInputTokens: int(usage["input"]),
+    cachedInputTokens: int(usage["cacheRead"]),
+    cacheCreationTokens: int(usage["cacheWrite"]),
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, int(usage["reasoning"])),
+  };
+  const total = piObject(cost)?.["total"];
+  // Pi defaults omitted catalog rates to zero. Let shared pricing estimate
+  // API-equivalent cost when the transcript has no positive cost estimate.
+  const reportedCostUsd =
+    typeof total === "number" && Number.isFinite(total) && total > 0 ? total : null;
+  if (totalTokens(totals) === 0 && reportedCostUsd === null) return [];
+  return [
+    {
+      provider: "pi",
+      timestampMs,
+      model,
+      ...(rateModel === undefined ? {} : { rateModel }),
+      sessionId: state.sessionId,
+      totals,
+      reportedCostUsd,
+      speed: "standard",
+      // Forks copy entries verbatim, including ID/timestamp. Entry IDs are only
+      // eight random hex digits, so retain timestamp/model to avoid collisions
+      // across unrelated sessions. Parent IDs may change when Pi branches.
+      dedupeKey: JSON.stringify(["pi", id, timestamp, model]),
+    },
+  ];
 }
 
 export { EMPTY_TOTALS };

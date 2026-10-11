@@ -17,7 +17,7 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
-import type { CodexScanState, UsageRecord, UsageSpeed } from "./usageTranscripts.ts";
+import type { CodexScanState, PiScanState, UsageRecord, UsageSpeed } from "./usageTranscripts.ts";
 
 // v2: Codex fork-copy suppression changed what a file parses to, so v1
 // entries would keep serving double-counted records forever.
@@ -79,6 +79,8 @@ type SerializedRecord = readonly [
   dedupeKey: string | null,
   reportedCostUsd: number | null,
   speed: number,
+  /** Optional trailing field keeps existing cache rows readable. */
+  rateModelIndex?: number | null,
 ];
 
 interface SerializedFile {
@@ -94,6 +96,8 @@ interface SerializedFile {
   readonly gh: number;
   /** Codex reducer state at `o`; `null` for stateless providers. */
   readonly cs: CodexScanState | null;
+  /** Pi session header state at `o`; absent for other providers. */
+  readonly ps?: PiScanState | null;
 }
 
 interface SerializedCache {
@@ -137,6 +141,9 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     record.dedupeKey,
     record.reportedCostUsd,
     SPEEDS.indexOf(record.speed),
+    record.rateModel === undefined
+      ? null
+      : intern(tables.models, tables.modelIndex, record.rateModel),
   ];
   return {
     s: entry.size,
@@ -148,6 +155,7 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     gl: entry.position.guardLength,
     gh: entry.position.guardHash,
     cs: entry.position.codexState,
+    ...(entry.position.piState ? { ps: entry.position.piState } : {}),
   };
 }
 
@@ -258,14 +266,17 @@ export function decodeScanCache(document: unknown): ScanCache {
         dedupeKey,
         reportedCostUsd,
         speedIndex,
+        rateModelIndex,
       ] = row as SerializedRecord;
       const speed = typeof speedIndex === "number" ? SPEEDS[speedIndex] : undefined;
 
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
+      const rateModel = typeof rateModelIndex === "number" ? models[rateModelIndex] : undefined;
       if (
         typeof timestampMs !== "number" ||
         !Number.isFinite(timestampMs) ||
         model === undefined ||
+        (rateModelIndex != null && rateModel === undefined) ||
         !Number.isFinite(uncached) ||
         !Number.isFinite(cached) ||
         !Number.isFinite(cacheCreation) ||
@@ -280,6 +291,7 @@ export function decodeScanCache(document: unknown): ScanCache {
         provider,
         timestampMs,
         model,
+        ...(rateModel === undefined ? {} : { rateModel }),
         sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",
         totals: {
           uncachedInputTokens: uncached,
@@ -300,7 +312,9 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok") continue;
+    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok" && entry.p !== "pi") {
+      continue;
+    }
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
     // Position fields feed byte offsets and a Buffer allocation in the reader,
     // so anything outside their real ranges must reject the entry: a bogus
@@ -326,6 +340,15 @@ export function decodeScanCache(document: unknown): ScanCache {
     const legacyCodex = entry.p === "codex" && version < USAGE_SCAN_CACHE_VERSION;
     const codexState = legacyCodex ? null : decodeCodexState(entry.cs);
     if (codexState === undefined) continue;
+    // A Pi entry without its header state re-parses whole rather than resuming
+    // with an empty session id.
+    const piState =
+      entry.p === "pi" &&
+      typeof entry.ps === "object" &&
+      entry.ps !== null &&
+      typeof entry.ps.sessionId === "string"
+        ? { sessionId: entry.ps.sessionId }
+        : null;
 
     const provider: UsageProviderKind = entry.p;
     const records = decodeRecords(entry.r, provider);
@@ -340,7 +363,13 @@ export function decodeScanCache(document: unknown): ScanCache {
       tailRecords,
       position: legacyCodex
         ? { resumeOffset: 0, guardLength: 0, guardHash: 0, codexState: null }
-        : { resumeOffset: entry.o, guardLength: entry.gl, guardHash: entry.gh, codexState },
+        : {
+            resumeOffset: entry.o,
+            guardLength: entry.gl,
+            guardHash: entry.gh,
+            codexState,
+            ...(piState === null ? {} : { piState }),
+          },
     });
   }
 

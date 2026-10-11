@@ -273,7 +273,10 @@ function resolveRate(table: RateTable, model: string): ModelRate | null {
 }
 
 /** The parts of a transcript record that decide its price. */
-export type PricedRecord = Pick<UsageRecord, "model" | "totals" | "speed" | "reportedCostUsd">;
+export type PricedRecord = Pick<
+  UsageRecord,
+  "model" | "rateModel" | "totals" | "speed" | "reportedCostUsd"
+>;
 
 export interface PricedUsage {
   readonly costUsd: number;
@@ -323,7 +326,7 @@ export function priceUsage(
     categoryCostUsd: null,
     speedPremiumUsd: 0,
   });
-  const rate = override ?? lookupRate(table, model);
+  const rate = override ?? lookupRate(table, record.rateModel ?? model);
   if (rate === null) {
     return reported === null ? unsplit(0, "unpriced") : unsplit(reported, "providerReported");
   }
@@ -356,7 +359,8 @@ export function cacheSavingsUsd(
   record: PricedRecord,
   overrides?: RateTable,
 ): number {
-  const rate = overrides?.get(record.model.trim()) ?? lookupRate(table, record.model);
+  const rate =
+    overrides?.get(record.model.trim()) ?? lookupRate(table, record.rateModel ?? record.model);
   if (rate === null) return 0;
   const rates = ratesAt(rate, record.speed);
   return record.totals.cachedInputTokens * (rates.inputCostPerToken - rates.cacheReadCostPerToken);

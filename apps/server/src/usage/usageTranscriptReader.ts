@@ -32,7 +32,11 @@ import {
   parseCodexRecord,
   parseGrokLine,
   parseGrokRecord,
+  initialPiScanState,
+  parsePiLine,
+  parsePiRecord,
   type CodexScanState,
+  type PiScanState,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -62,6 +66,8 @@ export interface TranscriptParsePosition {
   readonly guardHash: number;
   /** Codex reducer state as of `resumeOffset`; `null` for stateless providers. */
   readonly codexState: CodexScanState | null;
+  /** Pi session header state as of `resumeOffset`; absent or `null` for other providers. */
+  readonly piState?: PiScanState | null;
 }
 
 export interface TranscriptParseResult {
@@ -93,7 +99,7 @@ type SelectedFields = { readonly [key: string]: true | SelectedFields };
 
 // Keep the fields consumed by usageTranscripts, including reducer state and
 // dedupe/cost metadata. A selected subtree (usage) keeps future token fields.
-const USAGE_FIELDS: Record<"claude" | "codex" | "grok", SelectedFields> = {
+const USAGE_FIELDS: Record<UsageProviderKind, SelectedFields> = {
   claude: {
     type: true,
     timestamp: true,
@@ -124,10 +130,19 @@ const USAGE_FIELDS: Record<"claude" | "codex" | "grok", SelectedFields> = {
       update: { sessionUpdate: true, prompt_id: true, usage: true },
     },
   },
+  pi: {
+    type: true,
+    id: true,
+    timestamp: true,
+    provider: true,
+    model: true,
+    usage: true,
+    message: { role: true, provider: true, model: true, responseModel: true, usage: true },
+  },
 };
 
 function selectUsageFields(provider: UsageProviderKind) {
-  const fields = USAGE_FIELDS[provider === "codex" || provider === "grok" ? provider : "claude"];
+  const fields = USAGE_FIELDS[provider];
   return (path: ReadonlyArray<string | number | null>): boolean => {
     let selected: true | SelectedFields = fields;
     for (const key of path) {
@@ -282,15 +297,18 @@ export async function readTranscriptRecords(
 
   try {
     let codexState = initialCodexScanState();
+    const piState = initialPiScanState();
     let resumed = false;
     let start = 0;
     if (
       resumeFrom !== undefined &&
       resumeFrom.resumeOffset > 0 &&
       (provider !== "codex" || resumeFrom.codexState !== null) &&
+      (provider !== "pi" || (resumeFrom.piState ?? null) !== null) &&
       (await guardMatches(handle, resumeFrom))
     ) {
       if (resumeFrom.codexState !== null) codexState = { ...resumeFrom.codexState };
+      if (resumeFrom.piState) piState.sessionId = resumeFrom.piState.sessionId;
       start = resumeFrom.resumeOffset;
       resumed = true;
     }
@@ -312,6 +330,10 @@ export async function readTranscriptRecords(
       if (!mightCarryUsage(line, provider)) return;
       if (provider === "grok") {
         for (const grokRecord of parseGrokLine(line)) out.push(grokRecord);
+        return;
+      }
+      if (provider === "pi") {
+        for (const piRecord of parsePiLine(line, piState)) out.push(piRecord);
         return;
       }
       const record = parseClaudeLine(line);
@@ -360,6 +382,8 @@ export async function readTranscriptRecords(
         const projected = streaming.finish();
         if (provider === "grok") {
           out.push(...parseGrokRecord(projected));
+        } else if (provider === "pi") {
+          out.push(...parsePiRecord(projected, piState));
         } else {
           const record =
             provider === "codex"
@@ -407,6 +431,9 @@ export async function readTranscriptRecords(
     }
 
     const tailRecords: UsageRecord[] = [];
+    // The unterminated tail is replayed next scan, so its header must not
+    // leak into the committed Pi state.
+    const committedPiState = { ...piState };
     finish({ ...codexState }, tailRecords);
 
     const guardLength = Math.min(GUARD_LENGTH, resumeOffset);
@@ -425,6 +452,7 @@ export async function readTranscriptRecords(
         guardLength,
         guardHash,
         codexState: provider === "codex" ? codexState : null,
+        ...(provider === "pi" ? { piState: committedPiState } : {}),
       },
       resumed,
     };

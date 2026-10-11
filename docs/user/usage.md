@@ -4,7 +4,7 @@ Open **Usage** from the sidebar or the command palette, or press `mod+u` on web 
 desktop when the terminal is not focused. Customize `usage.open` in
 **Settings → Keybindings**. On iPad with a hardware keyboard, ⌘U opens **Settings → Usage Limits**.
 
-The Usage page combines Codex, Claude Code, and Grok Build activity from your connected
+The Usage page combines Codex, Claude Code, Grok Build, and Pi activity from your connected
 environments. It reads the providers' local session history and shows API-equivalent token cost,
 processed tokens, cache savings, provider shares, and model breakdowns, with cost split by token
 type and by speed. Subscription billing is separate from the raw token cost shown here.
@@ -14,6 +14,12 @@ Select a model under **Breakdown** to see its trend, cache hit rate, and cost pe
 
 Grok Build totals come from persisted session updates. Interactive turns that never wrote a
 completed-turn record will not appear.
+
+Pi reads `~/.pi/agent/sessions`, or the `sessions` directory under `PI_CODING_AGENT_DIR`. Set
+`PI_CODING_AGENT_SESSION_DIR` to read a different session directory. To include sessions saved
+through `--session-dir` or Pi's `sessionDir` setting, set this environment variable to the same
+directory. Pi includes recorded tool and summary costs under `Tools/summaries`. Use absolute paths
+or `~/` paths in the account's environment settings.
 
 Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. The **7 days**,
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
