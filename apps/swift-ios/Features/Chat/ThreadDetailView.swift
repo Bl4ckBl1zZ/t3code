@@ -4058,7 +4058,11 @@ struct FeatureMessageView: View {
             // feed's treatment.
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    AgentSenderByline(senderThreadID: message.senderThreadID, onOpenThread: onOpenThread)
+                    AgentSenderByline(
+                        senderThreadID: message.senderThreadID,
+                        sentByT3Code: message.isSentByT3Code,
+                        onOpenThread: onOpenThread
+                    )
 
                     VStack(alignment: .leading, spacing: 10) {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
@@ -4084,7 +4088,7 @@ struct FeatureMessageView: View {
             }
             // Contained, so the byline's link to the sender stays reachable.
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Another agent")
+            .accessibilityLabel(message.isSentByT3Code ? "T3 Code" : "Another agent")
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("message-\(message.id)")
         case .user:

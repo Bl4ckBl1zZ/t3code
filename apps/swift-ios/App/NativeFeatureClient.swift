@@ -6309,6 +6309,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             mapped.senderThreadID = item.senderThreadId.map {
                 FeatureScopedID.thread(environmentID: environmentID, wireID: $0)
             }
+            mapped.creationSource = item.base.creationSource
             return mapped
 
         case let .assistantMessage(messageID, text, streaming):
