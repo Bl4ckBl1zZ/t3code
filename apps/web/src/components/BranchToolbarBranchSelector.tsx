@@ -841,7 +841,10 @@ export function BranchToolbarBranchSelector({
                 data-composer-label-motion
                 className="flex w-full max-w-[240px] transition-opacity duration-180 ease-drawer group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none"
               >
-                <MiddleTruncate value={triggerLabel} />
+                <MiddleTruncate
+                  value={triggerLabel}
+                  variant={displayMode === "panel" ? "cap-aligned" : "default"}
+                />
               </span>
             </span>
             <ChevronDownIcon

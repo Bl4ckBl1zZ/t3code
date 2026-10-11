@@ -98,6 +98,7 @@ import { readLocalApi } from "~/localApi";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_LABEL_CLASS,
   THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
   THREAD_DETAILS_PANEL_ROW_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
@@ -1717,7 +1718,7 @@ export default function GitActionsControl({
                 <span
                   className={cn(
                     "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
-                    isPanel && "not-sr-only ml-0 truncate",
+                    isPanel && cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
                   )}
                 >
                   {quickAction.label}
@@ -1743,7 +1744,7 @@ export default function GitActionsControl({
               <span
                 className={cn(
                   "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
-                  isPanel && "not-sr-only ml-0 truncate",
+                  isPanel && cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
                 )}
               >
                 {quickAction.label}
@@ -1799,7 +1800,7 @@ export default function GitActionsControl({
                       <PopoverTrigger
                         openOnHover
                         nativeButton={false}
-                        render={<span className="block w-max cursor-not-allowed" />}
+                        render={<span className="block w-full cursor-not-allowed" />}
                       >
                         <MenuItem className="w-full" disabled>
                           <GitActionItemIcon
@@ -1882,7 +1883,7 @@ export default function GitActionsControl({
           }
         >
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
-          <span className="flex-1 text-left">Changes</span>
+          <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Changes</span>
           <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
             <span className="text-diff-addition">+{changesTotals?.insertions ?? 0}</span>
             <span className="text-diff-deletion">-{changesTotals?.deletions ?? 0}</span>
