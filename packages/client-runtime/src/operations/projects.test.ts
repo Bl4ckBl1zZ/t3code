@@ -17,9 +17,10 @@ import {
   getCloneDestinationPath,
   getCloneDirectoryName,
   getDefaultCloneUrl,
-  getNewProjectGitHubRepository,
-  getNewProjectGitHubTarget,
   getNewProjectPathPreview,
+  getNewProjectPublishTarget,
+  getNewProjectPublishTargets,
+  getNewProjectRepository,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
   sortAddProjectProviderSources,
@@ -220,13 +221,13 @@ describe("add project shared logic", () => {
     expect(sortAddProjectProviderSources(readiness)[0]).toBe("github");
 
     // A new project publishes under the signed-in account, named after its folder.
-    const target = getNewProjectGitHubTarget(discovery);
-    expect(target).toEqual({ account: "octo" });
+    const targets = getNewProjectPublishTargets(discovery);
+    expect(targets).toEqual([{ kind: "github", label: "GitHub", owner: "octo" }]);
     const preview = getNewProjectPathPreview("/home/me/.t3/projects", "Pinball Stats");
     expect(preview).toBe("/home/me/.t3/projects/pinball-stats");
-    expect(getNewProjectGitHubRepository(target!, preview)).toBe("octo/pinball-stats");
-    expect(getNewProjectGitHubRepository({ account: null }, "C:\\t3\\projects\\app")).toBe("app");
-    expect(getNewProjectGitHubTarget(null)).toBeNull();
+    expect(getNewProjectRepository(targets[0]!, preview)).toBe("octo/pinball-stats");
+    expect(getNewProjectRepository({ owner: null }, "C:\\t3\\projects\\app")).toBe("app");
+    expect(getNewProjectPublishTargets(null)).toEqual([]);
   });
 
   it("finds existing projects by normalized path in the target environment", () => {
@@ -278,5 +279,42 @@ describe("add project shared logic", () => {
       createWorkspaceRootIfMissing: true,
       defaultModelSelection: null,
     });
+  });
+});
+
+describe("new project publish targets", () => {
+  const readyHost = (
+    kind: "github" | "gitlab" | "azure-devops" | "bitbucket",
+    account: string | null,
+  ) => ({
+    kind,
+    label: kind,
+    status: "available" as const,
+    installHint: "",
+    version: Option.none(),
+    detail: Option.none(),
+    auth: {
+      status: "authenticated" as const,
+      account: Option.fromNullOr(account),
+      host: Option.none(),
+      detail: Option.none(),
+    },
+  });
+
+  it("offers ready hosts that can place the repository, GitHub first, and keeps the pick", () => {
+    const targets = getNewProjectPublishTargets({
+      versionControlSystems: [],
+      sourceControlProviders: [
+        readyHost("gitlab", "group"),
+        readyHost("github", null),
+        readyHost("azure-devops", "me"),
+        readyHost("bitbucket", "me"),
+      ],
+    });
+    expect(targets.map((target) => target.kind)).toEqual(["github", "gitlab"]);
+    expect(getNewProjectPublishTarget(targets, null)?.kind).toBe("github");
+    expect(getNewProjectPublishTarget(targets, "gitlab")?.owner).toBe("group");
+    // A pick that is no longer on offer falls back to the first host.
+    expect(getNewProjectPublishTarget(targets, "bitbucket")?.kind).toBe("github");
   });
 });
