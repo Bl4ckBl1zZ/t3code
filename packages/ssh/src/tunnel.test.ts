@@ -131,6 +131,14 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, "ensure $NVM_DIR/nvm.sh is available");
   });
 
+  it("embeds the runner in the launch script byte for byte", () => {
+    // Placeholder values keep `$` patterns literal: a `$$` in the package spec survives.
+    const input = { packageSpec: "t3@$$nightly" };
+    const runner = buildRemoteT3RunnerScript(input);
+    assert.include(runner, "'t3@$$nightly'");
+    assert.include(buildRemoteLaunchScript(input), runner.replace(/\n+$/, ""));
+  });
+
   it("does not hard-code a remote node engine range", () => {
     const script = buildRemoteT3RunnerScript();
 

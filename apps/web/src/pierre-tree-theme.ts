@@ -10,7 +10,7 @@ export const PIERRE_TREE_UNSAFE_CSS = `
     --trees-font-family-override: var(--font-sans);
     --trees-font-size-override: 0.75rem;
   }
-  button[data-type='item'] { border-radius: 5px; }
+  button[data-type='item'], button[data-type='item']::before { border-radius: var(--radius-md); }
 `;
 
 /** Host styles that keep a Pierre tree on the active color scheme and foreground. */

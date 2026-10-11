@@ -11,7 +11,7 @@ const resolve = (width: number, height: number) =>
 
 describe("workspace card", () => {
   it("pins to the top right at a fixed width", () => {
-    expect(resolve(1600, 900)).toEqual({ x: 1308, y: 12, width: 280, height: 876 });
+    expect(resolve(1600, 900)).toEqual({ x: 1308, right: 12, y: 12, width: 280, height: 876 });
     expect(resolve(1344, 900)).toMatchObject({ x: 1052, width: 280 });
   });
 
@@ -22,7 +22,7 @@ describe("workspace card", () => {
         lane,
         topInset: 48,
       }),
-    ).toEqual({ x: 1308, y: 60, width: 280, height: 828 });
+    ).toEqual({ x: 1308, right: 12, y: 60, width: 280, height: 828 });
   });
 
   it("becomes a popover when a readable chat lane cannot fit beside it", () => {

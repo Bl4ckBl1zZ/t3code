@@ -950,6 +950,7 @@ describe("deriveMessagesTimelineRows", () => {
       attemptOrdinal: 1,
       rootNodeId: "node-attempt-1" as never,
       status: "superseded" as const,
+      completedAt: null,
     };
     const activeAttempt = {
       id: activeAttemptId,
@@ -957,6 +958,7 @@ describe("deriveMessagesTimelineRows", () => {
       attemptOrdinal: 2,
       rootNodeId: "node-attempt-2" as never,
       status: "running" as const,
+      completedAt: null,
     };
     const timelineEntries = [
       {
@@ -1088,6 +1090,131 @@ describe("deriveMessagesTimelineRows", () => {
       "steer-user-entry",
       "active-assistant-entry",
     ]);
+  });
+
+  describe("a steer that supersedes an attempt", () => {
+    const runId = RunId.make("run-steered");
+    const at = (second: number) => `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`;
+    // The steer stamps the superseded attempt at 0:10.
+    const supersededAttempt = {
+      id: RunAttemptId.make("attempt-1"),
+      runId,
+      attemptOrdinal: 1,
+      rootNodeId: NodeId.make("node-attempt-1"),
+      status: "superseded" as const,
+      completedAt: DateTime.makeUnsafe(at(10)),
+    };
+    const nextAttempt = {
+      id: RunAttemptId.make("attempt-2"),
+      runId,
+      attemptOrdinal: 2,
+      rootNodeId: NodeId.make("node-attempt-2"),
+      status: "completed" as const,
+      completedAt: DateTime.makeUnsafe(at(14)),
+    };
+    const assistantEntry = (
+      id: string,
+      attempt: typeof supersededAttempt | typeof nextAttempt,
+      completedSecond: number,
+    ): TimelineEntry => ({
+      id,
+      kind: "message",
+      createdAt: at(2),
+      attempt,
+      message: {
+        id: MessageId.make(id),
+        role: "assistant",
+        text: `${id} text`,
+        runId,
+        createdAt: at(2),
+        updatedAt: at(completedSecond),
+        streaming: false,
+      },
+      projectedItem: {
+        item: {
+          type: "assistant_message",
+          status: "completed",
+          completedAt: DateTime.makeUnsafe(at(completedSecond)),
+        },
+      } as never,
+    });
+    const rowsFor = (
+      replyCompletedSecond: number,
+      runStatus: "running" | "completed" = "completed",
+    ) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: [
+          {
+            id: "initial-user-entry",
+            kind: "message",
+            createdAt: at(0),
+            attempt: supersededAttempt,
+            message: {
+              id: MessageId.make("initial-user"),
+              role: "user",
+              text: "Build it",
+              runId,
+              inputIntent: "turn_start",
+              createdAt: at(0),
+              updatedAt: at(0),
+              streaming: false,
+            },
+          },
+          {
+            id: "old-work-entry",
+            kind: "work",
+            createdAt: at(1),
+            attempt: supersededAttempt,
+            entry: { id: "old-work", createdAt: at(1), runId, label: "Read", tone: "tool" },
+          },
+          assistantEntry("old-reply-entry", supersededAttempt, replyCompletedSecond),
+          {
+            id: "steer-user-entry",
+            kind: "message",
+            createdAt: at(10),
+            attempt: nextAttempt,
+            message: {
+              id: MessageId.make("steer-user"),
+              role: "user",
+              text: "What are you working on?",
+              runId,
+              inputIntent: "steer",
+              createdAt: at(10),
+              updatedAt: at(10),
+              streaming: false,
+            },
+          },
+          assistantEntry("new-reply-entry", nextAttempt, 14),
+        ],
+        latestRun: {
+          runId,
+          status: runStatus,
+          startedAt: at(0),
+          completedAt: runStatus === "completed" ? at(14) : null,
+        },
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+
+    it.each(["running", "completed"] as const)(
+      "keeps a reply that finished before the steer visible while the run is %s",
+      (runStatus) => {
+        const rows = rowsFor(4, runStatus);
+        expect(rows.some((row) => row.kind === "attempt-fold")).toBe(false);
+        expect(rows.map((row) => row.id)).toContain("old-reply-entry");
+      },
+    );
+
+    it("folds a reply the steer cut off as partial output", () => {
+      const rows = rowsFor(11, "running");
+      expect(rows.find((row) => row.kind === "attempt-fold")).toMatchObject({
+        attemptId: supersededAttempt.id,
+        label: "Superseded attempt",
+      });
+      expect(rows.map((row) => row.id)).not.toContain("old-reply-entry");
+    });
   });
 
   it("derives a sane duration for a steer-superseded turn with one instant commentary message", () => {
@@ -2751,6 +2878,7 @@ describe("failed turn transcript", () => {
             attemptOrdinal: 1,
             rootNodeId: NodeId.make("superseded-root"),
             status: "superseded" as const,
+            completedAt: null,
           },
         })),
         latestRun: {

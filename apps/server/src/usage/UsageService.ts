@@ -2,8 +2,8 @@ import type { ServerSettings as ServerSettingsValue } from "@t3tools/contracts";
 /**
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
- * The scan reads the provider CLIs' own session files (Claude Code, Codex, and
- * Grok Build) rather than T3 Code's orchestration projections, so usage covers
+ * The scan reads the provider CLIs' own session files (Claude Code, Codex, Grok
+ * Build, and Pi) rather than T3 Code's orchestration projections, so usage covers
  * turns driven outside T3 Code too. This is the approach `ccusage` takes.
  *
  * Transcripts are append-only, so parsed records are memoised per file by
@@ -306,7 +306,7 @@ export const make = Effect.gen(function* () {
       fileName?: string;
     }> = [];
     const seen = new Set<string>();
-    for (const driver of ["claudeAgent", "codex", "grok"] as const) {
+    for (const driver of ["claudeAgent", "codex", "grok", "pi"] as const) {
       // Disabled accounts still have history. Explicit default slots replace
       // the legacy settings, just as they do in the provider registry.
       const instances: Array<Pick<ProviderInstanceConfig, "config" | "environment">> =
@@ -318,7 +318,19 @@ export const make = Effect.gen(function* () {
         const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
         const provider = driver === "claudeAgent" ? "claude" : driver;
         let home: string;
-        if (driver === "codex") {
+        let directory: string | undefined;
+        if (driver === "pi") {
+          // Pi keeps sessions under its agent directory unless a session
+          // directory replaces them outright.
+          const sessionDir = environment.PI_CODING_AGENT_SESSION_DIR?.trim();
+          const agentDir = environment.PI_CODING_AGENT_DIR?.trim();
+          home = sessionDir
+            ? expandHomePath(sessionDir)
+            : agentDir
+              ? expandHomePath(agentDir)
+              : path.join(NodeOS.homedir(), ".pi", "agent");
+          directory = sessionDir ? path.resolve(home) : path.resolve(home, "sessions");
+        } else if (driver === "codex") {
           const decoded = decodeCodexSettings(instance.config ?? {});
           if (Option.isNone(decoded)) continue;
           const config = decoded.value;
@@ -341,7 +353,7 @@ export const make = Effect.gen(function* () {
             environment.GROK_HOME?.trim() || path.join(NodeOS.homedir(), ".grok"),
           );
         }
-        const directory = path.resolve(home, provider === "claude" ? "projects" : "sessions");
+        directory ??= path.resolve(home, provider === "claude" ? "projects" : "sessions");
         const sourceKey = provider + "\0" + directory;
         const previous = sourceCache.get(sourceKey);
         // Keep canonical paths and source fingerprints stable after root cleanup,

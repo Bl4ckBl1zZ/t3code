@@ -18,6 +18,11 @@ const THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS = `${THREAD_DETAILS_PANEL_RESTING_B
 /** Icon-to-label spacing and inset every workspace card row shares, button or not. */
 export const THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS = "gap-2.5 px-2.5 text-left";
 
+// Center capitals with icons. Only clip horizontally so truncated labels retain
+// accents and descenders outside the trimmed text box.
+export const THREAD_DETAILS_PANEL_LABEL_CLASS =
+  "[text-box:trim-both_cap_alphabetic] overflow-x-clip overflow-y-visible";
+
 // The row supplies the first tint; the hovered or open segment adds a second tint.
 const THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS = `${THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS} data-popup-open:!bg-black/[0.055] dark:data-popup-open:!bg-white/[0.075]`;
 

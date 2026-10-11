@@ -140,22 +140,35 @@ function subagentTiming(subagent: OrchestrationV2Subagent): AgentElapsedTiming {
 }
 
 /**
- * A delegated task settles with its first run, but the parent can keep sending
- * the child follow-ups. While the child thread has a live run, the row's timer
- * and hover card follow that run instead of the settled task.
+ * The row's timer and hover card follow current child work, including queued
+ * follow-ups whose provider turn has not started yet.
  */
-function liveSubagent(
+function currentSubagent(
   subagent: OrchestrationV2Subagent | undefined,
   childThread: OrchestrationV2ThreadShell | null | undefined,
 ): OrchestrationV2Subagent | undefined {
-  const liveStatus = liveThreadRunStatus(childThread);
-  if (!subagent || !liveStatus) return subagent;
+  if (!subagent || !childThread) return subagent;
+  const liveStatus =
+    liveThreadRunStatus(childThread) ?? (childThread.status === "queued" ? "queued" : null);
+  const newerRun =
+    childThread.latestRunRequestedAt != null &&
+    DateTime.toEpochMillis(childThread.latestRunRequestedAt) >
+      DateTime.toEpochMillis(subagent.completedAt ?? subagent.startedAt ?? subagent.updatedAt);
+  if (!liveStatus && !newerRun) return subagent;
+  const status = liveStatus ?? childThread.status;
   return {
     ...subagent,
-    status: liveStatus === "running" || liveStatus === "waiting" ? liveStatus : "pending",
-    startedAt: childThread?.activityRunStartedAt ?? null,
-    completedAt: null,
-    // The settled task's output belongs to its first run, not this one.
+    status:
+      status === "preparing" || status === "starting" || status === "queued" || status === "idle"
+        ? "pending"
+        : status === "rolled_back"
+          ? "interrupted"
+          : status,
+    startedAt: liveStatus
+      ? (childThread.activityRunStartedAt ?? null)
+      : (childThread.latestRunStartedAt ?? null),
+    completedAt: liveStatus ? null : (childThread.latestRunCompletedAt ?? null),
+    // The task's output belongs to its recorded run, not newer child work.
     progress: undefined,
     result: null,
   };
@@ -167,10 +180,25 @@ const STOPPABLE_SUBAGENT_STATUSES: ReadonlySet<OrchestrationV2Subagent["status"]
   "waiting",
 ]);
 
-/** Only a T3-owned subagent with a started run has a child turn that Stop can interrupt. */
-function canStopSubagent(subagent: OrchestrationV2Subagent | undefined): boolean {
+/**
+ * A T3-owned subagent with a started run has a child turn that Stop can
+ * interrupt. A Claude-native one is stopped through its owning session while
+ * its recorded task is still live.
+ */
+function canStopSubagent(
+  subagent: OrchestrationV2Subagent | undefined,
+  recorded: OrchestrationV2Subagent | undefined,
+): boolean {
+  if (subagent === undefined || recorded === undefined) return false;
+  const stoppableOrigin =
+    subagent.origin === "app_owned" ||
+    (subagent.origin === "provider_native" &&
+      subagent.driver === "claudeAgent" &&
+      subagent.nativeTaskRef?.strength === "strong" &&
+      subagent.nativeTaskRef.nativeId !== null &&
+      STOPPABLE_SUBAGENT_STATUSES.has(recorded.status));
   return (
-    subagent?.origin === "app_owned" &&
+    stoppableOrigin &&
     subagent.startedAt !== null &&
     STOPPABLE_SUBAGENT_STATUSES.has(subagent.status)
   );
@@ -290,12 +318,19 @@ export function ThreadRelationshipsPanel(props: {
   };
 
   // Stop in the child thread: interrupts its live run and the work it delegated.
-  const stopSubagent = async (childThreadId: ThreadId) => {
+  // A provider-native subagent stops through its owner, whose run keeps working.
+  const stopSubagent = async (
+    childThreadId: ThreadId,
+    subagent: Pick<OrchestrationV2Subagent, "id" | "origin" | "threadId"> | undefined,
+  ) => {
     if (stoppingThreadId !== null) return;
     setStoppingThreadId(childThreadId);
     const result = await interruptTurn({
       environmentId: props.environmentId,
-      input: { threadId: childThreadId },
+      input:
+        subagent?.origin === "provider_native"
+          ? { threadId: subagent.threadId, subagentId: subagent.id }
+          : { threadId: childThreadId },
     });
     setStoppingThreadId(null);
     if (result._tag === "Failure") {
@@ -362,15 +397,13 @@ export function ThreadRelationshipsPanel(props: {
             title: node?.thread?.title ?? threadId,
             isSubagent,
           });
-          const subagent = liveSubagent(
-            showOrb ? subagentByChildThreadId.get(threadId) : undefined,
-            node?.thread,
-          );
+          const recordedSubagent = showOrb ? subagentByChildThreadId.get(threadId) : undefined;
+          const subagent = currentSubagent(recordedSubagent, node?.thread);
           const phase = workflowPhaseProgress(subagent?.workflow);
           const runScriptPath = subagent?.runHandles?.scriptPath;
           const runSessionUrl = subagent?.runHandles?.sessionUrl;
           const hasRunHandles = runScriptPath !== undefined || runSessionUrl !== undefined;
-          const canStop = canStopSubagent(subagent);
+          const canStop = canStopSubagent(subagent, recordedSubagent);
           // Stop appears on hover in place of the trailing time; rows with a run
           // menu or a merge action keep Stop in those controls instead.
           const hoverStop = canStop && !hasRunHandles && !isMergeTarget;
@@ -597,7 +630,7 @@ export function ThreadRelationshipsPanel(props: {
                         <MenuItem
                           variant="destructive"
                           disabled={stoppingThreadId !== null}
-                          onClick={() => void stopSubagent(threadId)}
+                          onClick={() => void stopSubagent(threadId, subagent)}
                         >
                           <SquareIcon className="size-3.5 fill-current" />
                           Stop subagent
@@ -656,7 +689,7 @@ export function ThreadRelationshipsPanel(props: {
                           )}
                           aria-label={`Stop subagent ${threadTitle}`}
                           disabled={stoppingThreadId !== null}
-                          onClick={() => void stopSubagent(threadId)}
+                          onClick={() => void stopSubagent(threadId, subagent)}
                         >
                           {stopping ? (
                             <LoaderCircleIcon aria-hidden className="size-3 animate-spin" />

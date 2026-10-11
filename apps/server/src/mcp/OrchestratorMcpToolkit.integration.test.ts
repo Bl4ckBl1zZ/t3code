@@ -478,6 +478,17 @@ describe("orchestrator MCP toolkit", () => {
           });
           // Absence has no event to await, so sample repeatedly instead of
           // trusting a single sleep to outlast a late offer.
+          const waitForContinuationOffers = (count: number) =>
+            Effect.gen(function* () {
+              for (let attempt = 0; attempt < 1_000; attempt += 1) {
+                const current = yield* Ref.get(continuationOffers);
+                if (current.length >= count) {
+                  return current;
+                }
+                yield* Effect.sleep("5 millis");
+              }
+              return yield* Ref.get(continuationOffers);
+            });
           const expectOffersToStay = (count: number) =>
             Effect.gen(function* () {
               for (let sample = 0; sample < 4; sample += 1) {
@@ -1068,6 +1079,9 @@ describe("orchestrator MCP toolkit", () => {
             expect(delegatedStatus.status).toBe("completed");
             expect(delegatedStatus.resultContextTransferId).not.toBeNull();
 
+            // Wait-mode completion already returned its result while the parent was live.
+            yield* expectOffersToStay(0);
+
             const childFollowupCall = yield* invoke("t3_thread_send", {
               threadId: delegated.childThreadId,
               message: "Confirm the delegated API boundary remains inspected.",
@@ -1141,10 +1155,14 @@ describe("orchestrator MCP toolkit", () => {
               ),
             );
 
-            // A wait-mode child (completionWake settled_only) that completes
-            // while the parent run is live does not offer a wake: the
-            // blocking delegate_task call above already returned the result.
-            yield* expectOffersToStay(0);
+            // Later requested work has its own delivery, including an interrupted follow-up.
+            expect(childFollowup.taskId).toBeDefined();
+            expect(activeChildFollowup.taskId).toBeDefined();
+            yield* waitForContinuationOffers(2);
+            yield* expectOffersToStay(2);
+            yield* invoke("task_status", { taskId: childFollowup.taskId });
+            yield* invoke("task_status", { taskId: activeChildFollowup.taskId });
+            yield* Ref.set(continuationOffers, []);
 
             const repeatedDelegatedCall = yield* invoke("delegate_task", {
               task: delegatedPrompt,

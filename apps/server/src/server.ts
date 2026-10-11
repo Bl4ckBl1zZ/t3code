@@ -44,12 +44,14 @@ import {
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
+import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import {
   HermesSessionBindingRepository,
@@ -416,6 +418,7 @@ const SourceControlRepositoryServiceLayerLive = SourceControlRepositoryService.l
 );
 
 const ReviewLayerLive = ReviewService.layer.pipe(
+  Layer.provide(ProjectionProjectRepositoryLive),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
 );
@@ -700,7 +703,7 @@ export const makeServerLayer = Layer.unwrap(
     const routesReady = yield* Deferred.make<void>();
     const launcherLayer = ServiceLauncherClient.layer;
 
-    yield* fixPath();
+    yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
 
     const httpListeningLayer = Layer.effectDiscard(
       Effect.gen(function* () {
@@ -1062,6 +1065,8 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(ApplicationObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
+      // Every agent and terminal spawn reads this, so it sits below everything.
+      Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(PlatformServicesLive),
     );
   }),

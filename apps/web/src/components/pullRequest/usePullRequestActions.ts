@@ -62,10 +62,16 @@ export function usePullRequestActionRunner({
   reference,
   onActed,
   prepareMerge,
+  announcesSuccess = () => true,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef | null;
   onActed?: (action: PullRequestAction, phase: PullRequestActionPhase) => void;
+  /**
+   * Whether a finished action gets a success toast. A surface that shows the new state in place
+   * (the detail panel) only announces what it cannot show.
+   */
+  announcesSuccess?: (action: PullRequestAction) => boolean;
   /**
    * Small surfaces settle the merge method from the host's answer when the merge runs, rather
    * than for every row on screen.
@@ -93,7 +99,7 @@ export function usePullRequestActionRunner({
         run: (request) => runAction({ environmentId, input: { ...reference, action, ...request } }),
         onActed: (acted, phase) => {
           // The toast goes first, so whatever the caller re-reads lands under the answer.
-          if (phase === "done") {
+          if (phase === "done" && announcesSuccess(acted)) {
             toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[acted] });
           }
           onActed?.(acted, phase);
@@ -134,8 +140,8 @@ export function usePullRequestCloseBatch(
     async (entries: readonly EnvironmentPullRequestEntry[]) => {
       const batch = entries.filter((entry) => {
         const key = pullRequestEntryKey(entry);
-        if (entry.state !== "open" || entry.provider !== "github" || pending.current.has(key))
-          return false;
+        // The sweep only gathers rows whose host can close them, so state is all that is left.
+        if (entry.state !== "open" || pending.current.has(key)) return false;
         pending.current.add(key);
         return true;
       });

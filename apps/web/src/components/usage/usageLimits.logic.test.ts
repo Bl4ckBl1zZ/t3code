@@ -262,3 +262,151 @@ it("deduplicates a hub account with a local account and redeems the displayed hu
   });
   expect(result[0]?.environments).toEqual(["Mac", "Mac · Team"]);
 });
+
+describe("workspaces", () => {
+  const hub = (accounts: ReadonlyArray<{ id: string; email?: string; workspaceId?: string }>) => [
+    {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "Team",
+      checkedAt: "2026-09-10T12:00:00Z",
+      accounts: accounts.map((account) => ({
+        ...account,
+        driver: ProviderDriverKind.make("codex"),
+        usageLimits: limits(),
+      })),
+    },
+  ];
+  const login = (instanceId: string, workspaceId: string) =>
+    provider({
+      instanceId: ProviderInstanceId.make(instanceId),
+      displayName: instanceId,
+      auth: { email: "same@example.com", workspaceId },
+    });
+
+  it("keeps one email in two workspaces apart while merging each workspace's duplicates", () => {
+    const accounts = collectLimitAccounts([
+      {
+        id: "laptop",
+        label: "Laptop",
+        providers: [login("business", "ws-business"), login("personal", "ws-plus")],
+        // A hub that names the workspace joins it; one that does not cannot
+        // say which of the two it read, so it keeps its own row.
+        usageLimitSources: hub([
+          { id: "plus.json", email: "same@example.com", workspaceId: "ws-plus" },
+          { id: "x.json", email: "same@example.com" },
+        ]),
+      },
+      { id: "desktop", label: "Desktop", providers: [login("personal", "ws-plus")] },
+    ]);
+    expect(accounts.map((account) => account.label)).toEqual([
+      "business",
+      "personal",
+      "same@example.com",
+    ]);
+    expect(accounts[1]?.environments).toEqual(["Laptop", "Laptop · Team", "Desktop"]);
+  });
+
+  it("joins a report without a workspace to the only workspace signed in with its email", () => {
+    const source = hub([{ id: "x.json", email: "same@example.com" }]);
+    expect(
+      collectLimitAccounts([
+        {
+          id: "laptop",
+          label: "Laptop",
+          providers: [login("work", "org-a")],
+          usageLimitSources: source,
+        },
+      ]),
+    ).toHaveLength(1);
+    // A second workspace whose limits could not be read still makes the hub ambiguous.
+    expect(
+      collectLimitAccounts([
+        {
+          id: "laptop",
+          label: "Laptop",
+          providers: [
+            login("work", "org-a"),
+            provider({
+              ...login("team", "org-b"),
+              usageLimits: limits({ windows: [], unavailable: { reason: "probeFailed" } }),
+            }),
+          ],
+          usageLimitSources: source,
+        },
+      ]),
+    ).toHaveLength(3);
+  });
+});
+
+describe("codex slots", () => {
+  it("pools Codex windows by kind, whichever slot reported them", () => {
+    const codexAccount = (id: string, slots: readonly string[]) =>
+      account(
+        id,
+        limits({
+          windows: slots.map((slot) =>
+            window({ id: slot, kind: "weekly", label: "Weekly", windowDurationMins: 10080 }),
+          ),
+        }),
+      );
+    // A weekly-only plan reports weekly as `primary`. The pool keeps one id
+    // whichever account sorts first.
+    for (const order of [
+      [codexAccount("business", ["primary"]), codexAccount("plus", ["secondary"])],
+      [codexAccount("plus", ["secondary"]), codexAccount("business", ["primary"])],
+    ]) {
+      const windows = collectLimitPools(order, now)[0]?.windows ?? [];
+      expect(windows.map((item) => item.id)).toEqual(["weekly"]);
+      expect(windows[0]?.members).toHaveLength(2);
+    }
+    // A second window of the same kind on one account stays apart, with its own id.
+    expect(
+      collectLimitPools(
+        [codexAccount("a", ["secondary"]), codexAccount("b", ["primary", "secondary"])],
+        now,
+      )[0]?.windows.map((item) => item.id),
+    ).toEqual(["weekly", "weekly:secondary"]);
+  });
+});
+
+describe("Antigravity limit presentation", () => {
+  it("keeps the shared Claude/GPT bucket separate from Gemini and pairs their windows", () => {
+    const antigravity = provider({
+      instanceId: ProviderInstanceId.make("antigravity"),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Antigravity",
+      usageLimits: limits({
+        windows: [
+          window({ id: "3p-5h", label: "Claude & GPT (shared) · 5-hour", usedPercent: 90 }),
+          window({ id: "gemini-5h", label: "Gemini · 5-hour", usedPercent: 20 }),
+          window({
+            id: "3p-weekly",
+            kind: "weekly",
+            label: "Claude & GPT (shared) · Weekly",
+            usedPercent: 100,
+          }),
+          window({
+            id: "gemini-weekly",
+            kind: "weekly",
+            label: "Gemini · Weekly",
+            usedPercent: 10,
+          }),
+        ],
+      }),
+    });
+    const pools = collectLimitPools(
+      collectLimitAccounts([{ id: "a", label: "Local", providers: [provider(), antigravity] }]),
+      now,
+    );
+    expect(pools.map((pool) => pool.driver)).toEqual(["codex", "antigravity"]);
+    const windows = pools[1]?.windows ?? [];
+    expect(windows.map((item) => item.id)).toEqual([
+      "gemini-5h",
+      "gemini-weekly",
+      "3p-5h",
+      "3p-weekly",
+    ]);
+    expect(windows.map((item) => item.remainingPercent)).toEqual([80, 90, 10, 0]);
+  });
+});

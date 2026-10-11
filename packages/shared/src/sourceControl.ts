@@ -1,8 +1,59 @@
 import type {
+  PullRequestAction,
   RepositoryIdentity,
   SourceControlProviderInfo,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+
+/**
+ * The actions each host can take on a change request. The server's pull request providers
+ * declare these as `capabilities.actions`; surfaces with no server answer to hand, such as a
+ * thread's linked pull requests, offer actions from this.
+ */
+const CHANGE_REQUEST_ACTIONS: Partial<
+  Record<SourceControlProviderKind, ReadonlyArray<PullRequestAction>>
+> = {
+  github: [
+    "merge",
+    "ready",
+    "draft",
+    "close",
+    "reopen",
+    "update-branch",
+    "enable-auto-merge",
+    "disable-auto-merge",
+    "revert",
+    "approve-workflows",
+  ],
+  gitlab: [
+    "merge",
+    "ready",
+    "draft",
+    "close",
+    "reopen",
+    "update-branch",
+    "enable-auto-merge",
+    "disable-auto-merge",
+  ],
+  "azure-devops": [
+    "merge",
+    "ready",
+    "draft",
+    "close",
+    "reopen",
+    "enable-auto-merge",
+    "disable-auto-merge",
+  ],
+  // No endpoint reopens a declined pull request, and nothing documented moves one in or out of
+  // draft, so neither is offered rather than failing when pressed.
+  bitbucket: ["merge", "close"],
+};
+
+export function changeRequestActionsForKind(
+  kind: SourceControlProviderKind,
+): ReadonlyArray<PullRequestAction> {
+  return CHANGE_REQUEST_ACTIONS[kind] ?? [];
+}
 
 export interface ChangeRequestPresentation {
   readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";

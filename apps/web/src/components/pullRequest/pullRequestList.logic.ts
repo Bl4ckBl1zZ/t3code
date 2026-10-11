@@ -1257,3 +1257,26 @@ export function settlePullRequestOverrides<Entry extends PullRequestListEntry>(
   }
   return kept.size === overrides.size ? overrides : kept;
 }
+
+/**
+ * Which actions each host can take on a listed row, before any row's detail is read. Hosts are
+ * matched by the host summary; a server that does not report actions per host only ever offered
+ * quick actions on GitHub, so that is what it keeps getting.
+ */
+export function pullRequestHostActions(
+  providers: ReadonlyArray<PullRequestListResult["providers"][number]>,
+): (
+  entry: Pick<EnvironmentPullRequestEntry, "host" | "provider">,
+) => ReadonlySet<PullRequestAction> {
+  const byHost = new Map(
+    providers.flatMap((provider) =>
+      provider.actions === undefined
+        ? []
+        : [[provider.host.toLowerCase(), new Set(provider.actions)] as const],
+    ),
+  );
+  const legacy = new Set<PullRequestAction>(["close", "merge", "ready", "reopen"]);
+  const none = new Set<PullRequestAction>();
+  return (entry) =>
+    byHost.get(entry.host?.toLowerCase() ?? "") ?? (entry.provider === "github" ? legacy : none);
+}

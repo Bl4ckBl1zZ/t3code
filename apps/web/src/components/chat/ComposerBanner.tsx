@@ -164,6 +164,16 @@ function Root({
         "min-w-0 px-1 py-(--composer-banner-padding-block) after:block after:h-(--chat-composer-attachment-overlap) text-xs/4 [--composer-banner-icon-column:--spacing(7)] [--composer-banner-padding-block:--spacing(1)] sm:[--composer-banner-icon-column:--spacing(6)]",
         density === "comfortable" && "[--composer-banner-padding-block:--spacing(1.25)]",
         width === "content" ? "w-fit max-w-full flex-none" : "@container",
+        // The first row's last action sits in the banner's corner: its outer corner follows the
+        // banner's curve (2xl minus the 1 spacing inset), and floating banners curve below too.
+        // Actions may also arrive grouped in one wrapper element (usage-limit recovery).
+        "[&>[data-composer-banner-row]:first-child>[data-slot=composer-banner-actions]>[data-slot=button]:last-child]:rounded-se-xl",
+        "[&>[data-composer-banner-row]:first-child>[data-slot=composer-banner-actions]>:last-child>[data-slot=button]:last-of-type]:rounded-se-xl",
+        "[&>:first-child>[data-composer-banner-row]:first-child>[data-slot=composer-banner-actions]>[data-slot=button]:last-child]:rounded-se-xl",
+        placement === "floating" && [
+          "[&>[data-composer-banner-row]:only-child>[data-slot=composer-banner-actions]>[data-slot=button]:last-child]:rounded-ee-xl",
+          "[&>[data-composer-banner-row]:only-child>[data-slot=composer-banner-actions]>:last-child>[data-slot=button]:last-of-type]:rounded-ee-xl",
+        ],
         className,
       )}
       data-slot="composer-banner"
@@ -190,7 +200,9 @@ function Row({
       "not-has-[>[data-slot=composer-banner-actions]]:grid-cols-[var(--composer-banner-icon-column)_minmax(0,1fr)]",
       "[&:is(button)]:cursor-pointer [&:is(button)]:rounded-md [&:is(button)]:focus-visible:outline-2 [&:is(button)]:focus-visible:-outline-offset-2 [&:is(button)]:focus-visible:outline-ring",
       // Actions share the title row while the title fits and move below it otherwise.
-      layout === "wrap-actions" && "flex flex-wrap *:data-[slot=composer-banner-content]:grow",
+      // The content's max width keeps it beside the icon, so a long title truncates instead of wrapping.
+      layout === "wrap-actions" &&
+        "flex flex-wrap *:data-[slot=composer-banner-content]:max-w-[calc(100%-var(--composer-banner-icon-column)-var(--spacing))] *:data-[slot=composer-banner-content]:grow",
       className,
     ),
     "data-composer-banner-row": "true",

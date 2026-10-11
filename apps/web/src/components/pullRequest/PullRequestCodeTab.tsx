@@ -37,7 +37,7 @@ import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
-import { canEditPullRequestComment } from "./pullRequestEditing.logic";
+import { canEditPullRequestComment, canResolvePullRequestThread } from "./pullRequestEditing.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
@@ -191,6 +191,7 @@ function getReviewPositionAnchor(position: PullRequestReviewPosition): {
  * drafted rather than being posted as it is typed.
  */
 export function PullRequestCodeTab({
+  scrollerRef,
   environmentId,
   reference,
   detail,
@@ -203,6 +204,7 @@ export function PullRequestCodeTab({
   onRefresh,
   refreshToken = 0,
 }: {
+  scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   detail: PullRequestDetailView;
@@ -863,7 +865,7 @@ export function PullRequestCodeTab({
         thread={thread}
         workspaceRoot={detail.workspaceRoot}
         canReply={review.reply}
-        canResolve={review.resolve}
+        canResolve={review.resolve && canResolvePullRequestThread(detail, thread)}
         canReact={detail.capabilities.reactions === true}
         environmentId={environmentId}
         reference={reference}
@@ -895,7 +897,11 @@ export function PullRequestCodeTab({
         }
         // A conversation on a line is made of review comments, whatever the host filed them as.
         canEditComment={(comment) =>
-          canEditPullRequestComment(detail, { author: comment.author, kind: "review-comment" })
+          canEditPullRequestComment(detail, {
+            author: comment.author,
+            kind: "review-comment",
+            canEdit: comment.canEdit,
+          })
         }
         onEditComment={(commentId, body) =>
           runThreadCommand("The comment could not be saved", () =>
@@ -1319,7 +1325,9 @@ export function PullRequestCodeTab({
           inside an overflowing element tracks the content's bottom edge, which would carry
           the trigger away with the first scroll. */}
       <div className="relative min-h-0 min-w-0 flex-1">
-        <div className="h-full overflow-auto">{body}</div>
+        <div ref={scrollerRef} className="h-full overflow-auto">
+          {body}
+        </div>
         {reviewOverlay}
       </div>
     </div>
@@ -1499,6 +1507,7 @@ export function PullRequestCodeTab({
             // interaction, but its native host outline clips and competes with the focus
             // indicators on its actual controls.
             className="h-full overflow-auto [scrollbar-gutter:stable]"
+            containerRef={scrollerRef}
             items={items}
             selectedLines={selectedLines}
             onSelectedLinesChange={setSelectedLines}

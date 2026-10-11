@@ -201,6 +201,35 @@ function makeService(input: {
   );
 }
 
+it.effect("reports each host's actions with its summary, so rows can offer them unread", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/repo",
+          repository: "acme/web",
+          provider: "bitbucket",
+          host: "bitbucket.org",
+        }),
+      ],
+      providers: [
+        fakeProvider("bitbucket", {
+          capabilities: {
+            ...fakeProvider("bitbucket").capabilities,
+            actions: ["merge", "close"],
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(result.providers[0]?.actions, ["merge", "close"]);
+  }),
+);
+
 it.effect("lists GitHub Enterprise PRs for a stored unknown repository after host discovery", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

@@ -1,3 +1,4 @@
+import { changeRequestActionsForKind } from "@t3tools/shared/sourceControl";
 import * as Effect from "effect/Effect";
 import type {
   PullRequestActor,
@@ -21,18 +22,7 @@ import type { GitHubViewerAccess, GitHubWorkflowRunApproval } from "./gitHubPull
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
   comment: true,
-  actions: [
-    "merge",
-    "ready",
-    "draft",
-    "close",
-    "reopen",
-    "update-branch",
-    "enable-auto-merge",
-    "disable-auto-merge",
-    "revert",
-    "approve-workflows",
-  ],
+  actions: [...changeRequestActionsForKind("github")],
   mergeMethods: ["merge", "squash", "rebase"],
   updateMethods: ["merge", "rebase"],
   search: true,

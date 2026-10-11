@@ -611,6 +611,8 @@ export const OrchestrationV2Run = Schema.Struct({
   contextHandoffId: Schema.NullOr(ContextHandoffId),
   /** Links server-generated restart continuations to the interrupted run. */
   restartContinuationOfRunId: Schema.optional(RunId),
+  /** The delegated task this run answers, including a follow-up in an existing child thread. */
+  delegatedTaskId: Schema.optional(NodeId),
   /**
    * Set on wake runs (background notifications, delegated task results,
    * restart continuations): when the work they continue started. Read it
@@ -1172,6 +1174,9 @@ export const OrchestrationV2ProviderTurnTokenUsage = Schema.Struct({
   cachedInputTokens: Schema.optional(NonNegativeInt),
   outputTokens: Schema.optional(NonNegativeInt),
   reasoningOutputTokens: Schema.optional(NonNegativeInt),
+  /** Prompt cache lifetime the provider wrote with this report. Clients treat
+      the cache as cold once `updatedAt` is this old. */
+  promptCacheTtlMs: Schema.optional(PositiveInt),
   /** ISO timestamp of the provider's report; string so wire encoding is stable. */
   updatedAt: Schema.String,
 });
@@ -3134,6 +3139,8 @@ export const OrchestrationV2Command = Schema.Union([
     branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    /** Reject unless no message or run has landed on this thread. */
+    expectedEmpty: Schema.optional(Schema.Boolean),
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Absent leaves the link alone; null unlinks. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -3304,6 +3311,14 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     messageId: MessageId,
+  }),
+  /** Stops one provider-native child while its owning run keeps working. */
+  Schema.Struct({
+    type: Schema.Literal("subagent.stop"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    subagentId: NodeId,
   }),
   /**
    * Stop. Besides the run, it ends the thread's pull request watches, drops

@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { HttpClient } from "effect/unstable/http";
 import type { AcpError } from "effect-acp/errors";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -44,6 +45,7 @@ import {
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityAdapterV2 } from "../../orchestration-v2/Adapters/AntigravityAdapterV2.ts";
 import { makeAntigravityProvider } from "../Layers/AntigravityProvider.ts";
+import { makeAntigravityUsageProbe } from "../antigravityUsageLimits.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import {
@@ -67,6 +69,7 @@ export type AntigravityDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
+  | HttpClient.HttpClient
   | ModelManifest.ModelManifest
   | Path.Path
   | ProviderEventLoggers
@@ -85,6 +88,7 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
       const idAllocator = yield* IdAllocatorV2;
       const nativeLogger = yield* makeAcpNativeLoggerFactory();
       const fileSystem = yield* FileSystem.FileSystem;
+      const httpClient = yield* HttpClient.HttpClient;
       const path = yield* Path.Path;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const serverConfig = yield* ServerConfig;
@@ -364,9 +368,20 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
         };
       });
 
+      const usage = yield* makeAntigravityUsageProbe({
+        profileDirectory,
+        authMethod: auth.authMethod,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      );
       const provider = yield* makeAntigravityProvider(settings, {
         stampIdentity: classifyModels,
         probe,
+        probeUsage: usage.probe,
+        clearUsage: usage.clear,
         auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
         supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),

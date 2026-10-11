@@ -1,3 +1,4 @@
+import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import {
   orchestrationV2TurnItemStatusIsTerminal,
   type EnvironmentId,
@@ -277,8 +278,8 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
             </span>
             {item.additions !== undefined || item.deletions !== undefined ? (
               <span>
-                <span className="text-emerald-600">+{item.additions ?? 0}</span>{" "}
-                <span className="text-destructive">-{item.deletions ?? 0}</span>
+                <span className="text-emerald-600">+{formatDiffCount(item.additions ?? 0)}</span>{" "}
+                <span className="text-destructive">-{formatDiffCount(item.deletions ?? 0)}</span>
               </span>
             ) : null}
             {item.runId !== null ? (

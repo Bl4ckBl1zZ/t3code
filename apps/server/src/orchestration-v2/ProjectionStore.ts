@@ -246,6 +246,11 @@ export type ProjectionRecords<K extends ProjectionRecordField> = Pick<
 
 export interface ShellSnapshotOptions {
   readonly location?: "active" | "archive";
+  /**
+   * Reads only this project's threads. Fork sources in other projects still
+   * load, so visible item counts match the unscoped snapshot.
+   */
+  readonly projectId?: ProjectId;
 }
 
 export interface ProjectionStoreV2Shape {
@@ -3411,6 +3416,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
+              -- Keep bindings outermost: one provider instance can hold every session.
               FROM orchestration_v2_projection_provider_session_bindings binding
               CROSS JOIN orchestration_v2_projection_provider_sessions session
                 ON session.provider_session_id = binding.provider_session_id
@@ -3657,7 +3663,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
-    const selectShellThreadRows = (threadId?: ThreadId, location?: "active" | "archive") =>
+    const selectShellThreadRows = (
+      threadId?: ThreadId,
+      { location, projectId }: ShellSnapshotOptions = {},
+    ) =>
       sql<ShellThreadRow>`
             SELECT
               t.thread_id,
@@ -3923,6 +3932,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               LIMIT 1
             ) AND blocked.status = 'failed'
             WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}${
+              projectId === undefined ? sql`` : sql` AND t.project_id = ${projectId}`
+            }${
               location === "active"
                 ? sql` AND json_extract(t.payload_json, '$.archivedAt') IS NULL`
                 : location === "archive"
@@ -4108,7 +4119,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const readShellSnapshotRows = (options: ShellSnapshotOptions | undefined) =>
       Effect.gen(function* () {
-        const targetThreadRows = yield* selectShellThreadRows(undefined, options?.location);
+        const targetThreadRows = yield* selectShellThreadRows(undefined, options);
         const targetThreadIds = new Set(
           targetThreadRows.map((row) => ThreadId.make(row.thread_id)),
         );
@@ -4505,6 +4516,12 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           const existing = (yield* Ref.get(replayState)).projections;
           const selectedThreadIds = [...existing.entries()]
             .filter(([, projection]) => {
+              if (
+                options?.projectId !== undefined &&
+                projection.thread.projectId !== options.projectId
+              ) {
+                return false;
+              }
               if (options?.location === "active") return projection.thread.archivedAt === null;
               if (options?.location === "archive") return projection.thread.archivedAt !== null;
               return true;

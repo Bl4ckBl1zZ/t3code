@@ -125,6 +125,7 @@ function commandThreadIds(command: OrchestrationV2ServerCommand): ReadonlyArray<
     case "prepared-run.retry":
     case "run.restart-continuation.prepare":
     case "run.restart-continuation.clear":
+    case "subagent.stop":
     case "run.interrupt":
     case "thread.background-work.settle":
     case "thread.stop":

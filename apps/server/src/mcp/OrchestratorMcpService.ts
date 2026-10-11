@@ -53,6 +53,7 @@ import {
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ProjectId,
+  type RunId,
   type RuntimeMode,
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
@@ -124,6 +125,7 @@ const DEFAULT_THREAD_ITEM_MAX_CHARS = 20_000;
 
 interface ResolvedTarget {
   readonly modelSelection: ModelSelection;
+  readonly supportedRuntimeModes: ReadonlyArray<RuntimeMode> | undefined;
 }
 
 type TerminalTaskStatus = Extract<
@@ -365,6 +367,8 @@ function delegatedTaskRun(
   childProjection: OrchestrationV2ThreadProjection,
   task: OrchestrationV2Subagent,
 ): OrchestrationV2Run | undefined {
+  const taskRun = childProjection.runs.find((run) => run.delegatedTaskId === task.id);
+  if (taskRun !== undefined) return taskRun;
   const spawnTransfer = childProjection.contextTransfers.find(
     (transfer) =>
       transfer.type === "subagent_spawn" &&
@@ -436,21 +440,66 @@ function isTerminalTaskStatus(
   );
 }
 
-function directAppOwnedChildTask(
+/**
+ * The parent's app-owned tasks whose runs this page shows: a follow-up task
+ * owns the runs recorded for it, the original task owns the rest.
+ */
+function directAppOwnedChildTasks(
   parent: OrchestrationV2ThreadProjection,
   target: OrchestrationV2ThreadProjection,
-): OrchestrationV2Subagent | undefined {
+  returnedRunIds: ReadonlySet<RunId | null>,
+): ReadonlyArray<OrchestrationV2Subagent> {
   if (
     target.thread.lineage.parentThreadId !== parent.thread.id ||
     target.thread.lineage.relationshipToParent !== "subagent"
   ) {
-    return undefined;
+    return [];
   }
-  return parent.subagents.find(
+  const original = parent.subagents.find(
     (task) =>
       task.origin === "app_owned" &&
       task.threadId === parent.thread.id &&
+      task.id ===
+        (target.thread.forkedFrom?.type === "node" ? target.thread.forkedFrom.nodeId : undefined) &&
       task.childThreadId === target.thread.id,
+  );
+  const taskIds = new Set(
+    target.runs
+      .filter((run) => returnedRunIds.has(run.id))
+      .map((run) => run.delegatedTaskId ?? original?.id),
+  );
+  return parent.subagents.filter(
+    (task) =>
+      taskIds.has(task.id) &&
+      task.origin === "app_owned" &&
+      task.childThreadId === target.thread.id,
+  );
+}
+
+/** The result transfer one task published; a follow-up never reuses the original's. */
+function taskResultTransfer(
+  parent: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers">,
+  child: OrchestrationV2ThreadProjection,
+  task: OrchestrationV2Subagent,
+) {
+  const originalRun = delegatedTaskRun(child, task);
+  const resultRunIds = new Set(
+    child.runs
+      .filter(
+        (run) =>
+          run.delegatedTaskId === task.id ||
+          (originalRun?.delegatedTaskId === undefined && run.delegatedTaskId === undefined),
+      )
+      .map((run) => run.id),
+  );
+  if (originalRun !== undefined) resultRunIds.add(originalRun.id);
+  return parent.contextTransfers.find(
+    (transfer) =>
+      transfer.type === "subagent_result" &&
+      transfer.sourceThreadId === task.childThreadId &&
+      transfer.targetThreadId === parent.thread.id &&
+      ((transfer.sourcePoint.runId !== undefined && resultRunIds.has(transfer.sourcePoint.runId)) ||
+        (transfer.sourcePoint.runId === undefined && originalRun?.delegatedTaskId === undefined)),
   );
 }
 
@@ -460,12 +509,17 @@ function directAppOwnedChildTask(
  * automatic delivery redundant.
  */
 function pageIncludesTerminalTaskResult(input: {
+  readonly parent: OrchestrationV2ThreadProjection;
   readonly page: ReadonlyArray<OrchestrationV2ThreadProjection["visibleTurnItems"][number]>;
   readonly task: OrchestrationV2Subagent;
   readonly target: OrchestrationV2ThreadProjection;
   readonly maxChars: number;
 }): boolean {
-  const run = delegatedTaskRun(input.target, input.task);
+  const transfer = taskResultTransfer(input.parent, input.target, input.task);
+  const run =
+    transfer?.sourcePoint.runId === undefined
+      ? delegatedTaskRun(input.target, input.task)
+      : input.target.runs.find((candidate) => candidate.id === transfer.sourcePoint.runId);
   if (run === undefined || !isTerminalTaskStatus(taskStatusForRun(run))) return false;
 
   const result = subagentResultForRun(input.target, run);
@@ -502,19 +556,46 @@ function interactionModeRank(mode: ProviderInteractionMode): number {
   return mode === "plan" ? 0 : 1;
 }
 
+/**
+ * The mode a new thread runs in: the requested mode, else the parent's, never
+ * broader than the parent's. Pass `target` when the thread runs on a known
+ * provider. A provider runs a mode it does not offer as Supervised, so an
+ * explicit request for one is refused, and an inherited one steps down to the
+ * broadest mode the provider offers.
+ */
 export function resolveRuntimeMode(
   parentMode: RuntimeMode,
   requested: OrchestratorMcpRuntimeMode | undefined,
+  target?: Pick<ResolvedTarget, "modelSelection" | "supportedRuntimeModes">,
 ): Effect.Effect<RuntimeMode, OrchestratorMcpFailure> {
-  const resolved = requested === undefined || requested === "inherit" ? parentMode : requested;
-  return runtimeModeRank(resolved) > runtimeModeRank(parentMode)
-    ? Effect.fail(
-        failure(
-          "runtime_mode_escalation_denied",
-          `Child runtime mode ${resolved} is broader than parent mode ${parentMode}.`,
-        ),
-      )
-    : Effect.succeed(resolved);
+  const inherited = requested === undefined || requested === "inherit";
+  const resolved = inherited ? parentMode : requested;
+  if (runtimeModeRank(resolved) > runtimeModeRank(parentMode)) {
+    return Effect.fail(
+      failure(
+        "runtime_mode_escalation_denied",
+        `Child runtime mode ${resolved} is broader than parent mode ${parentMode}.`,
+      ),
+    );
+  }
+  const supported = target?.supportedRuntimeModes;
+  if (supported === undefined || supported.length === 0 || supported.includes(resolved)) {
+    return Effect.succeed(resolved);
+  }
+  if (!inherited) {
+    return Effect.fail(
+      failure(
+        "invalid_request",
+        `Provider ${target?.modelSelection.instanceId} does not offer runtime mode ${resolved}, so it would run as approval-required. Use one of: ${supported.join(", ")}.`,
+      ),
+    );
+  }
+  return Effect.succeed(
+    supported
+      .filter((mode) => runtimeModeRank(mode) <= runtimeModeRank(resolved))
+      .toSorted((left, right) => runtimeModeRank(right) - runtimeModeRank(left))[0] ??
+      "approval-required",
+  );
 }
 
 export function resolveInteractionMode(
@@ -1203,6 +1284,7 @@ const make = Effect.gen(function* () {
             : requestedOptions === undefined
               ? { instanceId, model }
               : { instanceId, model, options: requestedOptions },
+        supportedRuntimeModes: provider.supportedRuntimeModes,
       };
     });
 
@@ -1237,14 +1319,29 @@ const make = Effect.gen(function* () {
       const childRun = delegatedTaskRun(childProjection, task);
       const terminalRun = latestTerminalResultRun(childProjection, childRun);
       const progress = delegatedTaskProgress(childProjection);
+      // A follow-up task reads only the runs recorded for it.
+      const taskRuns =
+        childRun?.delegatedTaskId === task.id
+          ? childProjection.runs.filter((run) => run.delegatedTaskId === task.id)
+          : undefined;
+      const taskResultRun =
+        taskRuns === undefined
+          ? progress.resultRun
+          : taskRuns.toSorted((a, b) => b.ordinal - a.ordinal)[0];
+      const taskWorkState =
+        taskRuns === undefined
+          ? progress.state
+          : isTerminalTaskStatus(taskStatusForRun(taskResultRun))
+            ? "result_available"
+            : "working";
       // A restart cut the child's run and its continuation has not settled yet.
       const heldForRestart =
         task.result === null &&
-        progress.state === "result_available" &&
-        progress.resultRun !== undefined &&
-        delegatedTaskAwaitsRestartContinuation(childProjection.runs, progress.resultRun);
+        taskWorkState === "result_available" &&
+        taskResultRun !== undefined &&
+        delegatedTaskAwaitsRestartContinuation(taskRuns ?? childProjection.runs, taskResultRun);
       const workState =
-        task.result !== null ? "result_available" : heldForRestart ? "working" : progress.state;
+        task.result !== null ? "result_available" : heldForRestart ? "working" : taskWorkState;
       const status =
         task.result !== null
           ? taskStatusForRun(
@@ -1256,15 +1353,15 @@ const make = Effect.gen(function* () {
                 : childRun,
             )
           : workState === "result_available"
-            ? taskStatusForRun(progress.resultRun ?? childRun)
-            : taskStatusForRun(childRun) === "queued"
+            ? taskStatusForRun(taskResultRun ?? childRun)
+            : taskStatusForRun(taskResultRun ?? childRun) === "queued"
               ? "queued"
               : "running";
       const derivedResult =
         task.result !== null
           ? task.result
-          : progress.resultRun !== undefined && isTerminalTaskStatus(status)
-            ? subagentResultForRun(childProjection, progress.resultRun).text
+          : taskResultRun !== undefined && isTerminalTaskStatus(status)
+            ? subagentResultForRun(childProjection, taskResultRun).text
             : null;
       const resultTransfers = parentProjection.contextTransfers.filter(
         (transfer) =>
@@ -1282,7 +1379,7 @@ const make = Effect.gen(function* () {
               ? resultTransfers.find((transfer) => transfer.sourcePoint.runId === undefined)
               : undefined) ??
             null);
-      const resultTransfer = resultTransfers[0] ?? null;
+      const resultTransfer = taskResultTransfer(parentProjection, childProjection, task) ?? null;
       const terminalStatus = terminalRun === undefined ? null : taskStatusForRun(terminalRun);
       const response = {
         taskId: task.id,
@@ -1774,6 +1871,10 @@ const make = Effect.gen(function* () {
                     ? {}
                     : { options: model.capabilities.optionDescriptors }),
                 })) ?? [],
+              ...(provider.supportedRuntimeModes === undefined ||
+              provider.supportedRuntimeModes.length === 0
+                ? {}
+                : { runtimeModes: [...provider.supportedRuntimeModes] }),
               canRunChildTask: constraints.length === 0,
               canRunCrossProviderChildTask: constraints.length === 0,
               constraints: [...constraints],
@@ -1813,7 +1914,11 @@ const make = Effect.gen(function* () {
           target: input.target,
           providers,
         });
-        const runtimeMode = yield* resolveRuntimeMode(parent.thread.runtimeMode, input.runtimeMode);
+        const runtimeMode = yield* resolveRuntimeMode(
+          parent.thread.runtimeMode,
+          input.runtimeMode,
+          target,
+        );
         const interactionMode = yield* resolveInteractionMode(
           parent.thread.interactionMode,
           input.interactionMode,
@@ -2084,6 +2189,24 @@ const make = Effect.gen(function* () {
         if (workspaceStrategy.type === "existing_worktree") {
           yield* assertProjectWorktree(project.workspaceRoot, workspaceStrategy.worktreePath);
         }
+        // A base ref that cannot resolve would leave the launch without its
+        // worktree, so it is refused while the agent can still act on it.
+        if (workspaceStrategy.type === "worktree") {
+          yield* threadLaunch
+            .checkWorktreeBase({ projectId, workspaceStrategy })
+            .pipe(
+              Effect.mapError((error) =>
+                failure(
+                  "invalid_request",
+                  `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
+                    workspaceStrategy.startFromOrigin === true
+                      ? "; the project has no origin remote to fetch it from."
+                      : ", or set startFromOrigin:true if it exists only on origin."
+                  }`,
+                ),
+              ),
+            );
+        }
         const providers = yield* loadProviders;
         const target = yield* resolveTargetRechecking({
           // A client has no model of its own, so it inherits the project's default.
@@ -2176,6 +2299,7 @@ const make = Effect.gen(function* () {
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
                 request.runtimeMode,
+                target,
               );
               const interactionMode = yield* resolveInteractionMode(
                 parent.thread.interactionMode,
@@ -2387,21 +2511,28 @@ const make = Effect.gen(function* () {
         ]);
         // Reading a delegated child's result acknowledges it, which only
         // the parent thread itself can do.
-        const task =
+        const returnedRunIds = new Set(
+          page
+            .filter((row) => row.sourceThreadId === target.thread.id)
+            .map((row) => row.item.runId),
+        );
+        const tasks =
           parent === undefined || scope.thread === undefined
-            ? undefined
-            : directAppOwnedChildTask(parent, target);
-        if (
-          task !== undefined &&
-          pageIncludesTerminalTaskResult({ page, task, target, maxChars })
-        ) {
-          yield* readTask(
-            scope as McpThreadInvocationScope,
-            task.id,
-            false,
-            true,
-            "thread-read-acknowledge",
-          );
+            ? []
+            : directAppOwnedChildTasks(parent, target, returnedRunIds);
+        for (const task of tasks) {
+          if (
+            parent !== undefined &&
+            pageIncludesTerminalTaskResult({ parent, page, task, target, maxChars })
+          ) {
+            yield* readTask(
+              scope as McpThreadInvocationScope,
+              task.id,
+              false,
+              true,
+              "thread-read-acknowledge",
+            );
+          }
         }
         return {
           thread: threadDetail(target, shell, yield* DateTime.now),
@@ -2458,6 +2589,9 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           messageId,
           runId: result.run.id,
+          ...(result.run.delegatedTaskId === undefined
+            ? {}
+            : { taskId: result.run.delegatedTaskId }),
           status: result.run.status,
           delivery: result.delivery,
         } satisfies OrchestratorMcpThreadSendResult;

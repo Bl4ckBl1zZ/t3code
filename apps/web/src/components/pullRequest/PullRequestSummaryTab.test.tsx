@@ -100,6 +100,7 @@ afterEach(() => {
 function render(value = detail) {
   return (
     <PullRequestSummaryTab
+      scrollerRef={() => {}}
       environmentId={EnvironmentId.make("environment")}
       reference={value}
       detail={value}

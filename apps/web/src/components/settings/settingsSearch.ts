@@ -1,3 +1,4 @@
+import { HOSTED_APP_CHANNEL } from "~/branding";
 import { isElectron } from "~/env";
 import { isWindowsPlatform } from "~/lib/utils";
 import { BUILT_IN_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
@@ -7,6 +8,7 @@ import { commandLabel } from "./KeybindingsSettings.logic";
 export type SettingsPath =
   | "/settings/projects"
   | "/settings/general"
+  | "/settings/diagnostics"
   | "/settings/appearance"
   | "/settings/snap-shot"
   | "/settings/keybindings"
@@ -29,6 +31,9 @@ export interface SettingsSearchItem {
   // Its row only renders on Windows desktop, so other desktop platforms must
   // not expose a result that points to a missing anchor.
   readonly windowsOnly?: boolean;
+  // Its row renders only where the release channel can change: the desktop
+  // app, or a hosted web build deployed with a channel.
+  readonly releaseChannelOnly?: boolean;
 }
 
 /**
@@ -37,6 +42,7 @@ export interface SettingsSearchItem {
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
+  "/settings/diagnostics": "Diagnostics",
   "/settings/projects": "Projects",
   "/settings/appearance": "Appearance",
   "/settings/snap-shot": "SnapShots",
@@ -408,6 +414,19 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "app-version",
+    title: "Version",
+    to: "/settings/general",
+    searchTerms: ["about check for updates download install upgrade release"],
+  },
+  {
+    id: "update-track",
+    title: "Update track",
+    to: "/settings/general",
+    searchTerms: ["release channel stable latest nightly prerelease"],
+    releaseChannelOnly: true,
+  },
+  {
     id: "cli-command",
     title: "t3 command",
     to: "/settings/general",
@@ -424,6 +443,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "diagnostics",
     title: "Diagnostics",
     to: "/settings/general",
+  },
+  {
+    id: "telemetry-export",
+    title: "OpenTelemetry export",
+    to: "/settings/diagnostics",
+    targetId: "telemetry-export",
+    searchTerms: ["OTel OTLP telemetry export endpoints traces metrics Grafana"],
   },
   {
     id: "legacy-plan-mode",
@@ -596,6 +622,7 @@ export function searchSettings(
   return items.filter(
     (item) =>
       (isElectron || item.desktopOnly !== true) &&
+      (isElectron || HOSTED_APP_CHANNEL !== null || item.releaseChannelOnly !== true) &&
       (!item.windowsOnly ||
         isWindowsPlatform(typeof navigator === "undefined" ? "" : navigator.platform)) &&
       normalizeSearchText([item.title, ...(item.searchTerms ?? [])].join(" ")).includes(

@@ -586,6 +586,7 @@ function AboutVersionSection() {
   return (
     <>
       <SettingsRow
+        id={searchableSetting("app-version").id}
         title={<AboutVersionTitle />}
         description={description}
         control={
@@ -628,7 +629,7 @@ function AboutVersionSection() {
       ) : null}
       {hasDesktopBridge ? (
         <SettingsRow
-          title="Update track"
+          {...searchableSetting("update-track")}
           description="Stable follows full releases. Nightly follows the nightly desktop channel and can switch back to stable immediately."
           control={
             <Select
@@ -659,7 +660,7 @@ function AboutVersionSection() {
         />
       ) : selectedHostedAppChannel ? (
         <SettingsRow
-          title="Update track"
+          {...searchableSetting("update-track")}
           description="Switches the hosted app release channel."
           control={
             <Select
@@ -3537,6 +3538,7 @@ export function GeneralSettingsPanel() {
           <AboutVersionSection />
         ) : (
           <SettingsRow
+            id={searchableSetting("app-version").id}
             title={<AboutVersionTitle />}
             description="Current version of the application."
           />
@@ -3591,7 +3593,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps = {}) {
     resolveSelectedProviderEnvironmentId(options, null, primary?.environmentId ?? null);
   const selected = options.find((environment) => environment.environmentId === environmentId);
   return (
-    <SettingsPageContainer width="wide">
+    <SettingsPageContainer>
       <div className="flex flex-wrap items-center gap-2" aria-label="Provider settings environment">
         {options.map((environment) => (
           <Button

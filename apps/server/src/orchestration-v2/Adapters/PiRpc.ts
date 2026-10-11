@@ -29,6 +29,10 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import {
+  MAX_TOOL_OUTPUT_IMAGES,
+  MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH,
+} from "@t3tools/shared/toolOutput";
 
 import { signalProcessGroup } from "../../process/processGroup.ts";
 
@@ -124,7 +128,11 @@ interface PendingPiRequest {
   readonly deferred: Deferred.Deferred<unknown, PiRpcError>;
 }
 
-const MAX_PI_RECORD_CHARS = 8 * 1024 * 1024;
+// MCP completion events carry images in both model content and the script
+// CallToolResult. Allow the shared image budget twice, plus bounded JSON/text
+// overhead, before dropping an extension's oversized record.
+const MAX_PI_RECORD_CHARS =
+  2 * MAX_TOOL_OUTPUT_IMAGES * MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH + 8 * 1024 * 1024;
 
 function makeJsonlFramer() {
   let buffer = "";

@@ -12,6 +12,8 @@ import {
   AuthOrchestrationReadScope,
   AuthSourceControlWriteScope,
   AuthPreviewOperateScope,
+  CommandId,
+  ProjectId,
   ThreadId,
   AuthRelayReadScope,
   AuthRelayWriteScope,
@@ -368,6 +370,61 @@ describe("RPC scope middleware", () => {
         ),
       ).toEqual([{ providerInstanceId: "hermes", kind: "reconnected" }]);
       expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("project mutation authorization", () => {
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.projectsMutate> =>
+        tag !== WS_METHODS.projectsMutate,
+    ),
+  );
+  const projectId = ProjectId.make("project-1");
+  const commandId = CommandId.make("command-1");
+
+  it.effect("requires the settings grant only when a mutation carries scripts", () =>
+    Effect.gen(function* () {
+      let handled = 0;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.projectsMutate, () =>
+              Effect.sync(() => {
+                handled++;
+                return {
+                  id: projectId,
+                  title: "Project",
+                  workspaceRoot: "/tmp/project",
+                  defaultModelSelection: null,
+                  scripts: [],
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                  updatedAt: "2026-01-01T00:00:00.000Z",
+                  deletedAt: null,
+                };
+              }),
+            ),
+            rpcScopeAuthorizationLayer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+          ),
+        ),
+      );
+      yield* client[WS_METHODS.projectsMutate]({
+        type: "project.update",
+        commandId,
+        projectId,
+        title: "Renamed",
+      });
+      expect(handled).toBe(1);
+      expect(
+        yield* client[WS_METHODS.projectsMutate]({
+          type: "project.update",
+          commandId,
+          projectId,
+          scripts: [],
+        }).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthSettingsWriteScope });
+      expect(handled).toBe(1);
     }).pipe(Effect.scoped),
   );
 });

@@ -252,25 +252,57 @@ export function getNewProjectPathPreview(newProjectsRoot: string, name: string):
 }
 
 /**
- * The GitHub account a new project would be published under, or null when
- * GitHub is not ready on that environment. A ready GitHub with an unknown
- * account still publishes; `gh` picks the signed-in user.
+ * Who a new repository goes under on each host a new project can be published to, given the
+ * signed-in account. Hosts left out need a choice an account cannot make: a Bitbucket workspace,
+ * an Azure DevOps project.
  */
-export function getNewProjectGitHubTarget(
-  discovery: SourceControlDiscoveryResult | null,
-): { readonly account: string | null } | null {
-  if (!buildAddProjectRemoteSourceReadiness(discovery).github.ready) return null;
-  const github = discovery?.sourceControlProviders.find((provider) => provider.kind === "github");
-  return { account: github ? Option.getOrNull(github.auth.account) : null };
+const NEW_PROJECT_PUBLISH_HOSTS: ReadonlyArray<AddProjectRemoteProviderKind> = ["github", "gitlab"];
+
+/** A host a new project can be published to, and who the repository goes under there. */
+export interface NewProjectPublishTarget {
+  readonly kind: AddProjectRemoteProviderKind;
+  readonly label: string;
+  /** Null lets the host's CLI place it under the signed-in user. */
+  readonly owner: string | null;
 }
 
-/** `owner/folder` for publishing a new project, or just the folder for `gh` to place. */
-export function getNewProjectGitHubRepository(
-  target: { readonly account: string | null },
+/**
+ * The hosts a new project can be published to on that environment, GitHub first. A host is
+ * offered when it is ready; a ready host with an unknown account still publishes, and its CLI
+ * picks the signed-in user.
+ */
+export function getNewProjectPublishTargets(
+  discovery: SourceControlDiscoveryResult | null,
+): ReadonlyArray<NewProjectPublishTarget> {
+  const readiness = buildAddProjectRemoteSourceReadiness(discovery);
+  return NEW_PROJECT_PUBLISH_HOSTS.flatMap((kind) => {
+    if (!readiness[kind].ready) return [];
+    const provider = discovery?.sourceControlProviders.find((candidate) => candidate.kind === kind);
+    return [
+      {
+        kind,
+        label: addProjectRemoteSourceLabel(kind),
+        owner: provider ? Option.getOrNull(provider.auth.account) : null,
+      },
+    ];
+  });
+}
+
+/** The chosen host's target, or the first one when the choice is not on offer. */
+export function getNewProjectPublishTarget(
+  targets: ReadonlyArray<NewProjectPublishTarget>,
+  kind: SourceControlProviderKind | null,
+): NewProjectPublishTarget | null {
+  return targets.find((target) => target.kind === kind) ?? targets[0] ?? null;
+}
+
+/** `owner/folder` for publishing a new project, or just the folder for the host to place. */
+export function getNewProjectRepository(
+  target: Pick<NewProjectPublishTarget, "owner">,
   workspaceRoot: string,
 ): string {
   const folderName = workspaceRoot.split(/[\\/]/).findLast(Boolean) ?? "";
-  return target.account ? `${target.account}/${folderName}` : folderName;
+  return target.owner ? `${target.owner}/${folderName}` : folderName;
 }
 
 /**

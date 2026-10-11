@@ -1,6 +1,7 @@
 import {
   NodeId,
   CommandId,
+  type ModelSelection,
   OrchestrationV2DomainEvent,
   type OrchestrationV2PlanArtifact,
   OrchestrationV2StoredEvent,
@@ -20,6 +21,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { AgentScope } from "@t3tools/shared/AgentScope";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
@@ -237,6 +240,7 @@ export const layer: Layer.Layer<
     const idAllocator = yield* IdAllocatorV2;
     const projections = yield* ProjectionStoreV2;
     const threadCommands = yield* ThreadCommandExecutor;
+    const agentScope = yield* AgentScope;
 
     const makeDomainEvent = (
       input: ProviderEventIngestInput,
@@ -276,18 +280,32 @@ export const layer: Layer.Layer<
     /**
      * A native subagent's thread starts on the parent's model when the
      * provider names the real one later (a Claude agent file's model arrives
-     * with the subagent's first reply). Clients read the thread's model, so
-     * move the thread to the reported one. Thread commands rewrite the whole
-     * thread row under the thread's lock, so this read and write take it too.
+     * with the subagent's first reply). Clients read the thread's model and
+     * effort, so move the thread to the reported selection, or to the reported
+     * model alone when the provider reports no selection. Thread commands
+     * rewrite the whole thread row under the thread's lock, so this read and
+     * write take it too.
      */
     const syncSubagentThreadModel = Effect.fn("ProviderEventIngestor.syncSubagentThreadModel")(
       function* (input: ProviderEventIngestInput, subagent: OrchestrationV2Subagent) {
         const { childThreadId, model } = subagent;
-        if (subagent.origin !== "provider_native" || childThreadId === null || model === null) {
+        if (
+          subagent.origin !== "provider_native" ||
+          childThreadId === null ||
+          (model === null && subagent.modelSelection === undefined)
+        ) {
           return [];
         }
+        const reportedSelection = ({ modelSelection }: { modelSelection: ModelSelection }) =>
+          subagent.modelSelection ??
+          (model === null || model === modelSelection.model
+            ? modelSelection
+            : // The parent's options belong to the parent's model.
+              { instanceId: modelSelection.instanceId, model });
         const staleThread = projections.getThreadRecords(childThreadId, []).pipe(
-          Effect.map(({ thread }) => (thread.modelSelection.model === model ? null : thread)),
+          Effect.map(({ thread }) =>
+            modelSelectionsEqual(thread.modelSelection, reportedSelection(thread)) ? null : thread,
+          ),
           Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
         );
         // Nearly every update already matches; only a mismatch takes the lock.
@@ -301,10 +319,9 @@ export const layer: Layer.Layer<
             const event = yield* makeDomainEvent(input, {
               type: "thread.model-selection-updated",
               threadId: thread.id,
-              // The parent's options belong to the parent's model.
               payload: {
                 ...thread,
-                modelSelection: { instanceId: thread.modelSelection.instanceId, model },
+                modelSelection: reportedSelection(thread),
                 updatedAt: now,
               },
               occurredAt: now,
@@ -527,6 +544,11 @@ export const layer: Layer.Layer<
               return [];
             }
             const occurredAt = yield* DateTime.now;
+            // A turn that failed because systemd killed the agent's scope for
+            // memory would otherwise read as a plain provider crash.
+            const failure = (yield* agentScope.oomKilled(input.threadId))
+              ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
+              : input.event.failure;
             return [
               yield* makeDomainEvent(input, {
                 type: "turn-item.updated",
@@ -539,7 +561,7 @@ export const layer: Layer.Layer<
                   providerThreadId: input.event.providerThreadId,
                   providerTurnId: input.event.providerTurnId,
                   itemOrdinal: input.event.failureItemOrdinal,
-                  failure: input.event.failure,
+                  failure,
                   ...(input.event.retry === undefined ? {} : { retry: input.event.retry }),
                   ...(input.event.retryStartedAt === undefined
                     ? {}

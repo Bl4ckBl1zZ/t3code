@@ -1,7 +1,7 @@
 import {
-  AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  requiredScopesForProjectMutation,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -48,7 +48,9 @@ export const projectHttpApiLayer = HttpApiBuilder.group(
         "mutate",
         Effect.fn("environment.projects.mutate")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          for (const scope of requiredScopesForProjectMutation(args.payload)) {
+            yield* requireEnvironmentScope(scope);
+          }
           const mutation = args.payload;
           const operation =
             mutation.type === "project.create"

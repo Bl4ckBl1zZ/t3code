@@ -80,6 +80,7 @@ import {
 import { MarkdownMedia } from "./chat/MarkdownMedia";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
 import { CHAT_FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
+import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import {
   revealInFileExplorerLabelForKind,
@@ -1000,6 +1001,7 @@ function UncachedShikiCodeBlock({
 }
 
 interface MarkdownFileLinkProps {
+  environmentId: EnvironmentId | null;
   href: string;
   targetPath: string;
   iconPath: string;
@@ -1344,6 +1346,7 @@ function MarkdownExternalLinkContent({
 }
 
 const MarkdownFileLink = memo(function MarkdownFileLink({
+  environmentId,
   href,
   targetPath,
   iconPath,
@@ -1642,7 +1645,13 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
               }}
               onContextMenu={handleContextMenu}
             >
-              <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
+              <FileTagChipContent
+                path={iconPath}
+                environmentId={environmentId}
+                label={label}
+                theme={theme}
+                selectable
+              />
             </a>
           ) : (
             <button
@@ -1659,7 +1668,13 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
               onClick={handleContextMenu}
               onContextMenu={handleContextMenu}
             >
-              <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
+              <FileTagChipContent
+                path={iconPath}
+                environmentId={environmentId}
+                label={label}
+                theme={theme}
+                selectable
+              />
             </button>
           )
         }
@@ -1668,7 +1683,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         {/* The full path: the chip already shows the shortened form, and a link
             to the workspace root collapses to a bare label that repeats it. */}
         <div className="overflow-x-auto whitespace-nowrap scrollbar-thumb-border/78 scrollbar-track-transparent [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border/78 [&::-webkit-scrollbar-track]:bg-transparent">
-          {targetPath}
+          <WorkspaceEntryTooltip path={iconPath} label={targetPath} environmentId={environmentId} />
         </div>
       </TooltipPopup>
     </Tooltip>
@@ -1683,6 +1698,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.href === next.href &&
     previous.targetPath === next.targetPath &&
     previous.iconPath === next.iconPath &&
+    previous.environmentId === next.environmentId &&
     previous.displayPath === next.displayPath &&
     previous.workspaceRelativePath === next.workspaceRelativePath &&
     previous.line === next.line &&
@@ -1842,6 +1858,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
   ) => {
     return (
       <MarkdownFileLink
+        environmentId={environmentId}
         href={fileLinkMeta.targetPath}
         targetPath={fileLinkMeta.targetPath}
         iconPath={fileLinkMeta.filePath}
@@ -2014,6 +2031,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         : null;
       if (!fileLinkMeta) {
         const faviconHost = resolveExternalWebLinkHost(href);
+        const hasText = hastHasText(node);
         const isSameDocumentLink = href?.startsWith("#") ?? false;
         const unresolvedPathHref = faviconHost || isSameDocumentLink ? null : pathLikeHref(href);
         const onClick = props.onClick;
@@ -2021,6 +2039,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         const link = (
           <a
             {...props}
+            data-markdown-image-link={!hasText || undefined}
             href={href}
             target={isSameDocumentLink ? undefined : "_blank"}
             rel={isSameDocumentLink ? undefined : "noopener noreferrer"}

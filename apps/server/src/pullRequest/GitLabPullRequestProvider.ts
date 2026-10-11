@@ -1,3 +1,4 @@
+import { changeRequestActionsForKind } from "@t3tools/shared/sourceControl";
 import * as Effect from "effect/Effect";
 import type {
   PullRequestCapabilities,
@@ -17,16 +18,7 @@ import {
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
   comment: true,
-  actions: [
-    "merge",
-    "ready",
-    "draft",
-    "close",
-    "reopen",
-    "update-branch",
-    "enable-auto-merge",
-    "disable-auto-merge",
-  ],
+  actions: [...changeRequestActionsForKind("gitlab")],
   // GitLab offers all three, though a project settles on one; `mergeCapabilities` narrows it.
   mergeMethods: ["merge", "squash", "rebase"],
   // Rebase alone: GitLab moves a stale branch onto its target by replaying it, and has nothing

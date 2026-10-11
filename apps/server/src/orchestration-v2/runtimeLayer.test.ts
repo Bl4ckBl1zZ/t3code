@@ -1357,6 +1357,49 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("names what blocks settling a thread", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-settle-blocker-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-blocker-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-settle-blocker-project"),
+        title: "Settle blocker",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-settle-blocker",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-blocker-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-settle-blocker-message"),
+        text: "Keep this run active.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      const error = yield* orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("runtime-layer-settle-blocker-settle"),
+          threadId,
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "OrchestratorDispatchError");
+      assert.equal(error.cause, `Thread ${threadId} is still running. Stop it before settling.`);
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.settledOverride);
+    }),
+  );
+
   for (const action of ["answer", "dismiss", "reject-callback-dismiss"] as const) {
     it.effect(`handles V2 question action ${action} without a live session`, () =>
       Effect.gen(function* () {
@@ -2388,6 +2431,18 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         modelSelection,
         dispatchMode: { type: "start_immediately" },
       });
+
+      // A late automatic branch default must not reset a thread that already started.
+      const nonEmptyClaim = yield* orchestrator
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-layer-active-settle-empty-claim"),
+          threadId,
+          worktreePath: "/tmp/reassigned-after-message",
+          expectedEmpty: true,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(nonEmptyClaim, OrchestratorDispatchError);
 
       const error = yield* orchestrator
         .dispatch({

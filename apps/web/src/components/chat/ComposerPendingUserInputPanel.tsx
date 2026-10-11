@@ -102,14 +102,18 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     progress.selectedOptionLabels,
   ]);
 
-  // Clear auto-advance timer on unmount
+  // A delayed answer only advances its own question: navigating away (or
+  // unmounting) cancels the pending auto-advance.
   useEffect(() => {
-    return () => {
+    const clearAutoAdvance = () => {
       if (autoAdvanceTimerRef.current !== null) {
         window.clearTimeout(autoAdvanceTimerRef.current);
+        autoAdvanceTimerRef.current = null;
       }
     };
-  }, []);
+    if (activeQuestion?.id === undefined) clearAutoAdvance();
+    return clearAutoAdvance;
+  }, [activeQuestion?.id]);
 
   const handleOptionSelection = useCallback(
     (questionId: string, optionLabel: string) => {

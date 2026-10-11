@@ -17,10 +17,7 @@ describe("orchestrator MCP tool guidance", () => {
     assert.include(CreateThreadsTool.description ?? "", "call delegate_task");
     assert.include(DelegateTaskTool.description ?? "", "call delegate_task again");
     assert.include(DelegateTaskTool.description ?? "", "childThreadId is backing storage");
-    assert.include(
-      ThreadSendTool.description ?? "",
-      "Do not use a delegated task's childThreadId to start another review round",
-    );
+    assert.include(ThreadSendTool.description ?? "", "a requested follow-up creates a fresh task");
     assert.include(
       TaskCancelTool.description ?? "",
       "This includes later child-thread runs, even after the task is terminal",

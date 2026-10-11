@@ -69,15 +69,6 @@ import { vcsEnvironment } from "~/state/vcs";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { useUiStateStore } from "~/uiStateStore";
 
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { PullRequestEditButton } from "./PullRequestEditButton";
@@ -139,6 +130,7 @@ import {
   usePullRequestActionRunner,
   usePullRequestDefaultMergeMethod,
 } from "./usePullRequestActions";
+import { useInlineActionConfirm } from "./useInlineActionConfirm";
 import { canEditPullRequestChangeRequest } from "./pullRequestEditing.logic";
 import {
   resolvePickableEnvironments,
@@ -463,18 +455,44 @@ export function PullRequestDetailPanel({
     setChromeCondensed(chromeStateByTab.current[tab] ?? false);
   }, [tab]);
   const condensed = chromeCondensed;
-  const scrollerRef = useRef<HTMLElement | null>(null);
+  const scrollerByTab = useRef<Partial<Record<DetailTab, HTMLDivElement | null>>>({});
+  const scrollerRefs = useMemo(
+    () => ({
+      summary: (node: HTMLDivElement | null) => {
+        scrollerByTab.current.summary = node;
+      },
+      timeline: (node: HTMLDivElement | null) => {
+        scrollerByTab.current.timeline = node;
+      },
+      code: (node: HTMLDivElement | null) => {
+        scrollerByTab.current.code = node;
+      },
+    }),
+    [],
+  );
   const foldRef = useRef<HTMLDivElement | null>(null);
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
   // Refund after the fold commits so the content under the reader does not jump with its height.
-  const compensationRef = useRef<number | null>(null);
+  const compensationRef = useRef<{
+    tab: DetailTab;
+    scroller: HTMLDivElement;
+    delta: number;
+  } | null>(null);
   useLayoutEffect(() => {
-    if (compensationRef.current === null) return;
-    const scroller = scrollerRef.current;
-    const delta = compensationRef.current;
+    const compensation = compensationRef.current;
+    if (compensation === null) return;
     compensationRef.current = null;
-    if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
-  }, [condensed]);
+    if (
+      !condensed ||
+      compensation.tab !== tab ||
+      scrollerByTab.current[tab] !== compensation.scroller
+    )
+      return;
+    compensation.scroller.scrollTop = Math.max(
+      0,
+      compensation.scroller.scrollTop + compensation.delta,
+    );
+  }, [condensed, tab]);
   // Which method this pull request merges with: the reader's pick on it, then the project's
   // default, then whatever this device last chose — the first of those the repository allows.
   const lastSelectedMergeMethod = useUiStateStore((state) => state.pullRequestMergeMethod);
@@ -492,11 +510,7 @@ export function PullRequestDetailPanel({
   const setMergeMethod = (method: PullRequestMergeMethod) => {
     setMergeMethodSelection({ pullRequestKey, method });
   };
-  const [confirmation, setConfirmation] = useState<{
-    readonly open: boolean;
-    readonly action: "merge" | "close" | "enable-auto-merge" | "revert" | "approve-workflows";
-  }>({ open: false, action: "merge" });
-  const confirmAction = confirmation.action;
+  const inlineConfirm = useInlineActionConfirm(pullRequestKey);
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
@@ -645,6 +659,8 @@ export function PullRequestDetailPanel({
   } = usePullRequestActionRunner({
     environmentId,
     reference,
+    // The panel shows the new state in place; reverting opens another pull request it cannot show.
+    announcesSuccess: (action) => action === "revert",
     onActed: (action, phase) => {
       // A branch update moves the head commit, which leaves the diff atom pointed at a comparison
       // that no longer exists — the same staleness the manual refresh button fixes, so it goes
@@ -1375,12 +1391,27 @@ export function PullRequestDetailPanel({
                   size="xs"
                   variant="warning-outline"
                   disabled={actionPending}
-                  onClick={() => setConfirmation({ open: true, action: "approve-workflows" })}
+                  {...inlineConfirm.props(
+                    "approve-workflows",
+                    () => void perform("approve-workflows"),
+                  )}
                 >
                   <PlayIcon className="size-3.5" />
-                  {pendingAction === "approve-workflows"
-                    ? "Approving..."
-                    : "Approve workflows to run"}
+                  <span className="inline-grid">
+                    <span aria-hidden className="invisible col-start-1 row-start-1">
+                      Approve workflows to run
+                    </span>
+                    <span aria-hidden className="invisible col-start-1 row-start-1">
+                      Confirm approve?
+                    </span>
+                    <span className="col-start-1 row-start-1">
+                      {pendingAction === "approve-workflows"
+                        ? "Approving..."
+                        : inlineConfirm.isArmed("approve-workflows")
+                          ? "Confirm approve?"
+                          : "Approve workflows to run"}
+                    </span>
+                  </span>
                 </Button>
               ) : null}
               {/* Said where the Merge button is, because it is the answer to why nobody has
@@ -1418,10 +1449,27 @@ export function PullRequestDetailPanel({
                 <Button
                   size="xs"
                   disabled={actionPending}
-                  onClick={() => setConfirmation({ open: true, action: "enable-auto-merge" })}
+                  {...inlineConfirm.props(
+                    "enable-auto-merge",
+                    () => void perform("enable-auto-merge", selectedMergeMethod),
+                  )}
                 >
                   <GitMergeIcon className="size-3.5" />
-                  {pendingAction === "enable-auto-merge" ? "Enabling..." : pendingAutoMergeLabel}
+                  <span className="inline-grid">
+                    <span aria-hidden className="invisible col-start-1 row-start-1">
+                      {pendingAutoMergeLabel}
+                    </span>
+                    <span aria-hidden className="invisible col-start-1 row-start-1">
+                      Confirm auto-merge?
+                    </span>
+                    <span className="col-start-1 row-start-1">
+                      {pendingAction === "enable-auto-merge"
+                        ? "Enabling..."
+                        : inlineConfirm.isArmed("enable-auto-merge")
+                          ? "Confirm auto-merge?"
+                          : pendingAutoMergeLabel}
+                    </span>
+                  </span>
                 </Button>
               ) : primaryAction === "auto-merge-armed" ? (
                 <Tooltip>
@@ -1441,9 +1489,26 @@ export function PullRequestDetailPanel({
                 <Button
                   size="xs"
                   disabled={actionPending}
-                  onClick={() => setConfirmation({ open: true, action: "merge" })}
+                  {...inlineConfirm.props(
+                    "merge",
+                    () => void perform("merge", selectedMergeMethod),
+                  )}
                 >
-                  {pendingAction === "merge" ? "Merging..." : selectedMergeMethodLabel}
+                  <span className="inline-grid">
+                    <span aria-hidden className="invisible col-start-1 row-start-1">
+                      {selectedMergeMethodLabel}
+                    </span>
+                    <span aria-hidden className="invisible col-start-1 row-start-1">
+                      Confirm merge?
+                    </span>
+                    <span className="col-start-1 row-start-1">
+                      {pendingAction === "merge"
+                        ? "Merging..."
+                        : inlineConfirm.isArmed("merge")
+                          ? "Confirm merge?"
+                          : selectedMergeMethodLabel}
+                    </span>
+                  </span>
                 </Button>
               ) : (primaryAction === "merged" || primaryAction === "closed") &&
                 statePresentation !== null ? (
@@ -1533,11 +1598,18 @@ export function PullRequestDetailPanel({
                       ) : null}
                       {showsMergeNow ? (
                         <MenuItem
+                          closeOnClick={inlineConfirm.isArmed("merge")}
+                          aria-label={
+                            inlineConfirm.isArmed("merge") ? "Confirm merge?" : "Merge now"
+                          }
                           disabled={actionPending}
-                          onClick={() => setConfirmation({ open: true, action: "merge" })}
+                          {...inlineConfirm.props(
+                            "merge",
+                            () => void perform("merge", selectedMergeMethod),
+                          )}
                         >
                           <GitMergeIcon className="size-3.5" />
-                          Merge now
+                          {inlineConfirm.isArmed("merge") ? "Confirm merge?" : "Merge now"}
                         </MenuItem>
                       ) : null}
                       {/* The same merge, left with the host to carry out once its requirements
@@ -1553,13 +1625,22 @@ export function PullRequestDetailPanel({
                         </MenuItem>
                       ) : showsAutoMerge ? (
                         <MenuItem
-                          disabled={actionPending}
-                          onClick={() =>
-                            setConfirmation({ open: true, action: "enable-auto-merge" })
+                          closeOnClick={inlineConfirm.isArmed("enable-auto-merge")}
+                          aria-label={
+                            inlineConfirm.isArmed("enable-auto-merge")
+                              ? "Confirm auto-merge?"
+                              : "Enable auto-merge"
                           }
+                          disabled={actionPending}
+                          {...inlineConfirm.props(
+                            "enable-auto-merge",
+                            () => void perform("enable-auto-merge", selectedMergeMethod),
+                          )}
                         >
                           <GitMergeIcon className="size-3.5" />
-                          Enable auto-merge
+                          {inlineConfirm.isArmed("enable-auto-merge")
+                            ? "Confirm auto-merge?"
+                            : "Enable auto-merge"}
                         </MenuItem>
                       ) : null}
                       {/* A preference for the merge action rather than a second action, so it
@@ -1617,12 +1698,16 @@ export function PullRequestDetailPanel({
                     <>
                       <MenuSeparator />
                       <MenuItem
+                        closeOnClick={inlineConfirm.isArmed("close")}
+                        aria-label={
+                          inlineConfirm.isArmed("close") ? "Confirm close?" : "Close pull request"
+                        }
                         variant="destructive"
                         disabled={actionPending}
-                        onClick={() => setConfirmation({ open: true, action: "close" })}
+                        {...inlineConfirm.props("close", () => void perform("close"))}
                       >
                         <GitPullRequestClosedIcon className="size-3.5" />
-                        Close pull request
+                        {inlineConfirm.isArmed("close") ? "Confirm close?" : "Close pull request"}
                       </MenuItem>
                     </>
                   ) : detail.state === "closed" && can("reopen") ? (
@@ -1637,11 +1722,16 @@ export function PullRequestDetailPanel({
                     <>
                       <MenuSeparator />
                       <MenuItem
+                        closeOnClick={inlineConfirm.isArmed("revert")}
+                        aria-label={
+                          inlineConfirm.isArmed("revert") ? "Confirm revert?" : "Revert changes"
+                        }
+                        variant={inlineConfirm.isArmed("revert") ? "destructive" : "default"}
                         disabled={actionPending}
-                        onClick={() => setConfirmation({ open: true, action: "revert" })}
+                        {...inlineConfirm.props("revert", () => void perform("revert"))}
                       >
                         <RotateCcwIcon className="size-3.5" />
-                        Revert changes
+                        {inlineConfirm.isArmed("revert") ? "Confirm revert?" : "Revert changes"}
                       </MenuItem>
                     </>
                   ) : null}
@@ -2020,8 +2110,8 @@ export function PullRequestDetailPanel({
       <div
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         onScrollCapture={(event) => {
-          const scroller = event.target as HTMLElement;
-          scrollerRef.current = scroller;
+          const scroller = scrollerByTab.current[tab];
+          if (event.target !== scroller || scroller === null || scroller === undefined) return;
           const top = scroller.scrollTop;
           setChromeCondensed((previous) => {
             let next = previous;
@@ -2036,7 +2126,7 @@ export function PullRequestDetailPanel({
                 next = false;
               }
             } else if (foldHeight > 0 && top > foldHeight + 32) {
-              compensationRef.current = -chromeDelta;
+              compensationRef.current = { tab, scroller, delta: -chromeDelta };
               next = true;
             }
             chromeStateByTab.current[tab] = next;
@@ -2062,6 +2152,7 @@ export function PullRequestDetailPanel({
             {mountedTabs.has("summary") ? (
               <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
                 <PullRequestSummaryTab
+                  scrollerRef={scrollerRefs.summary}
                   environmentId={environmentId}
                   reference={reference}
                   detail={detail}
@@ -2088,6 +2179,7 @@ export function PullRequestDetailPanel({
                   />
                 ) : (
                   <PullRequestTimelineTab
+                    scrollerRef={scrollerRefs.timeline}
                     detail={detail}
                     environmentId={environmentId}
                     reference={reference}
@@ -2102,6 +2194,7 @@ export function PullRequestDetailPanel({
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
+                    scrollerRef={scrollerRefs.code}
                     onAddToAgentSelection={addSelectionToAgent}
                     environmentId={environmentId}
                     reference={reference}
@@ -2120,74 +2213,6 @@ export function PullRequestDetailPanel({
           </>
         ) : null}
       </div>
-
-      <AlertDialog
-        open={confirmation.open}
-        onOpenChange={(open) => setConfirmation((current) => ({ ...current, open }))}
-        onOpenChangeComplete={(open) => {
-          if (!open) setConfirmation({ open: false, action: "merge" });
-        }}
-      >
-        <AlertDialogPopup>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmAction === "merge"
-                ? "Merge pull request?"
-                : confirmAction === "enable-auto-merge"
-                  ? "Enable auto-merge?"
-                  : confirmAction === "revert"
-                    ? "Revert these changes?"
-                    : confirmAction === "approve-workflows"
-                      ? "Approve workflows to run?"
-                      : "Close pull request?"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmAction === "merge"
-                ? `This merges #${reference.number} using ${selectedMergeMethod}.`
-                : confirmAction === "enable-auto-merge"
-                  ? // The host merges this as soon as it considers the pull request ready, which
-                    // may be immediately — there is no telling from here whether anything is
-                    // still outstanding.
-                    `This merges #${reference.number} using ${selectedMergeMethod} as soon as the host considers it ready, which may be immediately.`
-                  : confirmAction === "revert"
-                    ? `This opens a new pull request that reverses the changes merged by #${reference.number}.`
-                    : confirmAction === "approve-workflows"
-                      ? `This allows ${workflowApprovalsRequired} ${workflowApprovalsRequired === 1 ? "workflow" : "workflows"} from #${reference.number} to run. Review the code and workflow changes first.`
-                      : `This closes #${reference.number} without merging it.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Cancel
-            </AlertDialogClose>
-            <Button
-              size="sm"
-              variant={confirmAction === "close" ? "destructive" : "default"}
-              disabled={actionPending}
-              onClick={() => {
-                const action = confirmAction;
-                setConfirmation((current) => ({ ...current, open: false }));
-                if (action === "merge") void perform("merge", selectedMergeMethod);
-                if (action === "enable-auto-merge")
-                  void perform("enable-auto-merge", selectedMergeMethod);
-                if (action === "revert") void perform("revert");
-                if (action === "approve-workflows") void perform("approve-workflows");
-                if (action === "close") void perform("close");
-              }}
-            >
-              {confirmAction === "merge"
-                ? selectedMergeMethodLabel
-                : confirmAction === "enable-auto-merge"
-                  ? "Enable auto-merge"
-                  : confirmAction === "revert"
-                    ? "Create revert PR"
-                    : confirmAction === "approve-workflows"
-                      ? "Approve and run"
-                      : "Close"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogPopup>
-      </AlertDialog>
     </div>
   );
 }

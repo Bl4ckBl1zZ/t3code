@@ -2,6 +2,7 @@ import { KeybindingShortcut } from "./keybindings.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import {
+  AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
   type AuthEnvironmentScope,
@@ -23,7 +24,7 @@ import {
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
 } from "./model.ts";
-import { ProjectScript } from "./project.ts";
+import { ProjectScript, type ProjectMutation } from "./project.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
@@ -1927,6 +1928,23 @@ export function requiredScopesForServerSettingsPatch(
   return [
     ...(changesSettings || !changesProviders ? [AuthSettingsWriteScope] : []),
     ...(changesProviders ? [AuthProvidersManageScope] : []),
+  ];
+}
+
+/**
+ * Project scripts run on the host when a worktree is created or a thread
+ * settles, so a project mutation that carries them needs the same grant as
+ * saving project scripts through settings, on top of `orchestration:operate`.
+ */
+export function requiredScopesForProjectMutation(
+  mutation: ProjectMutation,
+): ReadonlyArray<AuthEnvironmentScope> {
+  if (mutation.type === "project.delete" || mutation.scripts === undefined) {
+    return [AuthOrchestrationOperateScope];
+  }
+  return [
+    AuthOrchestrationOperateScope,
+    ...requiredScopesForServerSettingsPatch({ defaultProjectScripts: mutation.scripts }),
   ];
 }
 

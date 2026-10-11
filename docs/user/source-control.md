@@ -25,8 +25,8 @@ T3 Code works with the platforms your team already uses:
 **Start from a name**
 
 - Open the Command Palette (`Cmd/Ctrl + K`) → **New project**, or **Add Project** → **New project**, and type a name
-- T3 Code makes a Git repository in `~/.t3/projects` (the `projects` folder of your T3 data directory) with a README, an icon, and a first commit, then opens a new thread in it. The folder is named after the project, like `pinball-stats` for "Pinball Stats"
-- Turn on **Create private repository on GitHub** to also publish it. If Git has no name or email on that machine, the project is created without the first commit
+- T3 Code makes a Git repository in `~/.t3/projects` (the `projects` folder of your T3 data directory) with a README, an icon, and a first commit, then opens a new thread in it. Until the project has a thread, new threads work in its folder, even when your default is a new worktree. The folder is named after the project, like `pinball-stats` for "Pinball Stats"
+- Turn on **Create private repository** to also publish it. It goes to GitHub or GitLab, whichever is signed in on that machine; when both are, pick the host beside the toggle. If Git has no name or email on that machine, the project is created without the first commit
 
 **Clone repositories directly**
 
@@ -52,7 +52,10 @@ T3 Code works with the platforms your team already uses:
 
 **Stay on top of open reviews**
 
-- See if your current branch already has an open PR/MR
+- See if your current branch already has an open PR/MR. An existing fork PR can appear beside the
+  branch even if you pushed without setting an upstream. If its badge is missing because several
+  remotes hold that branch, set the branch's upstream to the intended remote with
+  `git branch --set-upstream-to=<remote>/<branch>`
 - Open several reviews from the **Pull requests** page as tabs in the right panel
 - Filter the list by author or labels, rank authors by merges in the loaded results, see label and
   change-size context on each row, and sort the results currently shown by update time, creation
@@ -194,8 +197,9 @@ If both kinds are set, the access token wins. Saved credentials always win over 
 ## Finding a thread by its linked pull request
 
 On web and desktop, sidebar search and the command palette match the linked PR number
-(such as **#287**), repository plus number, or URL. This searches links already attached to
-threads; it does not query the source-control host.
+(such as **#287**), repository plus number, or URL, and the same for the PR open on the thread's
+branch. A result found through a PR shows its number, colored by its state. This searches PRs
+already known to the thread; it does not query the source-control host.
 
 Remote **Open in editor** also supports Zed and JetBrains IDEs over SSH when the environment
 advertises an SSH target and the editor is installed on the client machine. JetBrains IDEs open

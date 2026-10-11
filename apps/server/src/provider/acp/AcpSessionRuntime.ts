@@ -27,6 +27,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import { signalProcessGroup } from "../../process/processGroup.ts";
@@ -255,6 +256,7 @@ export function wrapCommandForLinuxCgroup(
       "-c",
       [
         "lease_path=$1; expected=$2; shift 2",
+        RAISE_OOM_SCORE_LINE,
         'printf "%s\\n" "$$" > "$lease_path/cgroup.procs" || exit 125',
         "actual=",
         "while IFS= read -r line; do",
@@ -1460,9 +1462,24 @@ export const make = (
               cause: new Error("Contained ACP command was not found on PATH"),
             });
           });
+    // A cgroup lease is already its own leaf cgroup, so it only needs the
+    // raised OOM score (in its wrapper). Other agents get their own scope.
+    const scopedSpawnCommand =
+      linuxCgroupLease !== undefined || spawnCommand.shell
+        ? spawnCommand
+        : {
+            ...(yield* (yield* AgentScope).wrap({
+              command: spawnCommand.command,
+              args: spawnCommand.args,
+              name: "acp",
+              threadId: yield* AgentScopeThreadId,
+              env: { ...process.env, ...options.spawn.env },
+            })),
+            shell: false,
+          };
     const containedSpawnCommand =
       linuxCgroupLease === undefined
-        ? spawnCommand
+        ? scopedSpawnCommand
         : {
             ...wrapCommandForLinuxCgroup(
               linuxCgroupLease,

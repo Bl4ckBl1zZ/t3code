@@ -208,6 +208,12 @@ export const PullRequestComment = Schema.Struct({
   reviewState: Schema.NullOr(Schema.String),
   /** Absent from a host with no reactions at all, which is a different thing from none on this. */
   reactions: Schema.optional(Schema.Array(PullRequestReaction)),
+  /**
+   * The host's own answer to whether this reader may rewrite this remark. Absent where the host
+   * doesn't say, which leaves the page to guess from authorship. A remark on a line appears both
+   * here and in its review thread; a host that sets this sets it on both copies alike.
+   */
+  canEdit: Schema.optional(Schema.Boolean),
 });
 export type PullRequestComment = typeof PullRequestComment.Type;
 
@@ -231,6 +237,12 @@ export const PullRequestThreadComment = Schema.Struct({
   editedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   url: Schema.NullOr(Schema.String),
   reactions: Schema.optional(Schema.Array(PullRequestReaction)),
+  /**
+   * The host's own answer to whether this reader may rewrite this remark. Absent where the host
+   * doesn't say, which leaves the page to guess from authorship. A remark on a line appears both
+   * here and in its review thread; a host that sets this sets it on both copies alike.
+   */
+  canEdit: Schema.optional(Schema.Boolean),
 });
 export type PullRequestThreadComment = typeof PullRequestThreadComment.Type;
 
@@ -256,6 +268,12 @@ export const PullRequestReviewThread = Schema.Struct({
   commentCount: Schema.optional(NonNegativeInt),
   /** Opaque cursor for the next comment page. Absent once this thread is whole. */
   nextCommentsCursor: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The host's own answer to whether this reader may resolve this thread. It can only narrow the
+   * reader's repository-wide `resolve` permission, never widen it. Absent where the host
+   * doesn't say per thread.
+   */
+  canResolve: Schema.optional(Schema.Boolean),
 });
 export type PullRequestReviewThread = typeof PullRequestReviewThread.Type;
 
@@ -436,6 +454,11 @@ export const PullRequestViewerPermissions = Schema.Struct({
    * Absent or empty means they may not, which is also what a host with no such action says.
    */
   updateMethods: Schema.optional(Schema.Array(PullRequestUpdateMethod)),
+  /**
+   * This viewer may rewrite the change request's title and description. Absent where the host
+   * doesn't say, which leaves the page to guess from authorship and merge access.
+   */
+  editChangeRequest: Schema.optional(Schema.Boolean),
 });
 export type PullRequestViewerPermissions = typeof PullRequestViewerPermissions.Type;
 
@@ -555,6 +578,11 @@ export const PullRequestProviderSummary = Schema.Struct({
   kind: SourceControlProviderKind,
   /** False where a search has to be applied to the rows after they arrive. */
   searchesOnHost: Schema.Boolean,
+  /**
+   * The actions this host can carry out, so a row can offer them before its detail is read.
+   * Absent from servers older than this field; clients then offer what they always did.
+   */
+  actions: Schema.optional(Schema.Array(PullRequestAction)),
   projectCount: PositiveInt,
   /** False when the provider's CLI or credentials are missing, with `detail` saying which. */
   configured: Schema.Boolean,

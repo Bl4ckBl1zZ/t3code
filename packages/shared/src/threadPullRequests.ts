@@ -176,14 +176,27 @@ export function updateLinkedPullRequests(
   };
 }
 
-/** Search every visible link, including cached host titles, without another host request. */
-export function threadPullRequestSearchTerms(thread: ThreadLinks): string[] {
-  return visibleThreadPullRequests(allThreadPullRequestsOf(thread)).flatMap((link) => [
-    `#${link.number}`,
-    `${link.repository}#${link.number}`,
-    link.url,
-    link.snapshot?.title ?? "",
-  ]);
+/**
+ * Search every visible link, including cached host titles, and the branch's own PR, without
+ * another host request.
+ */
+export function threadPullRequestSearchTerms(
+  thread: ThreadLinks & {
+    readonly branchPullRequest?: ThreadLinkedPullRequest | null | undefined;
+  },
+): string[] {
+  const branch = thread.branchPullRequest;
+  const terms = branch
+    ? [`#${branch.number}`, `${branch.repository}#${branch.number}`, branch.url]
+    : [];
+  return terms.concat(
+    visibleThreadPullRequests(allThreadPullRequestsOf(thread)).flatMap((link) => [
+      `#${link.number}`,
+      `${link.repository}#${link.number}`,
+      link.url,
+      link.snapshot?.title ?? "",
+    ]),
+  );
 }
 
 /** Older V2 event payloads stored one link; an explicit empty array means it was unlinked. */

@@ -13,6 +13,7 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
+  changeRequestHostLabel,
   groupPullRequestTimelineConversations,
   handoffPrompt,
   handoffReviewComments,
@@ -637,6 +638,23 @@ describe("pull request timeline", () => {
       ["event", "1baf7bdcafe"],
       ["event", "created"],
     ]);
+  });
+});
+
+describe("changeRequestHostLabel", () => {
+  it("names the host a change request URL is on, and falls back to the host", () => {
+    expect(changeRequestHostLabel("https://github.com/acme/web/pull/42")).toBe("GitHub");
+    expect(changeRequestHostLabel("https://gitlab.example.com/acme/web/-/merge_requests/7")).toBe(
+      "GitLab",
+    );
+    expect(changeRequestHostLabel("https://dev.azure.com/acme/web/_git/web/pullrequest/9")).toBe(
+      "Azure DevOps",
+    );
+    expect(changeRequestHostLabel("https://bitbucket.org/acme/web/pull-requests/3")).toBe(
+      "Bitbucket",
+    );
+    expect(changeRequestHostLabel("https://example.com/acme/web/pull/latest")).toBe("the host");
+    expect(changeRequestHostLabel("not a url")).toBe("the host");
   });
 });
 
@@ -1337,17 +1355,22 @@ describe("pull request merge method", () => {
 });
 
 describe("pull request quick actions", () => {
-  it("offers the next step and a close for open GitHub pull requests only", () => {
-    const github = { provider: "github" as const, isDraft: false };
-    expect(pullRequestSpeedActions({ ...github, state: "open" })).toEqual(["close", "merge"]);
-    expect(pullRequestSpeedActions({ ...github, state: "open", isDraft: true })).toEqual([
+  it("offers the next step and a close, narrowed to what the host can do", () => {
+    const every = new Set(["close", "merge", "ready", "reopen"] as const);
+    const ready = { isDraft: false };
+    expect(pullRequestSpeedActions({ ...ready, state: "open" }, every)).toEqual(["close", "merge"]);
+    expect(pullRequestSpeedActions({ ...ready, state: "open", isDraft: true }, every)).toEqual([
       "close",
       "ready",
     ]);
-    expect(pullRequestSpeedActions({ ...github, state: "closed" })).toEqual(["reopen"]);
-    expect(pullRequestSpeedActions({ ...github, state: "merged" })).toEqual([]);
-    expect(pullRequestSpeedActions({ provider: "gitlab", state: "open", isDraft: false })).toEqual(
-      [],
-    );
+    expect(pullRequestSpeedActions({ ...ready, state: "closed" }, every)).toEqual(["reopen"]);
+    expect(pullRequestSpeedActions({ ...ready, state: "merged" }, every)).toEqual([]);
+    // Bitbucket cannot reopen or mark ready, so those rows offer only what it can.
+    const bitbucket = new Set(["merge", "close"] as const);
+    expect(pullRequestSpeedActions({ ...ready, state: "closed" }, bitbucket)).toEqual([]);
+    expect(pullRequestSpeedActions({ ...ready, state: "open", isDraft: true }, bitbucket)).toEqual([
+      "close",
+    ]);
+    expect(pullRequestSpeedActions({ ...ready, state: "open" }, new Set())).toEqual([]);
   });
 });

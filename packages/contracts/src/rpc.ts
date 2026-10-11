@@ -76,6 +76,8 @@ import {
   HostPowerSnapshot,
 } from "./background.ts";
 import {
+  FilesystemGetMetadataInput,
+  FilesystemGetMetadataResult,
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -245,6 +247,8 @@ import {
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
+  OtlpEndpointCheckInput,
+  OtlpEndpointCheckResult,
   ServerConfig,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
@@ -349,6 +353,7 @@ export const WS_METHODS = {
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
+  filesystemGetMetadata: "filesystem.getMetadata",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
@@ -426,6 +431,7 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
+  serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
   serverReportHostPowerState: "server.reportHostPowerState",
@@ -705,6 +711,12 @@ export const WsProviderConsumeResetCreditRpc = Rpc.make(WS_METHODS.providerConsu
   error: Schema.Union([ProviderSetupError, UsageLimitSourceError, EnvironmentAuthorizationError]),
 });
 
+export const WsServerCheckOtlpEndpointRpc = Rpc.make(WS_METHODS.serverCheckOtlpEndpoint, {
+  payload: OtlpEndpointCheckInput,
+  success: OtlpEndpointCheckResult,
+  error: EnvironmentAuthorizationError,
+});
+
 export const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   payload: UsageSummaryInput,
   success: UsageSummary,
@@ -971,6 +983,12 @@ export const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
   error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
+});
+
+export const WsFilesystemGetMetadataRpc = Rpc.make(WS_METHODS.filesystemGetMetadata, {
+  payload: FilesystemGetMetadataInput,
+  success: FilesystemGetMetadataResult,
+  error: EnvironmentAuthorizationError,
 });
 
 export const WsAgentSessionsScanRpc = Rpc.make(WS_METHODS.agentSessionsScan, {
@@ -1634,6 +1652,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderInstallCancelRpc,
   WsProviderInstallSubscribeRpc,
   WsProviderInstallRemoveRpc,
+  WsServerCheckOtlpEndpointRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
   WsScheduledTasksListRpc,
@@ -1697,6 +1716,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsCreateNewRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
+  WsFilesystemGetMetadataRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,

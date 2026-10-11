@@ -263,3 +263,25 @@ describe("legacyLinkedPullRequestOf", () => {
     expect(legacyLinkedPullRequestOf([githubLink], ProjectId.make("p"), localIdentity)).toBeNull();
   });
 });
+
+describe("threadPullRequestSearchTerms with a branch PR", () => {
+  it.each([undefined, [], [link(34)]])(
+    "searches the branch PR alongside existing links (%j)",
+    (linkedPullRequests) => {
+      const branchPullRequest = {
+        projectId: ProjectId.make("project"),
+        repository: "pingdotgg/t3code",
+        number: 11809,
+        url: "https://github.com/pingdotgg/t3code/pull/11809",
+      };
+      const terms = threadPullRequestSearchTerms({
+        ...(linkedPullRequests === undefined ? {} : { linkedPullRequests }),
+        branchPullRequest,
+      });
+      for (const query of ["11809", "#11809", "pingdotgg/t3code#11809", branchPullRequest.url]) {
+        expect(terms.some((term) => term.includes(query))).toBe(true);
+      }
+      expect(terms.includes("#34")).toBe(linkedPullRequests?.length === 1);
+    },
+  );
+});

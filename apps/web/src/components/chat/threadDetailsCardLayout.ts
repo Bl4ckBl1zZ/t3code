@@ -17,7 +17,7 @@ export function resolveThreadDetailsCardDensity(
 
 /** Inset of the card from the canvas edges; the find bar shares it to line up. */
 export const THREAD_DETAILS_CARD_GAP = 12;
-// Keep in sync with --thread-details-panel-width, which sizes the popover.
+// Keep in sync with --thread-details-panel-width, which sizes the popover and the find bar.
 const WIDTH = 280;
 const MIN_HEIGHT = 160;
 
@@ -42,5 +42,5 @@ export function resolveThreadDetailsCardLayout({
   const y = gap + topInset;
   const height = container.height - y - gap;
   if (height < MIN_HEIGHT) return null;
-  return { x, y, width: WIDTH, height } as const;
+  return { x, right: gap, y, width: WIDTH, height } as const;
 }

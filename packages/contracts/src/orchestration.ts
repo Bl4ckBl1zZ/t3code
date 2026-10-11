@@ -36,7 +36,7 @@ export {
 
 export const ProjectFaviconPath = TrimmedNonEmptyString.check(
   Schema.isMaxLength(1024),
-  Schema.isPattern(/\.(?:avif|gif|ico|jpe?g|png|svg|webp)$/i),
+  Schema.isPattern(/\.(?:avif|gif|icns|ico|jpe?g|png|svg|webp)$/i),
 );
 export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 

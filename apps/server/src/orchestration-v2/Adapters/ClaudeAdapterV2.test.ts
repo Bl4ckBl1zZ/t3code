@@ -1,4 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - the fake Claude CLI hands the SDK Node streams.
+import * as NodeEvents from "node:events";
 import * as NodeOS from "node:os";
+import * as NodeStream from "node:stream";
 
 import { type ClaudeModelCatalog } from "../../provider/ClaudeModelCatalog.ts";
 import type {
@@ -6,7 +9,16 @@ import type {
   SDKMessage,
   SDKRateLimitInfo,
   SDKUserMessage,
+  SpawnedProcess,
+  SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  TaskCreateInput,
+  TaskCreateOutput,
+  TaskListOutput,
+  TaskUpdateInput,
+  TaskUpdateOutput,
+} from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ChatAttachmentId,
@@ -45,6 +57,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { Tool } from "effect/unstable/ai";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
@@ -53,6 +66,10 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { OrchestratorToolkit } from "../../mcp/toolkits/orchestrator/tools.ts";
 import { ClaudeExecutableFileCheck } from "../../provider/Drivers/ClaudeExecutable.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
+import {
+  NoOpProviderEventLoggers,
+  ProviderEventLoggers,
+} from "../../provider/Layers/ProviderEventLoggers.ts";
 import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
@@ -70,6 +87,7 @@ import {
   CLAUDE_T3_MCP_TOOL_WILDCARD,
   ClaudeAdapterV2Driver,
   ClaudeAgentSdkQueryRunner,
+  claudeAgentSdkQueryRunnerLiveLayer,
   ClaudeBackgroundWorkBlocksQueryReplacementError,
   ClaudeProviderCapabilitiesV2,
   claudeEffectiveQueryPolicyKey,
@@ -88,6 +106,29 @@ import {
 import { layer as idAllocatorLayer, IdAllocatorV2 } from "../IdAllocator.ts";
 
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
+const CUSTOM_MODEL_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
+  customModels: [
+    // A bare custom slug that shadows the built-in "opus" alias.
+    "opus",
+    {
+      slug: "claude-custom-tuned",
+      name: "Tuned",
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [
+              { id: "gentle", label: "Gentle", isDefault: true },
+              { id: "brutal", label: "Brutal" },
+            ],
+          },
+        ],
+      },
+    },
+  ],
+});
 const CLAUDE_TEST_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make(CLAUDE_PROVIDER),
   model: "claude-sonnet-4-6",
@@ -369,13 +410,10 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       type: "http",
       url: "http://127.0.0.1:43123/mcp",
       headers: {
-        Authorization: "${T3_CODE_MCP_AUTHORIZATION}",
+        Authorization: "Bearer secret-claude-token",
       },
       timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
     },
-  } as const;
-  const T3_MCP_ENVIRONMENT = {
-    T3_CODE_MCP_AUTHORIZATION: "Bearer secret-claude-token",
   } as const;
 
   const withMcpSession = (threadId: ThreadId, run: () => void) => {
@@ -421,7 +459,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       assert.deepEqual(overrides, {
         allowedTools: [CLAUDE_T3_MCP_TOOL_WILDCARD],
         mcpServers: T3_MCP_SERVERS,
-        mcpEnvironment: T3_MCP_ENVIRONMENT,
       });
     });
   });
@@ -438,7 +475,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       assert.deepEqual(overrides, {
         allowedTools: ["Read", "mcp__t3-code__*"],
         mcpServers: T3_MCP_SERVERS,
-        mcpEnvironment: T3_MCP_ENVIRONMENT,
       });
     });
   });
@@ -455,7 +491,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       assert.deepEqual(overrides, {
         allowedTools: [...CLAUDE_READ_ONLY_ALLOWED_TOOLS, ...CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS],
         mcpServers: T3_MCP_SERVERS,
-        mcpEnvironment: T3_MCP_ENVIRONMENT,
       });
       assert.isFalse(overrides.allowedTools?.includes(CLAUDE_T3_MCP_TOOL_WILDCARD));
     });
@@ -569,12 +604,11 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
             type: "http",
             url: "http://127.0.0.1:43123/mcp",
             headers: {
-              Authorization: "${T3_CODE_MCP_AUTHORIZATION}",
+              Authorization: "Bearer secret-claude-token",
             },
             timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
           },
         },
-        mcpEnvironment: { T3_CODE_MCP_AUTHORIZATION: "Bearer secret-claude-token" },
       });
 
       const options = makeClaudeQueryOptions({
@@ -587,12 +621,8 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
         cwd: "/workspace",
         allowedTools: overrides.allowedTools ?? [],
         mcpServers: overrides.mcpServers ?? {},
-        environment: { ...overrides.mcpEnvironment },
+        environment: {},
       });
-      // mcpServers becomes a CLI argument, readable by every local user; the
-      // credential may only travel in the child's environment.
-      assert.notInclude(JSON.stringify(options.mcpServers), "secret-claude-token");
-      assert.equal(options.env?.T3_CODE_MCP_AUTHORIZATION, "Bearer secret-claude-token");
       assert.isObject(options.systemPrompt);
       const systemPrompt = options.systemPrompt as {
         readonly type: string;
@@ -1229,6 +1259,117 @@ describe("ClaudeAdapterV2 native fork", () => {
   );
 });
 
+// Stands in for the Claude CLI behind the SDK's spawn hook: records how it was
+// started and answers stdin control requests, except mcp_set_servers if asked.
+function makeFakeClaudeCli(answerSetServers = true) {
+  const spawns: Array<SpawnOptions> = [];
+  const controlRequests: Array<object> = [];
+  const stdins: Array<NodeStream.PassThrough> = [];
+  const spawn = (options: SpawnOptions): SpawnedProcess => {
+    spawns.push(options);
+    const stdin = new NodeStream.PassThrough();
+    const stdout = new NodeStream.PassThrough();
+    stdins.push(stdin);
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      killed: false,
+      exitCode: null as number | null,
+      kill: () => {
+        stdout.end();
+        child.emit("exit", null, "SIGTERM");
+        return true;
+      },
+    });
+    let pending = "";
+    stdin.on("data", (chunk: Buffer) => {
+      pending += chunk.toString("utf8");
+      for (let end = pending.indexOf("\n"); end >= 0; end = pending.indexOf("\n")) {
+        const frame = JSON.parse(pending.slice(0, end));
+        pending = pending.slice(end + 1);
+        if (frame.type !== "control_request") continue;
+        controlRequests.push(frame.request);
+        const setServers = frame.request.subtype === "mcp_set_servers";
+        if (setServers && !answerSetServers) continue;
+        const response = {
+          subtype: "success",
+          request_id: frame.request_id,
+          response: setServers ? { added: [], removed: [], errors: {} } : {},
+        };
+        stdout.write(`${JSON.stringify({ type: "control_response", response })}\n`);
+      }
+    });
+    stdin.on("end", () => {
+      stdout.end();
+      child.emit("exit", 0, null);
+    });
+    return child;
+  };
+  // The SDK closes the CLI by ending its stdin.
+  const closed = () => stdins.length > 0 && stdins.every((stdin) => stdin.writableEnded);
+  return { spawn, spawns, controlRequests, closed };
+}
+
+describe("ClaudeAdapterV2 MCP credential channel", () => {
+  const t3McpServer = {
+    type: "http" as const,
+    url: "http://127.0.0.1:43123/mcp",
+    headers: { Authorization: "Bearer dummy-mcp-credential" },
+  };
+  const openWith = (cli: ReturnType<typeof makeFakeClaudeCli>) =>
+    Effect.gen(function* () {
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      return yield* runner.open({
+        threadId: ThreadId.make("thread-claude-mcp-channel"),
+        providerSessionId: ProviderSessionId.make("provider-session-claude-mcp-channel"),
+        options: {
+          ...makeClaudeQueryOptions({
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            nativeThreadId: "native-thread-claude-mcp-channel",
+            resume: false,
+            cwd: null,
+            environment: { PATH: "/usr/bin" },
+            mcpServers: { "t3-code": t3McpServer },
+          }),
+          pathToClaudeCodeExecutable: "/opt/claude/cli.js",
+          spawnClaudeCodeProcess: cli.spawn,
+        },
+      });
+    }).pipe(
+      Effect.provide(claudeAgentSdkQueryRunnerLiveLayer),
+      Effect.provideService(ProviderEventLoggers, NoOpProviderEventLoggers),
+      Effect.provide(NodeServices.layer),
+    );
+
+  it.effect("sends MCP servers over stdin, not argv or the environment", () =>
+    Effect.gen(function* () {
+      const cli = makeFakeClaudeCli();
+      const session = yield* openWith(cli);
+      yield* session.close;
+
+      assert.deepInclude(cli.controlRequests, {
+        subtype: "mcp_set_servers",
+        servers: { "t3-code": t3McpServer },
+      });
+      const spawned = JSON.stringify(cli.spawns);
+      assert.notInclude(spawned, "--mcp-config");
+      assert.notInclude(spawned, "dummy-mcp-credential");
+    }),
+  );
+
+  it.effect("closes the CLI when it never answers the MCP registration", () =>
+    Effect.gen(function* () {
+      const cli = makeFakeClaudeCli(false);
+      const opening = yield* openWith(cli).pipe(Effect.result, Effect.forkChild);
+      yield* TestClock.adjust("90 seconds");
+      const opened = yield* Fiber.join(opening);
+
+      assert.equal(opened._tag, "Failure");
+      assert.isTrue(cli.closed());
+    }),
+  );
+});
+
 describe("ClaudeAdapterV2 native session identity", () => {
   const openTurnWithOrdinal = (providerTurnOrdinal: number, nativeThreadHasTurns?: boolean) =>
     Effect.scoped(
@@ -1453,6 +1594,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     };
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
     readonly interrupt?: Effect.Effect<void>;
+    readonly settings?: ClaudeSettings;
+    readonly stopTask?: (taskId: string) => Effect.Effect<void>;
     // A CLI process opened after the first streams from its own queue, so the
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
@@ -1472,7 +1615,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const adapter = makeClaudeAdapterV2({
         ...(options?.usageLimitListener ? { usageLimitListener: options.usageLimitListener } : {}),
         instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
-        settings: DEFAULT_CLAUDE_SETTINGS,
+        settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
         environment: {},
         attachmentsDir,
         fileSystem,
@@ -1515,6 +1658,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   Effect.sync(() => {
                     permissionModeChanges.push(mode);
                   }),
+                ...(options?.stopTask === undefined ? {} : { stopTask: options.stopTask }),
                 interrupt: options?.interrupt ?? Effect.void,
                 close: options?.close?.(sdkMessages) ?? Effect.void,
               };
@@ -1981,7 +2125,82 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect.each([429, 401, 529])(
+  it.effect.each([
+    { status: 503, cooldown: "4m 6s", seconds: 246 },
+    { status: 503, cooldown: "1h 2m 3s", seconds: 3723 },
+    { status: 503, cooldown: "7s", seconds: 7 },
+    { status: 503, cooldown: "0s", seconds: 0 },
+    { status: 503, cooldown: "unknown", seconds: 0 },
+    { status: 503, cooldown: "999999999999999999999999h", seconds: 0 },
+    { status: 503, cooldown: "4m 6s", seconds: 0, errorType: "overloaded_error" },
+    { status: 401, cooldown: "4m 6s", seconds: 0 },
+  ])("recovers wrapped gateway limits with status $status and cooldown $cooldown", (input) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-gateway-limit"),
+            text: "Continue.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offerAll(harness.sdkMessages, [
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "msg_gateway_limited",
+              type: "message",
+              role: "assistant",
+              content: [{ type: "text", text: "API Error" }],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+              },
+            },
+            parent_tool_use_id: null,
+            error: "server_error",
+            uuid: "00000000-0000-4000-8000-000000000652",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000653",
+            result: `API Error: ${input.status} [claude/claude-opus-5-5] [429]: {"type":"error","error":{"type":"${input.errorType ?? "rate_limit_error"}","message":"Please try again later."}} (reset after ${input.cooldown}).`,
+            terminalReason: "api_error",
+            isError: true,
+            apiErrorStatus: input.status,
+          }),
+        ]);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "failed Claude turn");
+        const terminal = harness.terminalEvents()[0];
+        assert.equal(terminal?.status, "failed");
+        if (terminal?.status !== "failed") return;
+        assert.equal(terminal.failure.class, input.seconds > 0 ? "usage_limit" : "provider_error");
+        if (input.seconds > 0) {
+          assert.equal(terminal.failure.retryable, true);
+          assert.equal(
+            terminal.failure.resetAt,
+            DateTime.formatIso(
+              DateTime.makeUnsafe(DateTime.toEpochMillis(now) + input.seconds * 1_000),
+            ),
+          );
+        } else {
+          assert.isUndefined(terminal.failure.resetAt);
+        }
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect.each([429, 401, 503, 529])(
     "classifies the current Claude API status %s after rate-limit evidence",
     (apiErrorStatus) =>
       Effect.scoped(
@@ -2041,6 +2260,268 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
       ),
+  );
+
+  type TaskToolCall =
+    | { name: "TaskCreate"; input: TaskCreateInput; output: TaskCreateOutput }
+    | { name: "TaskUpdate"; input: TaskUpdateInput; output: TaskUpdateOutput }
+    | { name: "TaskList"; input: Record<string, never>; output: TaskListOutput };
+
+  function taskToolFrames(
+    tool: TaskToolCall,
+    nextUuid: () => string,
+    options?: { parentToolUseId?: string; isError?: boolean; extraToolResult?: boolean },
+  ): ReadonlyArray<SDKMessage> {
+    const uuid = nextUuid();
+    const toolUseId = `tool-${uuid}`;
+    const parentToolUseId = options?.parentToolUseId ?? null;
+    return [
+      claudeSdkFrame({
+        type: "assistant",
+        message: {
+          id: `msg_${uuid}`,
+          model: "claude-sonnet-4-6",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "tool_use", id: toolUseId, name: tool.name, input: tool.input }],
+          stop_reason: "tool_use",
+          stop_sequence: null,
+          usage: {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+        parent_tool_use_id: parentToolUseId,
+        uuid,
+        session_id: WAKE_NATIVE_SESSION,
+      }),
+      claudeSdkFrame({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUseId,
+              content: "Task tool finished.",
+              is_error: options?.isError ?? false,
+            },
+            ...(options?.extraToolResult
+              ? [{ type: "tool_result", tool_use_id: "unrelated-tool", content: "ok" }]
+              : []),
+          ],
+        },
+        tool_use_result: tool.output,
+        parent_tool_use_id: parentToolUseId,
+        uuid: nextUuid(),
+        session_id: WAKE_NATIVE_SESSION,
+      }),
+    ];
+  }
+
+  const makeTaskToolHarness = Effect.gen(function* () {
+    const harness = yield* makeWakeHarness;
+    let sequence = 600;
+    let turn = 0;
+    const nextUuid = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
+    const startTurn = Effect.fnUntraced(function* () {
+      turn++;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make(`attempt-claude-task-tools-${turn}`),
+          providerTurnOrdinal: turn,
+          text: "Update the task list.",
+          attachments: [],
+        }),
+      );
+    });
+    const call = Effect.fnUntraced(function* (
+      tool: TaskToolCall,
+      options?: { parentToolUseId?: string; isError?: boolean; extraToolResult?: boolean },
+    ) {
+      yield* Queue.offerAll(harness.sdkMessages, taskToolFrames(tool, nextUuid, options));
+    });
+    // Frames are handled in order, so every task frame is projected once the
+    // turn's result terminalizes it.
+    const finishTurn = Effect.fnUntraced(function* () {
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: nextUuid(), result: "Task list updated." }),
+      );
+      yield* awaitUntil(() => harness.terminalEvents().length === turn, "task tool turn");
+    });
+    const plans = () =>
+      harness.events.flatMap((event) =>
+        event.type === "plan.updated" && event.plan.kind === "todo_list" ? [event.plan] : [],
+      );
+    return { startTurn, call, finishTurn, plans };
+  });
+
+  const createTask = (id: string, subject: string): TaskToolCall => ({
+    name: "TaskCreate",
+    input: { subject: `Requested ${subject}`, description: `Work on ${subject}.` },
+    output: { task: { id, subject } },
+  });
+  const updateTask = (input: TaskUpdateInput, success = true): TaskToolCall => ({
+    name: "TaskUpdate",
+    input,
+    output: { success, taskId: input.taskId, updatedFields: ["status"] },
+  });
+
+  it.effect(
+    "projects TaskCreate and TaskUpdate into one plan per turn and supersedes it later",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeTaskToolHarness;
+        yield* harness.startTurn();
+        yield* harness.call(createTask("1", "Inspect"));
+        yield* harness.call(createTask("2", "Implement"));
+        yield* harness.call(updateTask({ taskId: "1", status: "in_progress" }));
+        yield* harness.finishTurn();
+
+        const firstTurnPlans = harness.plans();
+        assert.lengthOf(firstTurnPlans, 3);
+        assert.equal(new Set(firstTurnPlans.map((plan) => plan.id)).size, 1);
+        assert.deepEqual(firstTurnPlans.at(-1)?.steps, [
+          { id: "task-1", text: "Inspect", status: "running" },
+          { id: "task-2", text: "Implement", status: "pending" },
+        ]);
+        const firstPlan = firstTurnPlans.at(-1)!;
+
+        yield* harness.startTurn();
+        yield* harness.call(updateTask({ taskId: "1", status: "completed", subject: "Inspected" }));
+        yield* harness.finishTurn();
+
+        const laterPlans = harness.plans().slice(firstTurnPlans.length);
+        assert.lengthOf(laterPlans, 2);
+        assert.equal(laterPlans[0]?.id, firstPlan.id);
+        assert.equal(laterPlans[0]?.status, "superseded");
+        const newPlan = laterPlans[1]!;
+        assert.notEqual(newPlan.id, firstPlan.id);
+        assert.notEqual(newPlan.runId, firstPlan.runId);
+        assert.deepEqual(newPlan.steps, [
+          { id: "task-1", text: "Inspected", status: "completed" },
+          { id: "task-2", text: "Implement", status: "pending" },
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("removes deleted tasks without resurrecting them on later updates or turns", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Discard"));
+      yield* harness.call(createTask("2", "Keep"));
+      yield* harness.call(updateTask({ taskId: "1", status: "deleted" }));
+      yield* harness.call(updateTask({ taskId: "1", status: "pending" }));
+      yield* harness.finishTurn();
+      assert.lengthOf(harness.plans(), 3);
+      assert.deepEqual(harness.plans().at(-1)?.steps, [
+        { id: "task-2", text: "Keep", status: "pending" },
+      ]);
+
+      yield* harness.startTurn();
+      yield* harness.call(updateTask({ taskId: "2", status: "in_progress" }));
+      yield* harness.finishTurn();
+      assert.deepEqual(harness.plans().at(-1)?.steps, [
+        { id: "task-2", text: "Keep", status: "running" },
+      ]);
+      for (const plan of harness.plans().slice(2)) {
+        assert.isFalse(plan.steps.some((step) => step.id === "task-1"));
+      }
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect.each(["success false", "error result", "unknown id"] as const)(
+    "does not emit a plan update for TaskUpdate with %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const harness = yield* makeTaskToolHarness;
+        yield* harness.startTurn();
+        yield* harness.call(createTask("1", "Inspect"));
+        yield* harness.call(
+          updateTask(
+            { taskId: reason === "unknown id" ? "missing" : "1", status: "completed" },
+            reason !== "success false",
+          ),
+          { isError: reason === "error result" },
+        );
+        yield* harness.finishTurn();
+        assert.lengthOf(harness.plans(), 1);
+        assert.deepEqual(harness.plans()[0]?.steps, [
+          { id: "task-1", text: "Inspect", status: "pending" },
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("replaces task state with TaskList, including an empty list", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Stale"));
+      yield* harness.call({
+        name: "TaskList",
+        input: {},
+        output: {
+          tasks: [
+            { id: "2", subject: "Queued", status: "pending", blockedBy: [] },
+            { id: "3", subject: "Working", status: "in_progress", blockedBy: [] },
+            { id: "4", subject: "Done", status: "completed", blockedBy: [] },
+          ],
+        },
+      });
+      yield* harness.call(updateTask({ taskId: "1", status: "in_progress" }));
+      yield* harness.call(updateTask({ taskId: "2", status: "in_progress" }));
+      yield* harness.call({ name: "TaskList", input: {}, output: { tasks: [] } });
+      yield* harness.call(updateTask({ taskId: "2", status: "pending" }));
+      yield* harness.finishTurn();
+      const plans = harness.plans();
+      assert.lengthOf(plans, 4);
+      assert.deepEqual(plans[1]?.steps, [
+        { id: "task-2", text: "Queued", status: "pending" },
+        { id: "task-3", text: "Working", status: "running" },
+        { id: "task-4", text: "Done", status: "completed" },
+      ]);
+      assert.deepEqual(plans[2]?.steps, [
+        { id: "task-2", text: "Queued", status: "running" },
+        { id: "task-3", text: "Working", status: "running" },
+        { id: "task-4", text: "Done", status: "completed" },
+      ]);
+      assert.deepEqual(plans[3]?.steps, []);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("keeps subagent TaskCreate, TaskUpdate and TaskList out of the main plan", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Main task"));
+      const child = { parentToolUseId: "tool-parent-agent" };
+      yield* harness.call(createTask("2", "Child task"), child);
+      yield* harness.call(updateTask({ taskId: "1", status: "completed" }), child);
+      yield* harness.call({ name: "TaskList", input: {}, output: { tasks: [] } }, child);
+      yield* harness.call(updateTask({ taskId: "1", status: "in_progress" }));
+      yield* harness.finishTurn();
+      assert.lengthOf(harness.plans(), 2);
+      assert.deepEqual(harness.plans().at(-1)?.steps, [
+        { id: "task-1", text: "Main task", status: "running" },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("does not associate structured task output with multiple tool results", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Ambiguous"), { extraToolResult: true });
+      yield* harness.finishTurn();
+      assert.deepEqual(harness.plans(), []);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );
 
   it.effect("reports when a rejected Claude usage window resets", () =>
@@ -4384,6 +4865,128 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each([false, true])(
+    "stops one native subagent while its sibling keeps running, owner settled %s",
+    (ownerSettled) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const stopped: string[] = [];
+          let closes = 0;
+          const harness = yield* makeWakeHarnessWithOptions({
+            stopTask: (taskId) =>
+              Effect.sync(() => {
+                stopped.push(taskId);
+              }),
+            interrupt: Effect.die("A child stop must not interrupt its owner"),
+            close: () =>
+              Effect.sync(() => {
+                closes++;
+              }),
+          });
+          const subagentStatus = (taskId: string) =>
+            harness.events
+              .flatMap((event) =>
+                event.type === "subagent.updated" &&
+                event.subagent.nativeTaskRef?.nativeId === taskId
+                  ? [event.subagent.status]
+                  : [],
+              )
+              .at(-1);
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-native-child-stop"),
+              text: "Start two agents.",
+              attachments: [],
+            }),
+          );
+          for (const [taskId, toolUseId, uuid] of [
+            ["agent-stop", "toolu-stop", "00000000-0000-4000-8000-000000000801"],
+            ["agent-keep", "toolu-keep", "00000000-0000-4000-8000-000000000802"],
+          ] as const) {
+            yield* Queue.offer(
+              harness.sdkMessages,
+              claudeSdkFrame({
+                type: "system",
+                subtype: "task_started",
+                task_id: taskId,
+                tool_use_id: toolUseId,
+                description: `Run ${taskId}`,
+                subagent_type: "general-purpose",
+                task_type: "local_agent",
+                prompt: `Run ${taskId}.`,
+                uuid,
+                session_id: WAKE_NATIVE_SESSION,
+              }),
+            );
+            yield* awaitUntil(() => subagentStatus(taskId) === "running", `${taskId} started`);
+          }
+          if (ownerSettled) {
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000000803",
+                result: "Agents are working.",
+              }),
+            );
+            yield* awaitUntil(() => harness.terminalEvents().length === 1, "owner settled");
+          }
+          const stop = harness.runtime.stopSubagent;
+          assert.isDefined(stop);
+          yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" });
+          assert.deepEqual(stopped, ["agent-stop"]);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_notification",
+              task_id: "agent-stop",
+              tool_use_id: "toolu-stop",
+              status: "stopped",
+              output_file: "/tmp/agent-stop.output",
+              summary: "Stopped by user",
+              uuid: "00000000-0000-4000-8000-000000000804",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          if (ownerSettled) {
+            // A settled owner hears of the stop through its wake turn.
+            yield* awaitUntil(() => harness.continuationRequests.length === 1, "wake offered");
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000000805",
+                result: "One agent was stopped.",
+              }),
+            );
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-native-child-stop-wake"),
+                text: "Background task stopped.",
+                attachments: [],
+                providerTurnOrdinal: 2,
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            );
+            yield* awaitUntil(() => harness.terminalEvents().length === 2, "wake terminal");
+          }
+          yield* awaitUntil(() => subagentStatus("agent-stop") === "cancelled", "child stopped");
+          assert.equal(subagentStatus("agent-keep"), "running");
+          assert.lengthOf(harness.terminalEvents(), ownerSettled ? 2 : 0);
+          // A child that already ended has nothing left to stop.
+          yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" });
+          assert.deepEqual(stopped, ["agent-stop"]);
+          assert.equal(closes, 0);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
+
   it.effect("wakes and hydrates a subagent that completes after the root turn settled", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -4601,16 +5204,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           yield* awaitUntil(() => harness.terminalEvents().length === 1, "subagent model turn");
           const subagents = harness.events.filter((event) => event.type === "subagent.updated");
+          // Aliases and dated ids are recorded as the catalog slug.
+          const observedSlug = "claude-haiku-4-5";
           const initialModel =
             source === "observed-before"
-              ? observedModel
+              ? observedSlug
               : source === "inherit"
                 ? parentModel
-                : "haiku";
+                : "claude-haiku-5-5";
           assert.equal(subagents[0]?.subagent.model, initialModel);
           assert.equal(
             subagents.at(-1)?.subagent.model,
-            source.startsWith("observed") ? observedModel : initialModel,
+            source.startsWith("observed") ? observedSlug : initialModel,
           );
           const child = harness.events.find((event) => event.type === "app_thread.created");
           assert.equal(child?.appThread.modelSelection?.model, initialModel);
@@ -4618,6 +5223,331 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect.each([
+    { agentModel: "opus", slug: "claude-opus-5-5", requested: undefined, expected: "max" },
+    { agentModel: "opus", slug: "claude-opus-5-5", requested: "low", expected: "low" },
+    // claude-haiku-4-5 offers no effort, so none is sent or shown for it.
+    { agentModel: "haiku-4.5", slug: "claude-haiku-4-5", requested: undefined, expected: null },
+  ])(
+    "records the effort a $agentModel subagent runs at (Agent effort $requested)",
+    ({ agentModel, slug, requested, expected }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarness;
+          const now = yield* DateTime.now;
+          const toolUseId = "toolu-subagent-effort";
+          const parentSelection = {
+            instanceId: CLAUDE_TEST_MODEL_SELECTION.instanceId,
+            model: "claude-opus-4-6",
+            options: [
+              { id: "effort", value: "max" },
+              { id: "fastMode", value: false },
+            ],
+          } satisfies ModelSelection;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-subagent-effort"),
+              text: "Spawn a subagent.",
+              attachments: [],
+              modelSelection: parentSelection,
+            }),
+          );
+          for (const frame of [
+            claudeSdkFrame({
+              type: "assistant",
+              parent_tool_use_id: null,
+              message: {
+                model: parentSelection.model,
+                id: "msg_subagent_effort_launch",
+                type: "message",
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: toolUseId,
+                    name: "Agent",
+                    input: {
+                      description: "Research",
+                      subagent_type: "general-purpose",
+                      model: agentModel,
+                      ...(requested === undefined ? {} : { effort: requested }),
+                      prompt: "Research the topic.",
+                    },
+                  },
+                ],
+              },
+              uuid: "00000000-0000-4000-8000-000000000211",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: "task-subagent-effort",
+              tool_use_id: toolUseId,
+              description: "Research",
+              task_type: "local_agent",
+              uuid: "00000000-0000-4000-8000-000000000212",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+            // The reply names the model the alias resolved to.
+            claudeSdkFrame({
+              type: "assistant",
+              parent_tool_use_id: toolUseId,
+              message: {
+                model: slug,
+                id: "msg_subagent_effort_observed",
+                type: "message",
+                role: "assistant",
+                content: [{ type: "text", text: "Researching." }],
+              },
+              uuid: "00000000-0000-4000-8000-000000000213",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000000214",
+              result: "Spawned the subagent.",
+            }),
+          ]) {
+            yield* Queue.offer(harness.sdkMessages, frame);
+          }
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "subagent turn");
+
+          // The alias is stored as its slug, so the reply is no model change,
+          // and the parent's fast mode stays with the parent.
+          const subagentSelection = {
+            instanceId: parentSelection.instanceId,
+            model: slug,
+            ...(expected === null ? {} : { options: [{ id: "effort", value: expected }] }),
+          };
+          const child = harness.events.find((event) => event.type === "app_thread.created");
+          assert.deepEqual(child?.appThread.modelSelection, subagentSelection);
+          const subagents = harness.events.filter((event) => event.type === "subagent.updated");
+          assert.deepEqual(
+            subagents.map((event) => event.subagent.modelSelection),
+            subagents.map(() => subagentSelection),
+          );
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
+
+  it.effect("resolves a subagent's model and effort against the instance's custom models", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const TUNED_TOOL_USE_ID = "toolu-effort-custom-tuned";
+        const SHADOW_TOOL_USE_ID = "toolu-effort-custom-shadow";
+        const harness = yield* makeWakeHarnessWithOptions({
+          settings: CUSTOM_MODEL_CLAUDE_SETTINGS,
+        });
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-subagent-custom-effort"),
+            text: "Spawn subagents on custom models.",
+            attachments: [],
+          }),
+        );
+        for (const frame of [
+          claudeSdkFrame({
+            type: "assistant",
+            parent_tool_use_id: null,
+            message: {
+              model: CLAUDE_TEST_MODEL_SELECTION.model,
+              id: "msg_custom_effort_launch",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: TUNED_TOOL_USE_ID,
+                  name: "Agent",
+                  input: {
+                    description: "Tuned",
+                    subagent_type: "general-purpose",
+                    model: "claude-custom-tuned",
+                    effort: "brutal",
+                    prompt: "Check one thing.",
+                  },
+                },
+                {
+                  type: "tool_use",
+                  id: SHADOW_TOOL_USE_ID,
+                  name: "Agent",
+                  input: {
+                    description: "Shadow",
+                    subagent_type: "general-purpose",
+                    model: "opus",
+                    prompt: "Check another thing.",
+                  },
+                },
+              ],
+            },
+            uuid: "00000000-0000-4000-8000-000000000231",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+          ...[TUNED_TOOL_USE_ID, SHADOW_TOOL_USE_ID].map((id, index) =>
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: `task-${id}`,
+              tool_use_id: id,
+              description: id,
+              task_type: "local_agent",
+              uuid: `00000000-0000-4000-8000-00000000023${index + 2}`,
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          ),
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000234",
+            result: "Spawned the subagents.",
+          }),
+        ]) {
+          yield* Queue.offer(harness.sdkMessages, frame);
+        }
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "subagent turn");
+
+        const selections = Object.fromEntries(
+          harness.events.flatMap((event) =>
+            event.type === "subagent.updated"
+              ? [[event.subagent.nativeTaskRef?.nativeId, event.subagent.modelSelection] as const]
+              : [],
+          ),
+        );
+        const instanceId = CLAUDE_TEST_MODEL_SELECTION.instanceId;
+        assert.deepEqual(selections, {
+          // The custom model's own effort levels apply.
+          [`task-${TUNED_TOOL_USE_ID}`]: {
+            instanceId,
+            model: "claude-custom-tuned",
+            options: [{ id: "effort", value: "brutal" }],
+          },
+          // The custom slug is not resolved to the built-in model it shadows.
+          [`task-${SHADOW_TOOL_USE_ID}`]: { instanceId, model: "opus" },
+        });
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("gives a nested subagent its own effort, else the one its owner runs at", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const OUTER_TOOL_USE_ID = "toolu-effort-outer";
+        const INHERITING_TOOL_USE_ID = "toolu-effort-nested-inheriting";
+        const OVERRIDING_TOOL_USE_ID = "toolu-effort-nested-overriding";
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const parentSelection = {
+          instanceId: CLAUDE_TEST_MODEL_SELECTION.instanceId,
+          model: "claude-opus-4-6",
+          options: [{ id: "effort", value: "high" }],
+        } satisfies ModelSelection;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-subagent-nested-effort"),
+            text: "Spawn a subagent that spawns two more.",
+            attachments: [],
+            modelSelection: parentSelection,
+          }),
+        );
+        const agentCall = (id: string, effort?: string) => ({
+          type: "tool_use" as const,
+          id,
+          name: "Agent",
+          input: {
+            description: id,
+            subagent_type: "general-purpose",
+            ...(effort === undefined ? {} : { effort }),
+            prompt: "Check one thing.",
+          },
+        });
+        const taskStarted = (id: string, uuid: string) =>
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            task_id: `task-${id}`,
+            tool_use_id: id,
+            description: id,
+            task_type: "local_agent",
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        for (const frame of [
+          claudeSdkFrame({
+            type: "assistant",
+            parent_tool_use_id: null,
+            message: {
+              model: parentSelection.model,
+              id: "msg_nested_effort_outer_launch",
+              type: "message",
+              role: "assistant",
+              content: [agentCall(OUTER_TOOL_USE_ID, "low")],
+            },
+            uuid: "00000000-0000-4000-8000-000000000221",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+          taskStarted(OUTER_TOOL_USE_ID, "00000000-0000-4000-8000-000000000222"),
+          // The outer subagent's own Agent calls arrive in its snapshot.
+          claudeSdkFrame({
+            type: "assistant",
+            parent_tool_use_id: OUTER_TOOL_USE_ID,
+            message: {
+              model: parentSelection.model,
+              id: "msg_nested_effort_inner_launch",
+              type: "message",
+              role: "assistant",
+              content: [
+                agentCall(INHERITING_TOOL_USE_ID),
+                agentCall(OVERRIDING_TOOL_USE_ID, "max"),
+              ],
+            },
+            uuid: "00000000-0000-4000-8000-000000000223",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+          taskStarted(INHERITING_TOOL_USE_ID, "00000000-0000-4000-8000-000000000224"),
+          taskStarted(OVERRIDING_TOOL_USE_ID, "00000000-0000-4000-8000-000000000225"),
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000226",
+            result: "Spawned the subagents.",
+          }),
+        ]) {
+          yield* Queue.offer(harness.sdkMessages, frame);
+        }
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "subagent turn");
+
+        const efforts = new Map(
+          harness.events.flatMap((event) =>
+            event.type === "subagent.updated"
+              ? [
+                  [
+                    event.subagent.nativeTaskRef?.nativeId,
+                    getModelSelectionStringOptionValue(event.subagent.modelSelection, "effort"),
+                  ] as const,
+                ]
+              : [],
+          ),
+        );
+        assert.deepEqual(Object.fromEntries(efforts), {
+          [`task-${OUTER_TOOL_USE_ID}`]: "low",
+          [`task-${INHERITING_TOOL_USE_ID}`]: "low",
+          [`task-${OVERRIDING_TOOL_USE_ID}`]: "max",
+        });
+        const childEfforts = harness.events.flatMap((event) =>
+          event.type === "app_thread.created" && event.appThread.id !== harness.threadId
+            ? [getModelSelectionStringOptionValue(event.appThread.modelSelection, "effort")]
+            : [],
+        );
+        assert.deepEqual(childEfforts, ["low", "low", "max"]);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
   it.effect("hangs a subagent's own subagent off it and wakes the root only for its end", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -4627,6 +5557,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const GRANDCHILD_TASK_ID = "task-nested-grandchild";
         const GRANDCHILD_TOOL_USE_ID = "toolu-nested-grandchild";
         const SUBAGENT_MODEL = "claude-haiku-4-5-20251001";
+        // The dated id the child's snapshot reports is recorded as the catalog slug.
+        const SUBAGENT_SLUG = "claude-haiku-4-5";
         const taskStarted = (input: {
           readonly taskId: string;
           readonly toolUseId: string;
@@ -4741,9 +5673,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
         const child = latestSubagent(CHILD_TASK_ID);
         const grandchild = latestSubagent(GRANDCHILD_TASK_ID);
-        assert.equal(child?.model, SUBAGENT_MODEL);
+        assert.equal(child?.model, SUBAGENT_SLUG);
         assert.equal(grandchild?.parentNodeId, child?.id);
-        assert.equal(grandchild?.model, SUBAGENT_MODEL, "a nested subagent runs on its owner's");
+        assert.equal(grandchild?.model, SUBAGENT_SLUG, "a nested subagent runs on its owner's");
 
         // The grandchild's end goes to the child; only the child's end wakes
         // the root, and names the wake.
@@ -8245,6 +9177,31 @@ describe("ClaudeAdapterV2 context usage", () => {
 
     assert.equal(usage.maxTokens, 200_000);
     assert.equal(usage.usedTokens, 110);
+  });
+
+  it("reports the prompt cache TTL the response wrote", () => {
+    const ttlFor = (cache_creation: {
+      ephemeral_1h_input_tokens: number;
+      ephemeral_5m_input_tokens: number;
+    }) =>
+      claudeProviderTurnTokenUsage(
+        { input_tokens: 1, output_tokens: 1, cache_creation },
+        CLAUDE_TEST_MODEL_SELECTION,
+        "2026-08-29T00:00:00.000Z",
+      ).promptCacheTtlMs;
+
+    assert.strictEqual(
+      ttlFor({ ephemeral_1h_input_tokens: 2_000, ephemeral_5m_input_tokens: 300 }),
+      60 * 60_000,
+    );
+    assert.strictEqual(
+      ttlFor({ ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 300 }),
+      5 * 60_000,
+    );
+    assert.strictEqual(
+      ttlFor({ ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 }),
+      undefined,
+    );
   });
 });
 

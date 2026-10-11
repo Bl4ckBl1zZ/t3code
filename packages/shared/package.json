@@ -371,6 +371,10 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
+    "./AgentScope": {
+      "types": "./src/AgentScope.ts",
+      "import": "./src/AgentScope.ts"
+    },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"

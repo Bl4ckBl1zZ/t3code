@@ -3,6 +3,7 @@ import {
   getBuiltInSpriteSheet,
   type FileTreeIcons,
 } from "@pierre/trees";
+import { fileIconPathForMimeType } from "@t3tools/shared/filePreview";
 
 export interface PierreIconResolution {
   name: string;
@@ -151,12 +152,6 @@ export function basenameOfPath(pathValue: string): string {
   return slashIndex === -1 ? pathValue : pathValue.slice(slashIndex + 1);
 }
 
-export function inferEntryKindFromPath(pathValue: string): "file" | "directory" {
-  const base = basenameOfPath(pathValue);
-  if (base.startsWith(".") && !base.slice(1).includes(".")) return "directory";
-  return base.includes(".") ? "file" : "directory";
-}
-
 /** Languages whose files are recognised by name rather than by extension. */
 const LANGUAGE_FILE_NAMES: Record<string, string> = {
   dockerfile: "Dockerfile",
@@ -173,9 +168,16 @@ export function syntheticFileNameForLanguageId(languageId: string): string {
 export function resolvePierreIconForEntry(
   pathValue: string,
   kind: "file" | "directory",
+  mimeType?: string,
 ): PierreIconResolution | null {
   if (kind === "directory") return null;
-  return completeIconResolver.resolveIcon("file-tree-icon-file", pathValue);
+  const icon = completeIconResolver.resolveIcon("file-tree-icon-file", pathValue);
+  return icon?.token === "default" && mimeType
+    ? completeIconResolver.resolveIcon(
+        "file-tree-icon-file",
+        fileIconPathForMimeType(pathValue, mimeType),
+      )
+    : icon;
 }
 
 export function hasSpecificPierreIconForFileName(fileName: string): boolean {

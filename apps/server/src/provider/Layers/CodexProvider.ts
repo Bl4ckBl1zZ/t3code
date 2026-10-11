@@ -57,6 +57,8 @@ export interface CodexAppServerProviderSnapshot {
   readonly resetCredits?:
     | CodexSchema.V2GetAccountRateLimitsResponse["rateLimitResetCredits"]
     | undefined;
+  /** The ChatGPT workspace the usage belongs to, when the backend names it. */
+  readonly accountId?: string | null | undefined;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -445,6 +447,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     account: accountResponse,
     rateLimits: rateLimits?.rateLimitsByLimitId?.codex ?? rateLimits?.rateLimits,
     resetCredits: rateLimits?.rateLimitResetCredits,
+    accountId: rateLimits?.accountId,
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -509,18 +512,22 @@ const makePendingCodexProvider = (
     });
   });
 
-function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]): {
+function accountProbeStatus({ account, accountId }: CodexAppServerProviderSnapshot): {
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProvider["auth"];
   readonly message?: string;
 } {
   const authLabel = codexAccountAuthLabel(account.account);
   const authEmail = codexAccountEmail(account.account);
+  // One email can hold several workspaces, each with its own quota; the usage
+  // read names the one this login draws on.
+  const workspaceId = accountId?.trim() || undefined;
   const auth = {
     status: account.account ? ("authenticated" as const) : ("unknown" as const),
     ...(account.account?.type ? { type: account.account?.type } : {}),
     ...(authLabel ? { label: authLabel } : {}),
     ...(authEmail ? { email: authEmail } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
   } satisfies ServerProvider["auth"];
 
   if (account.account) {
@@ -634,7 +641,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }
 
   const snapshot = probeResult.success.value;
-  const accountStatus = accountProbeStatus(snapshot.account);
+  const accountStatus = accountProbeStatus(snapshot);
 
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,

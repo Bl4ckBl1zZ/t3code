@@ -1,13 +1,19 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { type Project, ProjectId, ThreadId } from "@t3tools/contracts";
+import { type Project, ProjectId, ThreadId, VcsProcessSpawnError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 
+import * as GitManager from "../git/GitManager.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ProjectTeardownScriptRunner from "./ProjectTeardownScriptRunner.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as ScratchProject from "./ScratchProject.ts";
 
@@ -241,6 +247,47 @@ it.layer(NodeServices.layer)("ScratchProject", (it) => {
       assert.deepEqual(yield* launch({ workspaceStrategy: existing }), existing);
       assert.deepEqual(yield* launch({ reuseExistingThread: true }), { type: "root" });
       assert.deepEqual(yield* launch({ projectId: otherProjectId }), { type: "root" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("offers Scratch when Git is not installed", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const baseDir = yield* makeBaseDir;
+      // The real Git workflow over real repository detection, on a machine
+      // where spawning git finds nothing.
+      const gitWorkflow = GitWorkflowService.layer.pipe(
+        Layer.provide(
+          VcsDriverRegistry.layer.pipe(
+            Layer.provide(
+              Layer.succeed(VcsProcess.VcsProcess, {
+                run: (input) =>
+                  Effect.fail(
+                    new VcsProcessSpawnError({
+                      operation: input.operation,
+                      command: input.command,
+                      cwd: input.cwd,
+                      cause: PlatformError.systemError({
+                        _tag: "NotFound",
+                        module: "ChildProcess",
+                        method: "spawn",
+                        syscall: `spawn ${input.command}`,
+                      }),
+                    }),
+                  ),
+              }),
+            ),
+          ),
+        ),
+        Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+        Layer.provide(Layer.mock(GitManager.GitManager)({})),
+        Layer.provide(Layer.mock(ProjectTeardownScriptRunner.ProjectTeardownScriptRunner)({})),
+      );
+      const scratch = yield* ScratchProject.make(baseDir).pipe(
+        Effect.provide(Layer.mergeAll(gitWorkflow, Layer.mock(ProjectService.ProjectService)({}))),
+      );
+
+      assert.equal(yield* scratch.workspaceRoot, path.resolve(baseDir, "scratch"));
     }).pipe(Effect.scoped),
   );
 

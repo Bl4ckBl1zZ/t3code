@@ -141,7 +141,8 @@ A `when` expression is evaluated against context keys describing the current UI 
 the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`,
 `modelPickerOpen`, `usagePageOpen`, `rightPanelOpen`, `editableFocus`, `composerFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
 field, the composer, or another editor has the keyboard; `composerFocus` only while the composer does. The default `mod+1`…`mod+9` thread and model jumps
-are limited to `isDesktop`, so a browser keeps those keys for switching tabs. The set is open and grows over time, so treat that as the current list rather
+are limited to `isDesktop`, so a browser keeps those keys for switching tabs, and the thread jumps do not run
+while the model picker is open. The set is open and grows over time, so treat that as the current list rather
 than a fixed one. Any key the running app does not supply evaluates to `false`.
 
 Operators: `!` (not), `&&` (and), `||` (or), and parentheses.

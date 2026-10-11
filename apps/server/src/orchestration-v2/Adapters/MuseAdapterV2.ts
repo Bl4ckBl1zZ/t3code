@@ -24,6 +24,7 @@ import {
   type RuntimeRequestId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -65,6 +66,7 @@ import {
 } from "../../provider/museProtocol.ts";
 import {
   createMuseSdkHostEffect,
+  museWorkspaceRoot,
   museApprovalMode,
   type createMuseSdkHost,
   type MuseSdkHost,
@@ -287,6 +289,8 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
     openSession: Effect.fn("MuseAdapterV2.openSession")(function* (
       input: ProviderAdapterV2OpenSessionInput,
     ) {
+      // Host relaunches run on other fibers, so keep the opener's scope service.
+      const agentScope = yield* AgentScope;
       if (!options.settings.enabled) return yield* protocolError("Muse Code is disabled");
       if (input.runtimePolicy.interactionMode === "plan")
         return yield* protocolError("Muse Code does not support dedicated Plan mode");
@@ -297,6 +301,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       const cwd = yield* options.fileSystem
         .realPath(requestedCwd)
         .pipe(Effect.orElseSucceed(() => requestedCwd));
+      const workspaceRoot = yield* museWorkspaceRoot(cwd);
       const now = yield* DateTime.now;
       let session: OrchestrationV2ProviderSession = {
         id: input.providerSessionId,
@@ -1316,10 +1321,18 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       );
       const launchHost = Effect.fnUntraced(function* () {
         const epoch = ++hostEpoch;
+        const launch = yield* agentScope.wrap({
+          command: options.settings.binaryPath || "muse",
+          args: [],
+          name: "muse",
+          threadId: input.threadId,
+          env: options.environment,
+        });
         const created = yield* Effect.acquireRelease(
           createMuseSdkHostEffect(
             {
-              binaryPath: options.settings.binaryPath || "muse",
+              binaryPath: launch.command,
+              launchArgs: launch.args,
               cwd,
               environment: options.environment,
               runtimeMode: input.runtimePolicy.runtimeMode,
@@ -1696,7 +1709,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 displayText: turnInput.message.text || "Image attachment",
                 // A resumed session keeps the root it was created with; pin it to
                 // this thread's current checkout so edits land where T3 tracks them.
-                workspaceRoots: [cwd],
+                workspaceRoots: [workspaceRoot],
                 ifBusy: "queue",
                 ...(effort ? { reasoningEffort: effort } : {}),
               },

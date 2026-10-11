@@ -113,6 +113,19 @@ describe("shouldOfferResumeCompaction", () => {
     ).toBe(false);
   });
 
+  it("uses the reported prompt cache TTL instead of the fallback", () => {
+    const offer = (updatedAt: string) =>
+      shouldOfferResumeCompaction({
+        provider: "claudeAgent",
+        usedTokens: 200_000,
+        updatedAt,
+        promptCacheTtlMs: 5 * 60_000,
+        now,
+      });
+    expect(offer("2026-08-24T11:55:00.000Z")).toBe(true);
+    expect(offer("2026-08-24T11:56:00.000Z")).toBe(false);
+  });
+
   it("does not offer for another provider or an unknown timestamp", () => {
     expect(
       shouldOfferResumeCompaction({

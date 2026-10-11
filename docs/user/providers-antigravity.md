@@ -30,6 +30,10 @@ audio directly, within 1 MB per text file, 20 MB per audio clip, and 50 MB of di
 attachments per message. Other files, and files over those limits, are passed as a file
 path for the agent to inspect with its tools.
 
+Open **Usage → Limits** to see the remaining Gemini and shared Claude/GPT allowances for
+Google sign-ins. Each group has separate five-hour and weekly limits and reset times. Limits
+refresh with provider status and include usage outside T3 Code.
+
 Sign out from the account's setup screen or send `/logout` in an Antigravity thread.
 Signing out stops that account's active sessions. Other provider accounts remain separate.
 Removing the managed runtime requires its sessions to be stopped; it does not delete your

@@ -11,7 +11,10 @@ import { CursorOrchestratorReplayHarness } from "../Adapters/CursorAdapterV2.tes
 import { AcpRegistryOrchestratorReplayHarness } from "../Adapters/AcpRegistryAdapterV2.testkit.ts";
 import { GrokOrchestratorReplayHarness } from "../Adapters/GrokAdapterV2.testkit.ts";
 import { OpenCodeOrchestratorReplayHarness } from "../Adapters/OpenCodeAdapterV2.testkit.ts";
-import { MuseOrchestratorReplayHarness } from "../Adapters/MuseAdapterV2.testkit.ts";
+import {
+  materializeMuseReplayWorkspace,
+  MuseOrchestratorReplayHarness,
+} from "../Adapters/MuseAdapterV2.testkit.ts";
 import { PiOrchestratorReplayHarness } from "../Adapters/PiAdapterV2.testkit.ts";
 import { layer as idAllocatorLayer } from "../IdAllocator.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
@@ -68,18 +71,11 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
 }) {
   const rawTranscript = yield* readTranscript(input.driver.transcriptFile);
   const workspace = yield* checkpointWorkspace(input.fixtureName);
-  // Muse canonicalizes its workspace path (macOS /var -> /private/var) before sending it.
   const transcript = yield* input.harness.decodeTranscript(
     input.driver.driver === "codex"
       ? materializeReplayTranscriptWorkspace(rawTranscript, workspace)
       : input.driver.driver === "muse"
-        ? materializeReplayTranscriptWorkspace(
-            rawTranscript,
-            yield* FileSystem.FileSystem.pipe(
-              Effect.flatMap((fs) => fs.realPath(workspace)),
-              Effect.provide(NodeServices.layer),
-            ),
-          )
+        ? yield* materializeMuseReplayWorkspace(rawTranscript, workspace)
         : rawTranscript,
   );
   const materialized = yield* materializeFixtureInput({
