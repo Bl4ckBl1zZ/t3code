@@ -67,6 +67,12 @@ export const ServerProviderAuth = Schema.Struct({
   email: Schema.optional(TrimmedNonEmptyString),
   action: Schema.optional(AcpRegistryUrlAuthAction),
   canLogout: Schema.optional(Schema.Boolean),
+  /**
+   * The workspace or organization whose quota the login draws on, such as a
+   * ChatGPT workspace or Claude organization id. One email can belong to
+   * several, each with its own quota.
+   */
+  workspaceId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderAuth = typeof ServerProviderAuth.Type;
 

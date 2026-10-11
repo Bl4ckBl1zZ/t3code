@@ -199,6 +199,65 @@ describe("makeManagedServerProvider", () => {
         }),
       ).pipe(Effect.provide(AlwaysRunTestLayer)),
   );
+  it.effect("keeps the last good limits after a failed read only for the same workspace", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const refreshCount = yield* Ref.make(0);
+        const liveWindow = {
+          id: "five_hour",
+          kind: "session" as const,
+          label: "Session",
+          usedPercent: 40,
+        };
+        const failed = {
+          checkedAt: "2026-04-10T00:00:03.000Z",
+          windows: [],
+          unavailable: { reason: "probeFailed" as const },
+        };
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: () => false,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.updateAndGet(refreshCount, (count) => count + 1).pipe(
+            Effect.map((count) =>
+              count === 1
+                ? {
+                    ...refreshedSnapshot,
+                    auth: { ...refreshedSnapshot.auth, workspaceId: "ws-a" },
+                    usageLimits: {
+                      checkedAt: "2026-04-10T00:00:01.000Z",
+                      windows: [liveWindow],
+                    },
+                  }
+                : {
+                    ...refreshedSnapshotSecond,
+                    ...(count === 3
+                      ? { auth: { ...refreshedSnapshotSecond.auth, workspaceId: "ws-b" } }
+                      : {}),
+                    usageLimits: failed,
+                  },
+            ),
+          ),
+          refreshOnInterval: false,
+        });
+
+        // The initial check runs in the background and reads ws-a's windows.
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        // A failed read for the same login keeps the windows...
+        const refreshed = yield* provider.refresh;
+        assert.deepStrictEqual(refreshed.usageLimits?.windows, [liveWindow]);
+        // ...and the workspace they were read for.
+        assert.strictEqual(refreshed.auth.workspaceId, "ws-a");
+
+        // A failed read for another workspace does not inherit those windows.
+        const switched = yield* provider.refresh;
+        assert.strictEqual(switched.auth.workspaceId, "ws-b");
+        assert.strictEqual(switched.usageLimits?.unavailable?.reason, "probeFailed");
+      }),
+    ).pipe(Effect.provide(AlwaysRunTestLayer)),
+  );
   it.effect(
     "runs the initial provider check in the background and streams the refreshed snapshot",
     () =>

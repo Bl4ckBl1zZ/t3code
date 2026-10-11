@@ -10,7 +10,47 @@ import type {
 export type LimitProvider = Pick<
   ServerProvider,
   "enabled" | "installed" | "availability" | "driver" | "instanceId" | "displayName" | "usageLimits"
-> & { readonly auth: Pick<ServerProvider["auth"], "email"> };
+> & { readonly auth: Pick<ServerProvider["auth"], "email" | "workspaceId"> };
+
+/**
+ * Keys a report by the account it draws on. One email can belong to several
+ * workspaces, each with its own quota, so a report that names its workspace is
+ * keyed by it too. One that does not (a hub, an older server) joins the only
+ * workspace known for its email, and gets no key when there are several, since
+ * it cannot say which one it read. Every enabled login counts, read or not, so
+ * an unreadable workspace still counts as one.
+ */
+function accountIdentityResolver(
+  reports: Iterable<{
+    readonly driver: ServerProvider["driver"];
+    readonly email?: string | undefined;
+    readonly workspaceId?: string | undefined;
+  }>,
+) {
+  const emailKey = (driver: ServerProvider["driver"], email: string | undefined) => {
+    const normalized = email?.trim().toLowerCase();
+    return normalized ? `${driver}:${normalized}` : null;
+  };
+  const workspaces = new Map<string, Set<string>>();
+  for (const report of reports) {
+    const key = emailKey(report.driver, report.email);
+    if (key && report.workspaceId) {
+      workspaces.set(key, (workspaces.get(key) ?? new Set()).add(report.workspaceId));
+    }
+  }
+  return (
+    driver: ServerProvider["driver"],
+    email: string | undefined,
+    workspaceId: string | undefined,
+  ): string | null => {
+    const key = emailKey(driver, email);
+    if (!key) return null;
+    if (workspaceId) return `${key}:${workspaceId}`;
+    const known = workspaces.get(key);
+    if (!known) return key;
+    return known.size === 1 ? `${key}:${[...known][0]}` : null;
+  };
+}
 
 export interface LimitAccount {
   readonly id: string;
@@ -31,6 +71,18 @@ export function collectLimitAccounts(
   }[],
 ): readonly LimitAccount[] {
   const accounts = new Map<string, LimitAccount>();
+  const resolveIdentity = accountIdentityResolver(
+    environments.flatMap((environment) => [
+      ...environment.providers
+        .filter((provider) => provider.enabled)
+        .map((provider) => ({
+          driver: provider.driver,
+          email: provider.auth.email,
+          workspaceId: provider.auth.workspaceId,
+        })),
+      ...(environment.usageLimitSources ?? []).flatMap((source) => source.accounts),
+    ]),
+  );
   for (const environment of environments) {
     for (const provider of environment.providers) {
       if (!provider.enabled || !provider.installed || provider.availability === "unavailable")
@@ -38,8 +90,9 @@ export function collectLimitAccounts(
       if (!provider.usageLimits && provider.driver !== "codex" && provider.driver !== "claudeAgent")
         continue;
       const email = provider.auth.email?.trim().toLowerCase();
-      const identity = email || `instance:${environment.id}:${provider.instanceId}`;
-      const id = `${provider.driver}:${identity}`;
+      const id =
+        resolveIdentity(provider.driver, provider.auth.email, provider.auth.workspaceId) ??
+        `${provider.driver}:instance:${environment.id}:${provider.instanceId}`;
       const held = accounts.get(id);
       const newer =
         Date.parse(provider.usageLimits?.checkedAt ?? "") >
@@ -72,8 +125,9 @@ export function collectLimitAccounts(
     }
     for (const source of environment.usageLimitSources ?? []) {
       for (const account of source.accounts) {
-        const email = account.email?.trim().toLowerCase();
-        const id = `${account.driver}:${email || `hub:${environment.id}:${source.id}:${account.id}`}`;
+        const id =
+          resolveIdentity(account.driver, account.email, account.workspaceId) ??
+          `${account.driver}:hub:${environment.id}:${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
         const held = accounts.get(id);
         const newer =
           !held?.limits ||
@@ -185,7 +239,7 @@ export function collectLimitPools(
       .sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind])[0];
     const orderReset = (account: LimitAccount) => {
       const window = (account.limits?.windows ?? []).find(
-        (window) => window.kind === orderWindow?.kind && window.id === orderWindow.id,
+        (window) => orderWindow && poolKey(driver, window) === poolKey(driver, orderWindow),
       );
       return (window ? resetMillis(window) : null) ?? Number.POSITIVE_INFINITY;
     };
@@ -203,20 +257,36 @@ function accountSortName(account: LimitAccount): string {
   return account.label.toLowerCase();
 }
 
+/**
+ * Codex ids are slots, not allowances: a weekly-only plan reports its weekly
+ * window as `primary`, other plans as `secondary`. Its windows pool by kind;
+ * other drivers' ids name distinct allowances.
+ */
+function poolKey(driver: ServerProvider["driver"], window: ServerProviderUsageWindow): string {
+  return driver === "codex" ? window.kind : `${window.kind}:${window.id}`;
+}
+
 function poolWindows(accounts: readonly LimitAccount[], now: number): readonly LimitPoolWindow[] {
   const byKey = new Map<string, LimitPoolMember[]>();
   for (const account of accounts) {
     if (!account.limits || account.limits.unavailable) continue;
     for (const window of account.limits?.windows ?? []) {
-      const key = `${window.kind}:${window.id}`;
+      const pooled = poolKey(account.driver, window);
+      // An account with two windows of one kind keeps the second apart.
+      const key = byKey.get(pooled)?.some((member) => member.account === account)
+        ? `${window.kind}:${window.id}`
+        : pooled;
       const list = byKey.get(key);
       if (list) list.push({ account, window });
       else byKey.set(key, [{ account, window }]);
     }
   }
-  const pools = [...byKey.values()].map((members): LimitPoolWindow => {
+  const pools = [...byKey].map(([key, members]): LimitPoolWindow => {
     const memberByAccount = new Map(members.map((member) => [member.account.id, member]));
     const first = members[0]!.window;
+    // Pooled Codex slots take the pool's own key, so the id stays the same
+    // whichever account sorts first.
+    const id = members[0]!.account.driver === "codex" ? key : first.id;
     const usedPercent = members.reduce((sum, m) => sum + m.window.usedPercent, 0) / members.length;
     // Pace compares spend against the clock, so it is judged only over the
     // members that have a clock; a window with no reset would otherwise
@@ -243,7 +313,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       })
       .sort((left, right) => left.at - right.at);
     return {
-      id: first.id,
+      id,
       kind: first.kind,
       label: first.label,
       members,
