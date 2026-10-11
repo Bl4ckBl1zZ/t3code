@@ -369,3 +369,44 @@ describe("codex slots", () => {
     ).toEqual(["weekly", "weekly:secondary"]);
   });
 });
+
+describe("Antigravity limit presentation", () => {
+  it("keeps the shared Claude/GPT bucket separate from Gemini and pairs their windows", () => {
+    const antigravity = provider({
+      instanceId: ProviderInstanceId.make("antigravity"),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Antigravity",
+      usageLimits: limits({
+        windows: [
+          window({ id: "3p-5h", label: "Claude & GPT (shared) · 5-hour", usedPercent: 90 }),
+          window({ id: "gemini-5h", label: "Gemini · 5-hour", usedPercent: 20 }),
+          window({
+            id: "3p-weekly",
+            kind: "weekly",
+            label: "Claude & GPT (shared) · Weekly",
+            usedPercent: 100,
+          }),
+          window({
+            id: "gemini-weekly",
+            kind: "weekly",
+            label: "Gemini · Weekly",
+            usedPercent: 10,
+          }),
+        ],
+      }),
+    });
+    const pools = collectLimitPools(
+      collectLimitAccounts([{ id: "a", label: "Local", providers: [provider(), antigravity] }]),
+      now,
+    );
+    expect(pools.map((pool) => pool.driver)).toEqual(["codex", "antigravity"]);
+    const windows = pools[1]?.windows ?? [];
+    expect(windows.map((item) => item.id)).toEqual([
+      "gemini-5h",
+      "gemini-weekly",
+      "3p-5h",
+      "3p-weekly",
+    ]);
+    expect(windows.map((item) => item.remainingPercent)).toEqual([80, 90, 10, 0]);
+  });
+});

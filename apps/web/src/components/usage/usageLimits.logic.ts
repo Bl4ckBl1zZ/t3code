@@ -249,8 +249,26 @@ export function collectLimitPools(
         accountSortName(left).localeCompare(accountSortName(right)) ||
         left.id.localeCompare(right.id),
     );
-    return { driver, accounts: sorted, windows: poolWindows(sorted, now) };
+    return { driver, accounts: sorted, windows: displayOrder(driver, poolWindows(sorted, now)) };
   });
+}
+
+/**
+ * Antigravity reports a five-hour and a weekly window per model group; keep
+ * each group's pair together, Gemini first.
+ */
+function displayOrder(
+  driver: ServerProvider["driver"],
+  windows: readonly LimitPoolWindow[],
+): readonly LimitPoolWindow[] {
+  if (driver !== "antigravity") return windows;
+  const group = (id: string) => id.replace(/-(5h|weekly|quota)$/, "");
+  return [...windows].sort(
+    (left, right) =>
+      Number(!left.id.startsWith("gemini-")) - Number(!right.id.startsWith("gemini-")) ||
+      group(left.id).localeCompare(group(right.id)) ||
+      WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind],
+  );
 }
 
 function accountSortName(account: LimitAccount): string {

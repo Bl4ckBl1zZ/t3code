@@ -35,7 +35,7 @@ your app understands. Update the app to include newly supported providers.
 
 ## Subscription limits
 
-Open **Limits** from Usage (or **Settings → Usage Limits** on iPhone and iPad) to see Codex and Claude subscription windows,
+Open **Limits** from Usage (or **Settings → Usage Limits** on iPhone and iPad) to see Codex, Claude, and Antigravity subscription windows,
 quota remaining, reset times, and when each report was checked. Choose which environments to
 include, then use **Refresh limits** to request fresh reports.
 
