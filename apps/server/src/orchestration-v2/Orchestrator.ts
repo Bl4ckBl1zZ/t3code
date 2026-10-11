@@ -388,6 +388,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "prepared-run.retry":
     case "run.restart-continuation.prepare":
     case "run.restart-continuation.clear":
+    case "subagent.stop":
     case "run.interrupt":
     case "thread.background-work.settle":
     case "thread.stop":
@@ -7879,6 +7880,88 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return undefined;
     });
 
+  /**
+   * Stops one provider-native Claude subagent through its owning provider
+   * session. The owner's turn keeps running; the provider's task notification
+   * reports the subagent's outcome.
+   */
+  const dispatchSubagentStop = (
+    command: Extract<OrchestrationV2ServerCommand, { readonly type: "subagent.stop" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* loadProjectionForCommand(command);
+      const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      const subagent = projection.subagents.find(
+        (candidate) => candidate.id === command.subagentId,
+      );
+      if (
+        subagent === undefined ||
+        subagent.runId !== command.runId ||
+        subagent.origin !== "provider_native" ||
+        subagent.driver !== "claudeAgent" ||
+        subagent.nativeTaskRef?.strength !== "strong" ||
+        subagent.nativeTaskRef.nativeId === null
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The requested native subagent cannot be stopped on this run.",
+        });
+      }
+      if (!["pending", "running", "waiting"].includes(subagent.status)) return;
+      const providerThread = projection.providerThreads.find(
+        (candidate) => candidate.id === run?.providerThreadId,
+      );
+      const providerTurn = projection.providerTurns.findLast(
+        (candidate) => candidate.providerThreadId === providerThread?.id,
+      );
+      if (
+        providerThread?.providerSessionId == null ||
+        providerTurn === undefined ||
+        providerThread.driver !== subagent.driver ||
+        providerThread.providerInstanceId !== subagent.providerInstanceId
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The requested native subagent has no owning provider session.",
+        });
+      }
+      const providerSessionId = providerThread.providerSessionId;
+      const nativeTaskId = subagent.nativeTaskRef.nativeId;
+      const now = yield* DateTime.now;
+      // Record the request with its effect; the provider notification supplies the outcome.
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "subagent.updated",
+        threadId: command.threadId,
+        runId: command.runId,
+        nodeId: subagent.id,
+        providerInstanceId: subagent.providerInstanceId,
+        occurredAt: now,
+        payload: { ...subagent, updatedAt: now },
+      });
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:subagent.stop:${subagent.id}`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: {
+            type: "provider-turn.interrupt",
+            providerSessionId,
+            providerThreadId: providerThread.id,
+            providerTurnId: providerTurn.id,
+            subagent: { id: subagent.id, nativeTaskId },
+          },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
+    });
+
   const dispatchRunInterrupt = (
     command: Extract<OrchestrationV2ServerCommand, { readonly type: "run.interrupt" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -9217,6 +9300,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "run.restart-continuation.clear":
         yield* dispatchRestartContinuation(command, events);
         break;
+      case "subagent.stop":
+        yield* dispatchSubagentStop(command, events, effects);
+        break;
       case "run.interrupt":
         cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
         break;
@@ -9355,7 +9441,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         // its expected outcome, not a failure.
         planned.events.length > 0 ||
         command.type === "thread.background-work.settle" ||
-        command.type === "thread.stop"
+        command.type === "thread.stop" ||
+        command.type === "subagent.stop"
           ? Effect.succeed(planned)
           : Effect.fail(
               new OrchestratorDispatchError({

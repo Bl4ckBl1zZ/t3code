@@ -147,6 +147,44 @@ it("stops a running app-owned subagent from its row without opening its thread",
   expect(state.navigate).not.toHaveBeenCalled();
 });
 
+it("stops a running Claude-native subagent through its owner, not its thread", async () => {
+  state.shells = [
+    {
+      ...childShell,
+      source: {
+        ...childShell.source,
+        status: "running",
+        activityRunStartedAt: DateTime.makeUnsafe("2026-09-16T12:00:00Z"),
+      },
+    },
+  ];
+  const native = {
+    ...agent,
+    origin: "provider_native",
+    driver: "claudeAgent",
+    threadId: PARENT_ID,
+    nativeTaskRef: { driver: "claudeAgent", nativeId: "claude-task", strength: "strong" },
+    status: "running",
+    completedAt: null,
+  };
+  state.projection = projectionWith([native]);
+  await renderExpanded();
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Stop subagent Checker" }).props.onClick(),
+  );
+  expect(state.command).toHaveBeenCalledWith({
+    environmentId: ENVIRONMENT_ID,
+    input: { threadId: PARENT_ID, subagentId: "agent" },
+  });
+  expect(state.navigate).not.toHaveBeenCalled();
+
+  // Other providers' native subagents have no stop path.
+  await act(async () => renderer.unmount());
+  state.projection = projectionWith([{ ...native, driver: "codex" }]);
+  await renderExpanded();
+  expect(renderer.root.findAllByProps({ "aria-label": "Stop subagent Checker" })).toHaveLength(0);
+});
+
 it("offers no Stop for a settled subagent", async () => {
   state.shells = [childShell];
   state.projection = projectionWith([agent]);

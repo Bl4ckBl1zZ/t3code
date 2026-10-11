@@ -210,6 +210,9 @@ export const executorLayer: Layer.Layer<
                 providerSessionId: effect.request.providerSessionId,
                 providerThreadId: effect.request.providerThreadId,
                 providerTurnId: effect.request.providerTurnId,
+                ...(effect.request.subagent === undefined
+                  ? {}
+                  : { subagent: effect.request.subagent }),
               })
               .pipe(
                 // The adapter has already lost the native turn: nothing is
@@ -227,14 +230,17 @@ export const executorLayer: Layer.Layer<
                 // work no process will report on, so the Stop ends it too.
                 // One Stop can interrupt several provider threads, so the
                 // settle is keyed by effect, not by the Stop command.
+                // Stopping one subagent leaves its owner's turn running.
                 Effect.andThen(
-                  backgroundWorkSettle.settle({
-                    type: "thread.background-work.settle",
-                    commandId: CommandId.make(`${effect.id}:background-work-settled`),
-                    threadId: effect.threadId,
-                    providerThreadId: effect.request.providerThreadId,
-                    providerTurnId: effect.request.providerTurnId,
-                  }),
+                  effect.request.subagent !== undefined
+                    ? Effect.void
+                    : backgroundWorkSettle.settle({
+                        type: "thread.background-work.settle",
+                        commandId: CommandId.make(`${effect.id}:background-work-settled`),
+                        threadId: effect.threadId,
+                        providerThreadId: effect.request.providerThreadId,
+                        providerTurnId: effect.request.providerTurnId,
+                      }),
                 ),
                 Effect.mapError(
                   (cause) =>

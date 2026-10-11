@@ -3,6 +3,7 @@ import {
   CheckpointId,
   CheckpointScopeId,
   CommandId,
+  NodeId,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
@@ -234,6 +235,35 @@ it.effect("settles a stopped run when its adapter has already lost the native tu
       });
     }).pipe(Effect.provide(layer));
     assert.deepEqual(yield* Ref.get(events), ["thread.background-work.settle"]);
+  }),
+);
+
+it.effect("a native subagent stop does not settle its owner's background work", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const events = yield* Ref.make<ReadonlyArray<string>>([]);
+    const layer = makeExecutorLayer({
+      events,
+      interrupt: (input) => {
+        assert.equal(input.subagent?.nativeTaskId, "native-task");
+        return Ref.update(events, (current) => [...current, "stop-child"]);
+      },
+    });
+    yield* Effect.gen(function* () {
+      const executor = yield* OrchestrationEffectExecutorV2;
+      yield* executor.execute({
+        ...restartEffect(now, { type: "detach" }),
+        request: {
+          type: "provider-turn.interrupt",
+          providerSessionId: oldSessionId,
+          providerThreadId,
+          providerTurnId,
+          subagent: { id: NodeId.make("subagent"), nativeTaskId: "native-task" },
+        },
+      });
+    }).pipe(Effect.provide(layer));
+    // The owner's background work stays running: no settle follows.
+    assert.deepEqual(yield* Ref.get(events), ["stop-child"]);
   }),
 );
 

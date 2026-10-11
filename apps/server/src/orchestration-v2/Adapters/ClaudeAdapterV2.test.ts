@@ -1595,6 +1595,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
     readonly interrupt?: Effect.Effect<void>;
     readonly settings?: ClaudeSettings;
+    readonly stopTask?: (taskId: string) => Effect.Effect<void>;
     // A CLI process opened after the first streams from its own queue, so the
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
@@ -1657,6 +1658,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   Effect.sync(() => {
                     permissionModeChanges.push(mode);
                   }),
+                ...(options?.stopTask === undefined ? {} : { stopTask: options.stopTask }),
                 interrupt: options?.interrupt ?? Effect.void,
                 close: options?.close?.(sdkMessages) ?? Effect.void,
               };
@@ -4861,6 +4863,128 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.deepEqual([...new Set(userRunItems)], ["assistant_message"]);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
+  );
+
+  it.effect.each([false, true])(
+    "stops one native subagent while its sibling keeps running, owner settled %s",
+    (ownerSettled) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const stopped: string[] = [];
+          let closes = 0;
+          const harness = yield* makeWakeHarnessWithOptions({
+            stopTask: (taskId) =>
+              Effect.sync(() => {
+                stopped.push(taskId);
+              }),
+            interrupt: Effect.die("A child stop must not interrupt its owner"),
+            close: () =>
+              Effect.sync(() => {
+                closes++;
+              }),
+          });
+          const subagentStatus = (taskId: string) =>
+            harness.events
+              .flatMap((event) =>
+                event.type === "subagent.updated" &&
+                event.subagent.nativeTaskRef?.nativeId === taskId
+                  ? [event.subagent.status]
+                  : [],
+              )
+              .at(-1);
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-native-child-stop"),
+              text: "Start two agents.",
+              attachments: [],
+            }),
+          );
+          for (const [taskId, toolUseId, uuid] of [
+            ["agent-stop", "toolu-stop", "00000000-0000-4000-8000-000000000801"],
+            ["agent-keep", "toolu-keep", "00000000-0000-4000-8000-000000000802"],
+          ] as const) {
+            yield* Queue.offer(
+              harness.sdkMessages,
+              claudeSdkFrame({
+                type: "system",
+                subtype: "task_started",
+                task_id: taskId,
+                tool_use_id: toolUseId,
+                description: `Run ${taskId}`,
+                subagent_type: "general-purpose",
+                task_type: "local_agent",
+                prompt: `Run ${taskId}.`,
+                uuid,
+                session_id: WAKE_NATIVE_SESSION,
+              }),
+            );
+            yield* awaitUntil(() => subagentStatus(taskId) === "running", `${taskId} started`);
+          }
+          if (ownerSettled) {
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000000803",
+                result: "Agents are working.",
+              }),
+            );
+            yield* awaitUntil(() => harness.terminalEvents().length === 1, "owner settled");
+          }
+          const stop = harness.runtime.stopSubagent;
+          assert.isDefined(stop);
+          yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" });
+          assert.deepEqual(stopped, ["agent-stop"]);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_notification",
+              task_id: "agent-stop",
+              tool_use_id: "toolu-stop",
+              status: "stopped",
+              output_file: "/tmp/agent-stop.output",
+              summary: "Stopped by user",
+              uuid: "00000000-0000-4000-8000-000000000804",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          if (ownerSettled) {
+            // A settled owner hears of the stop through its wake turn.
+            yield* awaitUntil(() => harness.continuationRequests.length === 1, "wake offered");
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000000805",
+                result: "One agent was stopped.",
+              }),
+            );
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-native-child-stop-wake"),
+                text: "Background task stopped.",
+                attachments: [],
+                providerTurnOrdinal: 2,
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            );
+            yield* awaitUntil(() => harness.terminalEvents().length === 2, "wake terminal");
+          }
+          yield* awaitUntil(() => subagentStatus("agent-stop") === "cancelled", "child stopped");
+          assert.equal(subagentStatus("agent-keep"), "running");
+          assert.lengthOf(harness.terminalEvents(), ownerSettled ? 2 : 0);
+          // A child that already ended has nothing left to stop.
+          yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" });
+          assert.deepEqual(stopped, ["agent-stop"]);
+          assert.equal(closes, 0);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
   );
 
   it.effect("wakes and hydrates a subagent that completes after the root turn settled", () =>

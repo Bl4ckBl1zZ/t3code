@@ -3310,6 +3310,14 @@ export const OrchestrationV2Command = Schema.Union([
     runId: RunId,
     messageId: MessageId,
   }),
+  /** Stops one provider-native child while its owning run keeps working. */
+  Schema.Struct({
+    type: Schema.Literal("subagent.stop"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    subagentId: NodeId,
+  }),
   /**
    * Stop. Besides the run, it ends the thread's pull request watches, drops
    * the wakes its delegated tasks still owe, and stops every delegated task

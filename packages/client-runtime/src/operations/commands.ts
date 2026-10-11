@@ -7,6 +7,7 @@ import {
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
+  type NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type PlanId,
@@ -190,6 +191,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
+  /** Stops one provider-native subagent of this thread; its owning run keeps working. */
+  readonly subagentId?: NodeId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
 }
@@ -742,6 +745,17 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   input: InterruptThreadTurnInput,
 ) {
   const projection = yield* getProjection(input.threadId);
+  if (input.subagentId !== undefined) {
+    const subagent = projection.subagents.find((agent) => agent.id === input.subagentId);
+    if (subagent?.runId == null) return { sequence: 0 };
+    return yield* dispatch({
+      type: "subagent.stop",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      runId: subagent.runId,
+      subagentId: subagent.id,
+    });
+  }
   const runId =
     input.runId ??
     (input.turnId as RunId | undefined) ??
