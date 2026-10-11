@@ -1619,6 +1619,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     role: row.message.role,
     text: row.message.text,
     ...(row.message.createdBy === undefined ? {} : { createdBy: row.message.createdBy }),
+    ...(row.message.creationSource === undefined
+      ? {}
+      : { creationSource: row.message.creationSource }),
     ...(row.message.scheduledTaskId === undefined
       ? {}
       : { scheduledTaskId: row.message.scheduledTaskId }),
@@ -1653,12 +1656,19 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
   return (
     <div className={cn("group flex flex-col gap-1", isAgentMessage ? "items-start" : "items-end")}>
-      {userMessage.isAutomation ? (
+      {userMessage.attribution === "automation" ? (
         <p
           className="ms-1 text-[11px] text-muted-foreground/70"
           data-user-message-attribution="automation"
         >
           Sent by automation
+        </p>
+      ) : userMessage.attribution === "t3code" ? (
+        <p
+          className="ms-1 text-[11px] text-muted-foreground/70"
+          data-user-message-attribution="t3code"
+        >
+          Sent by T3 Code
         </p>
       ) : isAgentMessage ? (
         <p
@@ -1689,7 +1699,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             : "rounded-2xl bg-accent",
         )}
       >
-        <MessageAuthorHeading>{isAgentMessage ? "Another agent" : "You"}</MessageAuthorHeading>
+        <MessageAuthorHeading>
+          {userMessage.attribution === "t3code"
+            ? "T3 Code"
+            : isAgentMessage
+              ? "Another agent"
+              : "You"}
+        </MessageAuthorHeading>
         {regularAttachments.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularAttachments.map(

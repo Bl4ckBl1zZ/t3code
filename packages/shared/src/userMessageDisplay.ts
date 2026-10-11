@@ -1,4 +1,8 @@
-import { type OrchestrationV2Actor, ScheduledTaskId } from "@t3tools/contracts";
+import {
+  type OrchestrationV2Actor,
+  type OrchestrationV2CreationSource,
+  ScheduledTaskId,
+} from "@t3tools/contracts";
 
 /**
  * How a stored user prompt becomes the text a user message shows. Context the
@@ -11,31 +15,55 @@ import { type OrchestrationV2Actor, ScheduledTaskId } from "@t3tools/contracts";
 const LEGACY_AUTOMATION_PREFIX = /^\[Triggered by schedule task: [^\r\n]+\]\r?\n\r?\n/;
 const LEGACY_AUTOMATION_MESSAGE_ID = /^scheduled-task-message:(.+):\d+:(?:scheduled|manual)$/;
 
-/** Older scheduled messages stored their attribution in the prompt itself. */
+/** Who sent a user-role message the user did not type. */
+export type UserMessageAttribution = "automation" | "agent" | "t3code" | null;
+
+/**
+ * Text and sender label for a user-role message. Older scheduled messages
+ * stored their attribution in the prompt itself.
+ */
 export function resolveUserMessagePresentation(message: {
   readonly id?: string;
   readonly role: string;
   readonly text: string;
   readonly createdBy?: OrchestrationV2Actor;
+  readonly creationSource?: OrchestrationV2CreationSource;
   readonly scheduledTaskId?: ScheduledTaskId;
-}) {
+}): {
+  readonly text: string;
+  readonly attribution: UserMessageAttribution;
+  /** `attribution === "automation"`, kept for clients that still read it. */
+  readonly isAutomation: boolean;
+  readonly scheduledTaskId: ScheduledTaskId | undefined;
+} {
+  const present = (
+    text: string,
+    attribution: UserMessageAttribution,
+    scheduledTaskId: ScheduledTaskId | undefined,
+  ) => ({ text, attribution, isAutomation: attribution === "automation", scheduledTaskId });
   if (message.role !== "user") {
-    return { text: message.text, isAutomation: false, scheduledTaskId: undefined };
+    return present(message.text, null, undefined);
   }
   if (message.scheduledTaskId !== undefined) {
-    return { text: message.text, isAutomation: true, scheduledTaskId: message.scheduledTaskId };
+    return present(message.text, "automation", message.scheduledTaskId);
   }
   const legacyPrefix = LEGACY_AUTOMATION_PREFIX.exec(message.text);
   const legacyTaskId = legacyPrefix
     ? LEGACY_AUTOMATION_MESSAGE_ID.exec(message.id ?? "")?.[1]
     : undefined;
-  const isAutomation =
-    legacyPrefix !== null && (legacyTaskId !== undefined || message.createdBy === "agent");
-  return {
-    text: isAutomation ? message.text.slice(legacyPrefix[0].length) : message.text,
-    isAutomation,
-    scheduledTaskId: legacyTaskId === undefined ? undefined : ScheduledTaskId.make(legacyTaskId),
-  };
+  if (legacyPrefix !== null && (legacyTaskId !== undefined || message.createdBy === "agent")) {
+    return present(
+      message.text.slice(legacyPrefix[0].length),
+      "automation",
+      legacyTaskId === undefined ? undefined : ScheduledTaskId.make(legacyTaskId),
+    );
+  }
+  // T3 Code itself sends restart continuations as the agent, from the server.
+  return present(
+    message.text,
+    message.createdBy !== "agent" ? null : message.creationSource === "server" ? "t3code" : "agent",
+    undefined,
+  );
 }
 
 // ---------------------------------------------------------------------------
