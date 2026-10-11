@@ -72,6 +72,16 @@ describe("searchSettings", () => {
     expect(SETTINGS_SEARCH_ITEMS.some((item) => item.id === "quit-confirmation")).toBe(true);
     expect(searchSettings("quit confirmation")).toEqual([]);
     expect(searchSettings("wsl")).toEqual([]);
+    expect(searchSettings("update track")).toEqual([]);
+  });
+
+  it("finds the About update rows", () => {
+    expect(searchSettings("check for updates").map((item) => item.id)).toContain("app-version");
+    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "update-track")).toMatchObject({
+      title: "Update track",
+      to: "/settings/general",
+      releaseChannelOnly: true,
+    });
   });
 
   it("registers the WSL backend as a desktop-only setting", () => {
