@@ -2432,6 +2432,18 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         dispatchMode: { type: "start_immediately" },
       });
 
+      // A late automatic branch default must not reset a thread that already started.
+      const nonEmptyClaim = yield* orchestrator
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-layer-active-settle-empty-claim"),
+          threadId,
+          worktreePath: "/tmp/reassigned-after-message",
+          expectedEmpty: true,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(nonEmptyClaim, OrchestratorDispatchError);
+
       const error = yield* orchestrator
         .dispatch({
           type: "thread.settle",

@@ -1906,6 +1906,15 @@ function ChatViewContent(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
+  // The server queues a message behind a run that is still preparing its
+  // worktree or starting its agent, so a send during setup waits there and
+  // starts on its own instead of being refused.
+  const sendQueuesBehindSetup =
+    isServerThread &&
+    (activeActivityRun?.status === "preparing" || activeActivityRun?.status === "starting");
+  // Such a send skips the local dispatch, so this keeps its thread's composer busy while it is
+  // in flight.
+  const [setupQueueSendThreadKey, setSetupQueueSendThreadKey] = useState<string | null>(null);
   const parentSubagentThreadId =
     activeThread?.lineage.relationshipToParent === "subagent"
       ? activeThread.lineage.parentThreadId
@@ -7394,7 +7403,7 @@ function ChatViewContent(props: ChatViewProps) {
     };
     if (
       !activeThread ||
-      isSendBusy ||
+      (isSendBusy && !sendQueuesBehindSetup) ||
       isConnecting ||
       activeEnvironmentUnavailable ||
       environmentChangeRef.current !== null ||
@@ -7669,7 +7678,7 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     const threadIdForSend = activeThread.id;
-    const isFirstMessage = !isServerThread || activeMessageCount === 0;
+    const isFirstMessage = !sendQueuesBehindSetup && (!isServerThread || activeMessageCount === 0);
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
@@ -7709,9 +7718,11 @@ function ChatViewContent(props: ChatViewProps) {
       !keepFullHistory &&
       ctxSelectedProvider === "claudeAgent" &&
       messageTextForSend.trim().toLowerCase() !== "/compact";
-    const turnDispatchMode = compactBeforeSend ? "queue" : dispatchMode;
+    const turnDispatchMode = compactBeforeSend || sendQueuesBehindSetup ? "queue" : dispatchMode;
     const shouldQueueBehindActiveRun =
-      compactBeforeSend || (phase === "running" && dispatchMode === "queue");
+      compactBeforeSend ||
+      sendQueuesBehindSetup ||
+      (phase === "running" && dispatchMode === "queue");
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -7795,10 +7806,15 @@ function ChatViewContent(props: ChatViewProps) {
       void dockTransition.catch(() => resolveDockStarted?.());
       await dockStarted;
     }
-    beginLocalDispatch({
-      preparingWorktree: Boolean(baseBranchForWorktree),
-      submissionIntent: resolvedSubmissionIntent,
-    });
+    // A send queued behind setup leaves the first send's dispatch alone.
+    if (sendQueuesBehindSetup) {
+      setSetupQueueSendThreadKey(activeThreadKey);
+    } else {
+      beginLocalDispatch({
+        preparingWorktree: Boolean(baseBranchForWorktree),
+        submissionIntent: resolvedSubmissionIntent,
+      });
+    }
 
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
@@ -8132,11 +8148,12 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
     sendInFlightRef.current = false;
+    setSetupQueueSendThreadKey((current) => (current === activeThreadKey ? null : current));
     if (!turnStartSucceeded) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
-      resetLocalDispatch();
+      if (!sendQueuesBehindSetup) resetLocalDispatch();
     }
   };
 
@@ -9503,7 +9520,11 @@ function ChatViewContent(props: ChatViewProps) {
                               phase={phase}
                               canInterrupt={canInterruptRunningThread}
                               isConnecting={isConnecting}
-                              isSendBusy={isSendBusy}
+                              isSendBusy={
+                                (isSendBusy && !sendQueuesBehindSetup) ||
+                                (setupQueueSendThreadKey !== null &&
+                                  setupQueueSendThreadKey === activeThreadKey)
+                              }
                               sendDisabledReason={
                                 isEnvironmentChanging
                                   ? "Preparing machine"
@@ -9511,7 +9532,7 @@ function ChatViewContent(props: ChatViewProps) {
                                     ? "Sending feedback"
                                     : null
                               }
-                              isPreparingWorktree={isPreparingWorktree}
+                              isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                               environmentUnavailable={activeEnvironmentUnavailableState}
                               activePendingApproval={activePendingApproval}
                               pendingApprovals={pendingApprovals}
