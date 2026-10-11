@@ -7,6 +7,7 @@ import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore
 import { Popover, PopoverCreateHandle, PopoverPopup } from "../ui/popover";
 import { useChatCanvas } from "./ChatCanvasContext";
 import {
+  THREAD_DETAILS_CARD_GAP,
   resolveThreadDetailsCardDensity,
   resolveThreadDetailsCardLayout,
   type ThreadDetailsCardDensity,
@@ -40,6 +41,7 @@ export function ThreadDetailsCard({
       })
     : null;
   const mode: ThreadPanelPresentation = placement ? "inline" : "popover";
+  const topInset = canvas?.detailsCardTopInset ?? 0;
   const inlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
@@ -113,18 +115,37 @@ export function ThreadDetailsCard({
     <Popover
       handle={handle}
       open={mode === "popover" && popoverOpen}
-      onOpenChange={(open) =>
-        useRightPanelStore.getState().setThreadPanelOpen(threadRef, "popover", open)
-      }
+      onOpenChange={(open, details) => {
+        // The find bar sits beside the card, so clicking or focusing it does not
+        // dismiss the card. Escape still does.
+        const target =
+          details.reason === "focus-out"
+            ? (details.event as FocusEvent).relatedTarget
+            : details.reason === "outside-press"
+              ? details.event.target
+              : null;
+        if (!open && target instanceof Element && target.closest("[data-thread-find-bar]")) {
+          details.cancel();
+          return;
+        }
+        useRightPanelStore.getState().setThreadPanelOpen(threadRef, "popover", open);
+      }}
     >
       {placement ? (
         inlineOpen ? (
           <aside
             aria-label="Thread details"
-            // With panel motion on, the card fades in while chat moves over.
-            className="absolute z-20 [[data-panel-animations=true]_&]:transition-opacity [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out [[data-panel-animations=true]_&]:starting:opacity-0"
+            // With panel motion on, the card fades in while chat moves over. It slides
+            // down to make room for the find bar and returns in the same frame it closes.
+            className={cn(
+              "absolute z-20 [[data-panel-animations=true]_&]:transition-opacity [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out [[data-panel-animations=true]_&]:starting:opacity-0",
+              topInset > 0 &&
+                "transition-[top] duration-150 ease-out motion-reduce:transition-none",
+            )}
             style={{
-              left: placement.x,
+              // Anchored to the right edge like the find bar, so both follow a resizing
+              // canvas in the same frame instead of waiting for its next measurement.
+              right: placement.right,
               top: placement.y,
               width: placement.width,
               maxHeight: placement.height,
@@ -140,12 +161,18 @@ export function ThreadDetailsCard({
           bare
           anchor={anchor}
           align="end"
-          alignOffset={0}
+          // Lines the card up with the find bar: the viewport pads its card by 8px.
+          alignOffset={THREAD_DETAILS_CARD_GAP - 8}
           collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}
+          // The card already sits inside its own padding, so the panel can reach the edge.
+          collisionPadding={0}
           side="bottom"
-          sideOffset={0}
-          // A docked workspace panel, so it layers with sheets, below dialogs.
-          positionerClassName="z-(--z-sheet) w-[min(var(--thread-details-panel-width),var(--anchor-width))] !transition-none"
+          // Hangs below the find bar while it is open instead of covering it.
+          sideOffset={topInset}
+          // A docked workspace panel, so it layers with sheets, below dialogs. The card is the
+          // panel width (the viewport pads it by --spacing(2) per side) and slides when its
+          // offset changes to make room for the find bar.
+          positionerClassName="z-(--z-sheet) w-[min(calc(var(--thread-details-panel-width)+--spacing(4)),calc(var(--anchor-width)---spacing(2)))] !transition-[top] duration-150 ease-out motion-reduce:!transition-none"
           className="w-full !overflow-visible"
           viewportClassName="!overflow-visible p-2"
         >

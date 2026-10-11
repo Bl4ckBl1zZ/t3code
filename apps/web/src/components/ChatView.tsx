@@ -6771,11 +6771,6 @@ function ChatViewContent(props: ChatViewProps) {
   const [isThreadFindActive, setIsThreadFindActive] = useState(false);
   const openThreadFind = useCallback(() => threadFindControlsRef.current?.open(), []);
   const closeThreadFind = useCallback(() => threadFindControlsRef.current?.close(), []);
-  // The details popover hangs off the header over the find bar; opening find dismisses it.
-  useEffect(() => {
-    if (!isThreadFindActive || threadPanelPresentation !== "popover" || !activeThreadRef) return;
-    useRightPanelStore.getState().setThreadPanelOpen(activeThreadRef, "popover", false);
-  }, [activeThreadRef, isThreadFindActive, threadPanelPresentation]);
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
