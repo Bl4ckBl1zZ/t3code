@@ -102,4 +102,35 @@ final class ClaudeResumeCompactionTests: XCTestCase {
         XCTAssertEqual(live.usedTokens, 130_000)
         XCTAssertEqual(live.updatedAt, parse("2026-07-31T11:00:00Z"))
     }
+
+    /// `latestProviderTurnTokenUsage`: the newest report, not the last turn.
+    func testContextWindowPicksTheNewestLiveReport() {
+        let parse: (String) -> Date? = { ISO8601DateFormatter().date(from: $0) }
+        func turn(_ id: String, _ tokens: Int?, _ updatedAt: String = "") -> OrchestrationV2ProviderTurn {
+            OrchestrationV2ProviderTurn(
+                id: id, runAttemptId: nil, status: "completed",
+                tokenUsage: tokens.map { OrchestrationV2ProviderTurnTokenUsage(usedTokens: $0, updatedAt: updatedAt) }
+            )
+        }
+        let window = ThreadContextWindow.latest(
+            providerTurns: [
+                turn("a", 300_000, "2026-06-20T12:00:00Z"),
+                turn("b", nil),
+                turn("c", 90_000, "2026-06-20T09:00:00Z"),
+            ],
+            providerThread: nil, items: [], parseDate: parse
+        )
+        XCTAssertEqual(window?.usedTokens, 300_000)
+    }
+
+    /// The reported prompt cache TTL replaces the 70-minute fallback.
+    func testUsesTheReportedPromptCacheTtl() {
+        func offer(idleMinutes: Double) -> Int? {
+            var value = input(idleMinutes: idleMinutes)
+            value.contextWindow?.promptCacheTtlMs = 5 * 60_000
+            return ClaudeResumeCompaction.tokens(value)
+        }
+        XCTAssertEqual(offer(idleMinutes: 5), 150_000)
+        XCTAssertNil(offer(idleMinutes: 4))
+    }
 }

@@ -1078,7 +1078,7 @@ public struct NewThreadView: View {
             for: project,
             in: model.snapshot
         )
-        workspaceMode = preferences.defaultWorkspaceMode
+        workspaceMode = DailyUXCreationContext.defaultWorkspaceMode(for: project, in: model.snapshot)
         startFromOrigin = preferences.newWorktreesStartFromOrigin
         draftRestoreContext = NewTaskDraftRestoreContext(
             projectID: id,
@@ -1162,7 +1162,7 @@ public struct NewThreadView: View {
             current: liveDraft,
             fallbackSelection: initialSelection,
             fallbackWorkspace: FeatureComposerWorkspaceDraft(
-                mode: environmentPreferences.defaultWorkspaceMode,
+                mode: DailyUXCreationContext.defaultWorkspaceMode(for: executionProject, in: model.snapshot),
                 branch: nil,
                 worktreePath: nil,
                 startFromOrigin: environmentPreferences.newWorktreesStartFromOrigin

@@ -316,11 +316,11 @@ public struct FeatureSourceControlView: View {
         HStack(spacing: 6) {
             Text("Changes")
             if status.insertions > 0 {
-                Text("+\(status.insertions)")
+                Text(verbatim: "+\(DiffCount.format(status.insertions))")
                     .foregroundStyle(T3Colors.diffAddition)
             }
             if status.deletions > 0 {
-                Text("−\(status.deletions)")
+                Text(verbatim: "−\(DiffCount.format(status.deletions))")
                     .foregroundStyle(T3Colors.diffDeletion)
             }
         }

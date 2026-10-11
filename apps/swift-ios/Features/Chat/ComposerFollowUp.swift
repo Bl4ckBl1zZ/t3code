@@ -52,10 +52,15 @@ enum ComposerFollowUp {
     /// What `message.dispatch` carries. A steer only goes out while its run is
     /// still the thread's active run; once it has ended, the message is an
     /// ordinary send, which the server starts or queues as it would any other.
+    /// A send while the thread is still setting up (its worktree, its agent)
+    /// queues behind that setup, so the server can hold it if the setup ends
+    /// without a worktree.
     static func dispatchMode(
         steer: FeatureSteerTarget?,
-        liveActiveRunID: String?
+        liveActiveRunID: String?,
+        liveThreadStatus: String? = nil
     ) -> MessageDispatchMode {
+        if liveThreadStatus == "preparing" || liveThreadStatus == "starting" { return .queueAfterActive }
         guard let steer, steer.runID == liveActiveRunID else { return .startImmediately }
         return steer.restartsTurn
             ? .restartActive(runID: steer.runID)

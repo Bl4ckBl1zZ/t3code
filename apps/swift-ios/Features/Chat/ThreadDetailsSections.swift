@@ -188,7 +188,7 @@ public enum ThreadLinkedPullRequestPresentation {
             if snapshot.mergeability == "conflicting" { parts.append("Conflicts") }
         }
         if let additions = snapshot.additions, let deletions = snapshot.deletions {
-            parts.append("+\(additions) −\(deletions)")
+            parts.append("+\(DiffCount.format(additions)) −\(DiffCount.format(deletions))")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -399,7 +399,7 @@ public enum ThreadDetailsGit {
         let insertions = status?.insertions ?? 0
         let deletions = status?.deletions ?? 0
         guard insertions > 0 || deletions > 0 else { return nil }
-        return "+\(insertions) −\(deletions)"
+        return "+\(DiffCount.format(insertions)) −\(DiffCount.format(deletions))"
     }
 
     /// The glyph inside the quick action's tile.

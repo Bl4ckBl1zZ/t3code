@@ -6,11 +6,24 @@ enum PullRequestEditingLogic {
         let left = one.trimmingCharacters(in: .whitespacesAndNewlines)
         return !left.isEmpty && left.caseInsensitiveCompare(other.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
     }
+    /// A host that reports `editChangeRequest` answers directly. Otherwise the
+    /// reader wrote it or may merge it: merging stands in for the permission
+    /// hosts don't publish by name.
     static func canEditChangeRequest(_ detail: PullRequestDetail) -> Bool {
-        detail.capabilities?.edit?.changeRequest == true && (sameLogin(detail.viewer, detail.author?.login) || detail.viewerPermissions?.actions.contains("merge") == true)
+        guard detail.capabilities?.edit?.changeRequest == true else { return false }
+        if let answer = detail.viewerPermissions?.editChangeRequest { return answer }
+        return sameLogin(detail.viewer, detail.author?.login) || detail.viewerPermissions?.actions.contains("merge") == true
     }
-    static func canEditComment(detail: PullRequestDetail, author: PullRequestActor?, kind: String) -> Bool {
-        detail.capabilities?.edit?.comment == true && ["issue-comment", "review-comment"].contains(kind) && sameLogin(detail.viewer, author?.login)
+    /// The host's per-remark `canEdit` wins when it says; otherwise authorship.
+    static func canEditComment(detail: PullRequestDetail, author: PullRequestActor?, kind: String, canEdit: Bool? = nil) -> Bool {
+        guard detail.capabilities?.edit?.comment == true, ["issue-comment", "review-comment"].contains(kind) else { return false }
+        if let canEdit { return canEdit }
+        return sameLogin(detail.viewer, author?.login)
+    }
+    /// A thread's own answer can only narrow the repository-wide resolve
+    /// permission: a thread can't grant what the repository withholds.
+    static func canResolveThread(repositoryAllows: Bool, thread: PullRequestReviewThread) -> Bool {
+        repositoryAllows && thread.canResolve != false
     }
 }
 

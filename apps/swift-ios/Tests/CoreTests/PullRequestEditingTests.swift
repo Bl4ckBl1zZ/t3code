@@ -27,6 +27,22 @@ final class PullRequestEditingTests: XCTestCase {
         XCTAssertFalse(PullRequestEditingLogic.canEditComment(detail: subject, author: nil, kind: "issue-comment"))
         XCTAssertFalse(PullRequestEditingLogic.canEditComment(detail: subject, author: .init(login: "someone-else", name: nil, avatarUrl: nil), kind: "issue-comment"))
     }
+    /// Ports the per-item answers in pullRequestEditing.logic.test.ts.
+    func testTheHostsPerItemAnswerWinsWhenItSaysOne() throws {
+        var subject = try detail()
+        subject.viewerPermissions?.editChangeRequest = false
+        XCTAssertFalse(PullRequestEditingLogic.canEditChangeRequest(subject))
+        subject.viewer = "another-person"
+        subject.viewerPermissions?.editChangeRequest = true
+        XCTAssertTrue(PullRequestEditingLogic.canEditChangeRequest(subject))
+
+        let other = PullRequestActor(login: "someone-else", name: nil, avatarUrl: nil)
+        XCTAssertTrue(PullRequestEditingLogic.canEditComment(detail: subject, author: other, kind: "issue-comment", canEdit: true))
+        XCTAssertFalse(PullRequestEditingLogic.canEditComment(detail: try detail(), author: try detail().author, kind: "issue-comment", canEdit: false))
+        // Reviews stay out whatever the host says.
+        XCTAssertFalse(PullRequestEditingLogic.canEditComment(detail: subject, author: other, kind: "review", canEdit: true))
+    }
+
     func testClearingDescriptionIsAllowedButEmptyTitleAndCommentAreNot() {
         XCTAssertTrue(PullRequestTextEdit.description("old").valid(""))
         XCTAssertFalse(PullRequestTextEdit.title("old").valid(" \n "))

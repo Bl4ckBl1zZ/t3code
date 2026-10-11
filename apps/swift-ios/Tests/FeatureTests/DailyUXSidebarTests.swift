@@ -23,6 +23,17 @@ struct DailyUXSidebarTests {
         #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: "#43").isEmpty)
     }
 
+    @Test func searchesTheBranchPullRequestBesideLinkedOnes() {
+        var item = thread(id: "branch", created: -100, updated: -50)
+        item.branchPullRequest = FeatureLinkedPullRequest(projectID: item.projectID, repository: "example/repo", number: 77, url: "https://github.com/example/repo/pull/77")
+        for query in ["#77", "example/repo#77", "https://github.com/example/repo/pull/77"] {
+            #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: query).map(\.id) == ["branch"])
+        }
+        item.linkedPullRequests = [FeatureLinkedPullRequest(projectID: item.projectID, repository: "example/repo", number: 41, url: "https://github.com/example/repo/pull/41")]
+        #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: "#77").map(\.id) == ["branch"])
+        #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: "#41").map(\.id) == ["branch"])
+    }
+
     @Test func messageMatchesFollowLocalMatchesInListOrder() {
         let candidates = [
             thread(id: "second", title: "Docs", created: -100, updated: -100),

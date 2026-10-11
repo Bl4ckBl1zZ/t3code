@@ -153,8 +153,12 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
         // arm's length lands tens of decibels below what a speech model needs,
         // and a model given near-silence returns an empty transcript rather than
         // an error.
-        try session.setCategory(.record, mode: .default, options: [])
+        //
+        // `.allowBluetoothHFP` lists Bluetooth headset microphones as inputs, so
+        // the microphone order in Settings can choose them.
+        try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
         try session.setActive(true, options: [])
+        selectPreferredInput(session)
         VoiceCaptureDiagnostics.record(VoiceCaptureDiagnostics.describe(session: session))
         guard session.isInputAvailable else {
             VoiceCaptureDiagnostics.record("abort: session reports no input available")
@@ -230,6 +234,27 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
                 guard !Task.isCancelled, let self, self.isCapturing else { return }
                 onLevel(self.sink.takeLevel())
             }
+        }
+    }
+
+    /// Routes the session to the first connected microphone in the saved order.
+    /// Runs before the engine touches its input node, which resolves its format
+    /// against the route active at that moment.
+    private func selectPreferredInput(_ session: AVAudioSession) {
+        let ports = session.availableInputs ?? []
+        let inputs = ports.map {
+            MicrophoneInput(uid: $0.uid, name: $0.portName, type: $0.portType.rawValue)
+        }
+        let selected = MicrophonePriority.selectInput(inputs)
+        let port = selected.flatMap { selected in ports.first { $0.uid == selected.uid } }
+        do {
+            // nil hands the route back to iOS, clearing a choice left by an
+            // earlier recording.
+            try session.setPreferredInput(port)
+            VoiceCaptureDiagnostics.record("preferred input=\(port?.portName ?? "system")")
+        } catch {
+            // The input can disconnect in between. The system's route still records.
+            VoiceCaptureDiagnostics.record("preferred input failed: \(error)")
         }
     }
 

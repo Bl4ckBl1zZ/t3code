@@ -59,6 +59,8 @@ public struct UsageLimitSourceSnapshot: Codable, Equatable, Sendable, Identifiab
         public let email: String?
         public let plan: String?
         public let usageLimits: ServerProviderUsageLimits
+        /// The workspace the quota belongs to, when the source names one.
+        public var workspaceId: String? = nil
     }
     public let id: String
     public let kind: String

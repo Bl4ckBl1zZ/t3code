@@ -399,7 +399,7 @@ public enum ThreadActivityInspector {
             }
             if additions != nil || deletions != nil {
                 fields.append(
-                    .init(label: "Changes", value: "+\(additions ?? 0) −\(deletions ?? 0)")
+                    .init(label: "Changes", value: "+\(DiffCount.format(additions ?? 0)) −\(DiffCount.format(deletions ?? 0))")
                 )
             }
             // Before/after text is the fallback for providers that send no

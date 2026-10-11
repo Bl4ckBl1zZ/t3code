@@ -681,6 +681,9 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
     /// Feature-scoped id of the thread whose agent sent this message, so its
     /// byline can open that thread. Nil for the user's own messages.
     public var senderThreadID: String? = nil
+    /// The wire `creationSource`. `server` on an agent-authored message means
+    /// T3 Code itself sent it, such as a restart continuation.
+    public var creationSource: String? = nil
 
     public init(
         id: String,
@@ -708,6 +711,13 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
     /// its parent, a background agent reporting in).
     public var isAgentAuthored: Bool {
         role == .user && createdBy == "agent"
+    }
+
+    /// Ported from the `t3code` attribution of `resolveUserMessagePresentation`:
+    /// an agent-authored prompt T3 Code sent from the server, which reads as a
+    /// T3 Code notice rather than another agent's message.
+    public var isSentByT3Code: Bool {
+        isAgentAuthored && creationSource == "server"
     }
 }
 
@@ -1564,6 +1574,9 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     /// The machine's merge method ("merge", "squash" or "rebase"); nil reuses
     /// the method last chosen on each device.
     public var pullRequestMergeMethod: String? = nil
+    /// The server's folder for projects started from just a name; see
+    /// ``NewTaskWorkspaceDefaults/newThreadMode(environmentDefault:projectPath:newProjectsRoot:projectHasThreads:)``.
+    public var newProjectsRoot: String? = nil
 
     mutating func setPullRequestMergeMethod(_ method: String?, supported: Bool) {
         supportsPullRequestMergeMethod = supported ? true : nil

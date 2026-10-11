@@ -28,7 +28,8 @@ enum ThreadTimelineFoldPresentation {
             case let .message(message, _):
                 return ThreadTurnFoldItem(id: entry.id, runID: itemsByID[message.id]?.base.runId,
                     kind: message.role == .assistant ? .assistant : .user,
-                    isLive: message.state == .streaming, isPersistent: !message.attachments.isEmpty,
+                    isLive: message.state == .streaming,
+                    isPersistent: !message.attachments.isEmpty || attempts.completeReplyEntryIDs.contains(entry.id),
                     date: entry.date)
             case let .workLog(work):
                 let runIDs = Set(work.rows.compactMap(\.runID))

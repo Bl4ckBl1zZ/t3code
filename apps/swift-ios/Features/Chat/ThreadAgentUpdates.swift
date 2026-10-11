@@ -268,6 +268,9 @@ private struct AgentUpdateLine: View {
 /// sending thread when the server named it, plain text otherwise.
 struct AgentSenderByline: View {
     let senderThreadID: String?
+    /// A restart continuation or other prompt T3 Code sent itself. It names
+    /// no other thread, so it never links.
+    var sentByT3Code = false
     let onOpenThread: ((String) -> Void)?
     @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -277,7 +280,11 @@ struct AgentSenderByline: View {
     private var targetOverhang: CGFloat { dynamicTypeSize.isAccessibilitySize ? 0 : 12 }
 
     var body: some View {
-        if let senderThreadID, let onOpenThread {
+        if sentByT3Code {
+            Text("Sent by T3 Code")
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textTertiary)
+        } else if let senderThreadID, let onOpenThread {
             Button { onOpenThread(senderThreadID) } label: {
                 HStack(spacing: 3) {
                     Text("Sent by another agent")

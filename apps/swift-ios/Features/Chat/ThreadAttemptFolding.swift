@@ -7,11 +7,14 @@ public struct ThreadTimelineAttempt: Equatable, Sendable {
     public let runID: String
     /// `superseded` once a steer or retry replaced the attempt mid-run.
     public let status: String
+    /// When the attempt ended. A steer stamps it as it is dispatched.
+    public let completedAt: Date?
 
-    public init(id: String, runID: String, status: String) {
+    public init(id: String, runID: String, status: String, completedAt: Date? = nil) {
         self.id = id
         self.runID = runID
         self.status = status
+        self.completedAt = completedAt
     }
 }
 
@@ -54,12 +57,17 @@ struct ThreadTimelineAttemptResolver {
     }
 
     private static func timelineAttempt(_ attempt: OrchestrationV2RunAttempt) -> ThreadTimelineAttempt {
-        ThreadTimelineAttempt(id: attempt.id, runID: attempt.runId, status: attempt.status)
+        ThreadTimelineAttempt(
+            id: attempt.id,
+            runID: attempt.runId,
+            status: attempt.status,
+            completedAt: attempt.completedAt.flatMap { ThreadTimelineDay.date(fromISO8601: $0) }
+        )
     }
 }
 
 /// "Superseded attempt": the partial output of an attempt a steer or retry
-/// replaced, folded behind one row. Expansion shares the coordinator's set of
+/// cut off, folded behind one row. Expansion shares the coordinator's set of
 /// open folds under a key no run id can collide with.
 struct ThreadAttemptFold: Equatable, Sendable {
     let attemptID: String
@@ -85,10 +93,42 @@ enum ThreadAttemptFolding {
         let attempt: ThreadTimelineAttempt?
     }
 
-    /// Fold per anchor entry id, with every entry id the fold hides.
+    /// One piece of provider output as the complete-reply check sees it.
+    /// `replyCompletedAt` is set only on a finished assistant reply: not
+    /// streaming, its item `completed`, with a completion time.
+    struct Output: Equatable {
+        let entryID: String
+        let attempt: ThreadTimelineAttempt
+        let replyCompletedAt: Date?
+    }
+
+    /// Ported from `completeSupersededReplyEntryIds`: final replies of
+    /// superseded attempts that finished before the steer replaced them. The
+    /// provider closes a reply it cut off only after the steer stamped the
+    /// attempt's `completedAt`, so a reply that completed earlier was whole.
+    /// Item status alone cannot tell: an interrupted stream also closes as
+    /// `completed`. The reply must be the attempt's last output; trailing tool
+    /// or reasoning work means the attempt was still going.
+    static func completeReplyEntryIDs(outputs: [Output]) -> Set<String> {
+        var lastByAttemptID: [String: Output] = [:]
+        for output in outputs where output.attempt.status == "superseded" {
+            lastByAttemptID[output.attempt.id] = output
+        }
+        return Set(lastByAttemptID.values.compactMap { output in
+            guard let replyAt = output.replyCompletedAt,
+                  let supersededAt = output.attempt.completedAt,
+                  replyAt < supersededAt else { return nil }
+            return output.entryID
+        })
+    }
+
+    /// Fold per anchor entry id, with every entry id the fold hides. An
+    /// attempt in `completeAttemptIDs` had finished its reply, so it stays in
+    /// the timeline like any other turn output.
     static func folds(
         candidates: [Candidate],
         failedRunIDs: Set<String>,
+        completeAttemptIDs: Set<String> = [],
         expandedKeys: Set<String>
     ) -> (byAnchorID: [String: ThreadAttemptFold], hiddenIDs: [String: ThreadAttemptFold]) {
         var byAnchorID: [String: ThreadAttemptFold] = [:]
@@ -97,6 +137,7 @@ enum ThreadAttemptFolding {
         for candidate in candidates {
             // A failed run stays readable in place, the failure in context.
             guard let attempt = candidate.attempt, attempt.status == "superseded",
+                  !completeAttemptIDs.contains(attempt.id),
                   !failedRunIDs.contains(attempt.runID) else { continue }
             let anchorID = anchorByAttemptID[attempt.id] ?? candidate.entryID
             anchorByAttemptID[attempt.id] = anchorID
@@ -116,6 +157,9 @@ enum ThreadAttemptFolding {
         let entries: [ThreadTimelineEntry]
         /// Message id to the expansion key that reveals it, for citations.
         let hiddenCitationKeys: [String: String]
+        /// Finished replies a steer superseded. They answer their prompt, so
+        /// a turn fold keeps them out too.
+        var completeReplyEntryIDs: Set<String> = []
     }
 
     static func apply(
@@ -143,12 +187,21 @@ enum ThreadAttemptFolding {
         let candidates = entries.map { entry in
             Candidate(entryID: entry.id, attempt: attempt(of: entry, detail: detail, byItemID: attemptByItemID))
         }
+        let completeReplyIDs = completeReplyEntryIDs(
+            outputs: outputs(entries: entries, detail: detail, byItemID: attemptByItemID)
+        )
+        let completeAttemptIDs = Set(candidates.compactMap { candidate in
+            completeReplyIDs.contains(candidate.entryID) ? candidate.attempt?.id : nil
+        })
         let (byAnchorID, hiddenIDs) = folds(
             candidates: candidates,
             failedRunIDs: failedRunIDs,
+            completeAttemptIDs: completeAttemptIDs,
             expandedKeys: expandedKeys
         )
-        guard !byAnchorID.isEmpty else { return Result(entries: entries, hiddenCitationKeys: [:]) }
+        guard !byAnchorID.isEmpty else {
+            return Result(entries: entries, hiddenCitationKeys: [:], completeReplyEntryIDs: completeReplyIDs)
+        }
 
         var result: [ThreadTimelineEntry] = []
         var hiddenCitationKeys: [String: String] = [:]
@@ -175,7 +228,46 @@ enum ThreadAttemptFolding {
             }
             append(entry)
         }
-        return Result(entries: result, hiddenCitationKeys: hiddenCitationKeys)
+        return Result(
+            entries: result,
+            hiddenCitationKeys: hiddenCitationKeys,
+            completeReplyEntryIDs: completeReplyIDs
+        )
+    }
+
+    /// Assistant replies and work in feed order, each with its attempt. Unlike
+    /// fold candidates, running work counts: it means the attempt was still
+    /// going when it was replaced.
+    private static func outputs(
+        entries: [ThreadTimelineEntry],
+        detail: FeatureThreadDetail,
+        byItemID: [String: ThreadTimelineAttempt]
+    ) -> [Output] {
+        var itemsByID: [String: OrchestrationV2TurnItem] = [:]
+        for projected in detail.timelineItems { itemsByID[projected.item.id] = projected.item }
+        var outputs: [Output] = []
+        for entry in entries {
+            switch entry {
+            case let .message(message, _):
+                guard message.role == .assistant, let attempt = byItemID[message.id] else { continue }
+                let item = itemsByID[message.id]
+                let finished = message.state != .streaming
+                    && item?.type == "assistant_message"
+                    && item?.status == .completed
+                let replyAt = finished
+                    ? item?.base.completedAt.flatMap { ThreadTimelineDay.date(fromISO8601: $0) }
+                    : nil
+                outputs.append(Output(entryID: entry.id, attempt: attempt, replyCompletedAt: replyAt))
+            case let .workLog(work):
+                for row in work.rows {
+                    guard let attempt = detail.itemSupport[row.projectedItem.id]?.attempt else { continue }
+                    outputs.append(Output(entryID: entry.id, attempt: attempt, replyCompletedAt: nil))
+                }
+            case .lifecycle, .turnFold, .mcpApp, .dayDivider, .structural, .proposedPlan:
+                continue
+            }
+        }
+        return outputs
     }
 
     private static let persistentLifecycleTypes: Set<String> = ["fork", "subagent", "thread_created"]
@@ -233,7 +325,7 @@ struct ThreadAttemptFoldRow: View {
                     // The label alone at accessibility sizes, rather than
                     // both cut short.
                     if !dynamicTypeSize.isAccessibilitySize {
-                        Text(verbatim: "Partial output retained")
+                        Text(verbatim: "Cut off by a steer")
                             .font(ChatTimelineStyle.small)
                             .foregroundStyle(T3Colors.textTertiary)
                     }
@@ -248,7 +340,7 @@ struct ThreadAttemptFoldRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Superseded attempt, partial output retained")
+        .accessibilityLabel("Superseded attempt, cut off by a steer")
         .accessibilityValue(fold.isExpanded ? "Expanded" : "Collapsed")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier(fold.id)

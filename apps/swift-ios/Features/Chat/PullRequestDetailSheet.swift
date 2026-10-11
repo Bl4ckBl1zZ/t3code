@@ -885,7 +885,9 @@ struct PullRequestDetailSheet: View {
             canResolve: detail.capabilities?.review?.resolve == true && detail.viewerPermissions?.resolve == true,
             editing: access.editing?(number, detail.url),
             reactions: reactionContext(detail),
-            canEditComment: { PullRequestEditingLogic.canEditComment(detail: detail, author: $0.author, kind: "review-comment") },
+            canEditComment: {
+                PullRequestEditingLogic.canEditComment(detail: detail, author: $0.author, kind: "review-comment", canEdit: $0.canEdit)
+            },
             refresh: { await load() })
     }
 
@@ -1040,7 +1042,9 @@ struct PullRequestDetailSheet: View {
             .contextMenu {
                 PullRequestSelectionMenuItems(selection: .comment(comment))
                 if access.editing != nil,
-                   PullRequestEditingLogic.canEditComment(detail: detail, author: comment.author, kind: comment.kind.rawValue) {
+                   PullRequestEditingLogic.canEditComment(
+                       detail: detail, author: comment.author, kind: comment.kind.rawValue, canEdit: comment.canEdit
+                   ) {
                     Button("Edit", systemImage: "pencil") {
                         textEdit = .comment(id: comment.id, kind: comment.kind.rawValue, body: comment.body)
                     }

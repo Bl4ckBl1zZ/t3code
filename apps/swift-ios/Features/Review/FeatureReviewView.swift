@@ -399,10 +399,10 @@ struct FeatureDiffStatsLabel: View {
     var body: some View {
         HStack(spacing: 5) {
             if additions > 0 {
-                Text("+\(additions)").foregroundStyle(T3Colors.diffAddition)
+                Text(verbatim: "+\(DiffCount.format(additions))").foregroundStyle(T3Colors.diffAddition)
             }
             if deletions > 0 {
-                Text("−\(deletions)").foregroundStyle(T3Colors.diffDeletion)
+                Text(verbatim: "−\(DiffCount.format(deletions))").foregroundStyle(T3Colors.diffDeletion)
             }
         }
         .font(T3Typography.tool.monospacedDigit().weight(.medium))

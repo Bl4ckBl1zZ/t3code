@@ -215,12 +215,12 @@ struct CheckpointRestoreSheet: View {
                 .truncationMode(.head)
             Spacer(minLength: 6)
             if file.additions > 0 {
-                Text("+\(file.additions)")
+                Text(verbatim: "+\(DiffCount.format(file.additions))")
                     .font(T3Typography.tool)
                     .foregroundStyle(T3Colors.diffAddition)
             }
             if file.deletions > 0 {
-                Text("−\(file.deletions)")
+                Text(verbatim: "−\(DiffCount.format(file.deletions))")
                     .font(T3Typography.tool)
                     .foregroundStyle(T3Colors.diffDeletion)
             }

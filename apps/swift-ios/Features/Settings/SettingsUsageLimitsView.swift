@@ -140,7 +140,9 @@ struct SettingsUsageLimitsView: View {
                 } else if limits.windows.isEmpty {
                     Text("No limit windows reported.").foregroundStyle(T3Colors.textSecondary)
                 } else {
-                    ForEach(limits.windows) { window in windowRow(window) }
+                    ForEach(FeatureUsageLimitsMerge.displayOrder(driver: account.driver, windows: limits.windows)) { window in
+                        windowRow(window)
+                    }
                 }
                 if let credits = limits.resetCredits, let target = account.resetTarget,
                    let reader = model.client as? any FeatureUsageLimitsReading {

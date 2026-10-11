@@ -1035,8 +1035,15 @@ public struct ThreadDetailView: View {
 
     /// Stop on a subagent's lineage row: the composer's interrupt, aimed at the
     /// child thread. Throws so the sheet on screen can say why it failed.
+    /// A Claude-native subagent stops through this thread, whose run keeps
+    /// working; a T3-owned one by interrupting its child thread.
     private func stopSubagent(_ childThreadID: String) async throws {
-        try await model.client.cancelTurn(threadID: childThreadID)
+        if let link = relationships?.subagent(for: childThreadID), link.stopsThroughOwner, let runID = link.runID,
+           let stopper = model.client as? any FeatureSubagentStopping {
+            try await stopper.stopSubagent(threadID: thread.id, runID: runID, subagentID: link.id)
+        } else {
+            try await model.client.cancelTurn(threadID: childThreadID)
+        }
         _ = await model.detail(for: thread.id, force: true)
     }
 
@@ -3305,7 +3312,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let prependedMessages = !threadChanged
                 && newIDs.count > previousIDs.count
                 && Array(newIDs.suffix(previousIDs.count)) == previousIDs
-            let shouldFollowBottom = isInitialLoad || (wasNearBottom && !foldChoiceChanged)
+            // A fold toggled at the end keeps the end in view while rows
+            // re-measure. Anywhere else, the visible rows hold their place.
+            let shouldFollowBottom = isInitialLoad || wasNearBottom
             // The coordinator is the one place that knows a new row landed
             // while the reader was elsewhere; the jump button shows it.
             if threadChanged {
@@ -3377,7 +3386,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     if shouldFollowBottom {
                         self.scrollToBottom(
                             collectionView,
-                            animated: !isInitialLoad && lastIDChanged
+                            animated: !isInitialLoad && lastIDChanged && !foldChoiceChanged
                         )
                     } else if let prependAnchor {
                         self.restore(prependAnchor, in: collectionView, dataSource: dataSource)
@@ -4056,7 +4065,11 @@ struct FeatureMessageView: View {
             // feed's treatment.
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    AgentSenderByline(senderThreadID: message.senderThreadID, onOpenThread: onOpenThread)
+                    AgentSenderByline(
+                        senderThreadID: message.senderThreadID,
+                        sentByT3Code: message.isSentByT3Code,
+                        onOpenThread: onOpenThread
+                    )
 
                     VStack(alignment: .leading, spacing: 10) {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
@@ -4082,7 +4095,7 @@ struct FeatureMessageView: View {
             }
             // Contained, so the byline's link to the sender stays reachable.
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Another agent")
+            .accessibilityLabel(message.isSentByT3Code ? "T3 Code" : "Another agent")
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("message-\(message.id)")
         case .user:

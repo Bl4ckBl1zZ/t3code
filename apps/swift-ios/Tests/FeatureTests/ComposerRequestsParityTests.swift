@@ -128,6 +128,27 @@ final class ComposerRequestsParityTests: XCTestCase {
         XCTAssertEqual(ComposerFollowUp.dispatchMode(steer: nil, liveActiveRunID: "run-1"), .startImmediately)
     }
 
+    /// A send during worktree setup or agent start queues behind it, steer or not.
+    func testASendDuringSetupQueuesBehindIt() {
+        let steer = FeatureSteerTarget(runID: "run-1", restartsTurn: false)
+        for status in ["preparing", "starting"] {
+            XCTAssertEqual(
+                ComposerFollowUp.dispatchMode(steer: steer, liveActiveRunID: "run-1", liveThreadStatus: status),
+                .queueAfterActive,
+                status
+            )
+            XCTAssertEqual(
+                ComposerFollowUp.dispatchMode(steer: nil, liveActiveRunID: "run-1", liveThreadStatus: status),
+                .queueAfterActive,
+                status
+            )
+        }
+        XCTAssertEqual(
+            ComposerFollowUp.dispatchMode(steer: steer, liveActiveRunID: "run-1", liveThreadStatus: "running"),
+            .steerActive(runID: "run-1")
+        )
+    }
+
     func testAlternateSendPicksTheOtherAction() {
         XCTAssertFalse(ComposerFollowUp.steers(defaultSteers: false, alternate: false))
         XCTAssertTrue(ComposerFollowUp.steers(defaultSteers: false, alternate: true))

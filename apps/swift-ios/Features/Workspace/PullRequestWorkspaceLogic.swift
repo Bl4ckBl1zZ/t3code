@@ -5,6 +5,9 @@ struct NativePullRequestRow: Identifiable, Equatable, Sendable {
     var entry: PullRequestListEntry
     var sizeKnown = false
     var viewer: String?
+    /// What the row's host can do, from the list's host summary; nil from a
+    /// server that does not say.
+    var hostActions: [String]? = nil
     var id: String { entry.id }
     var projectID: String { FeatureScopedID.project(environmentID: environmentID, wireID: entry.projectId) }
     var group: Int {

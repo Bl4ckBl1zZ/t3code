@@ -1005,10 +1005,10 @@ struct WorkRowDiffStat: View {
         if additions > 0 || deletions > 0 {
             HStack(spacing: 4) {
                 if additions > 0 {
-                    Text(verbatim: "+\(additions)").foregroundStyle(T3Colors.diffAddition)
+                    Text(verbatim: "+\(DiffCount.format(additions))").foregroundStyle(T3Colors.diffAddition)
                 }
                 if deletions > 0 {
-                    Text(verbatim: "−\(deletions)").foregroundStyle(T3Colors.diffDeletion)
+                    Text(verbatim: "−\(DiffCount.format(deletions))").foregroundStyle(T3Colors.diffDeletion)
                 }
             }
             .font(ChatTimelineStyle.smallMono)

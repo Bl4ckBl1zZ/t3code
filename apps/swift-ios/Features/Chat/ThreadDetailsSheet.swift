@@ -568,8 +568,8 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                     ThreadSheetRowLabel(title: "Review Changes", systemImage: "text.bubble", tint: .teal) {
                         if let totals = reviewTotals, totals.insertions > 0 || totals.deletions > 0 {
                             HStack(spacing: 4) {
-                                Text("+\(totals.insertions)").foregroundStyle(T3Colors.diffAddition)
-                                Text("−\(totals.deletions)").foregroundStyle(T3Colors.diffDeletion)
+                                Text(verbatim: "+\(DiffCount.format(totals.insertions))").foregroundStyle(T3Colors.diffAddition)
+                                Text(verbatim: "−\(DiffCount.format(totals.deletions))").foregroundStyle(T3Colors.diffDeletion)
                             }
                             .monospacedDigit()
                         }

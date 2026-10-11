@@ -1060,6 +1060,16 @@ public actor T3Client {
     /// `run.interrupt` requires the run, so callers resolve the active run
     /// before asking.
     @discardableResult
+    public func stopSubagent(
+        threadID: String,
+        runID: String,
+        subagentID: String
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.stopSubagent(threadID: threadID, runID: runID, subagentID: subagentID)
+        )
+    }
+
     public func interrupt(
         threadID: String,
         runID: String,
@@ -3489,6 +3499,22 @@ public enum OrchestrationCommands {
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "modelSelection": try .encode(model),
+        ])
+    }
+
+    /// Stops one provider-native child while its owning run keeps working.
+    public static func stopSubagent(
+        threadID: String,
+        runID: String,
+        subagentID: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("subagent.stop"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "runId": .string(runID),
+            "subagentId": .string(subagentID),
         ])
     }
 

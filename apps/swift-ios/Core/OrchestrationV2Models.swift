@@ -1023,6 +1023,8 @@ public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifia
     /// whose root node their own node descends from, and a superseded attempt
     /// hides the interrupt result recorded on this node.
     public var rootNodeId: String? = nil
+    /// Stamped when the attempt ends; a steer stamps it as it is dispatched.
+    public var completedAt: OrchestrationV2Timestamp? = nil
 }
 
 public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {
@@ -1086,6 +1088,9 @@ public struct OrchestrationV2ContextUsage: Codable, Equatable, Sendable {
 public struct OrchestrationV2ProviderTurnTokenUsage: Codable, Equatable, Sendable {
     public let usedTokens: Int
     public var maxTokens: Int? = nil
+    /// Prompt cache lifetime the provider wrote with this report. The cache is
+    /// cold once `updatedAt` is this old. Absent from older servers.
+    public var promptCacheTtlMs: Int? = nil
     /// ISO timestamp of the report.
     public let updatedAt: String
 }
@@ -1164,6 +1169,11 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     /// When the task settled. Lineage shows a finished agent's elapsed time
     /// from the two; absent from older servers, which keeps the status word.
     public var completedAt: OrchestrationV2Timestamp? = nil
+    /// The owning thread's run that spawned it; `subagent.stop` names it.
+    public var runId: String? = nil
+    /// The provider's handle on a native task. A strong one with an id is
+    /// what lets the owning session stop that one task.
+    public var nativeTaskRef: OrchestrationV2ProviderRef? = nil
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {

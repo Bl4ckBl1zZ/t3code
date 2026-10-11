@@ -63,7 +63,7 @@ struct PullRequestThreadCard: View {
                 if let access, canReply {
                     replyField(access)
                 }
-                if let access, canResolve {
+                if let access, PullRequestEditingLogic.canResolveThread(repositoryAllows: canResolve, thread: thread) {
                     Button(model.resolved ? "Reopen Conversation" : "Resolve Conversation") {
                         Task {
                             await model.toggleResolution(send: access.resolve)
