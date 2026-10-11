@@ -165,6 +165,12 @@ Default Grafana login:
 
 #### 2. Export OTLP env vars
 
+Endpoints can also be saved per server in **Settings > Diagnostics > OpenTelemetry export**
+(traces and metrics; restart the server to apply). **Test** there sends an empty export from the
+server, with credentials only for the signal's running endpoint and without following redirects.
+`T3CODE_OTLP_*_URL` and `OTEL_EXPORTER_OTLP_*` environment variables override saved endpoints.
+In a worktree, use `vp run dev` instead of `npx t3` to keep state isolated.
+
 ```bash
 export T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces
 export T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics

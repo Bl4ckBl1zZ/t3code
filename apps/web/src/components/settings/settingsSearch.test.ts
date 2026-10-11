@@ -36,6 +36,18 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
+  it.each(["OTel", "OTLP", "telemetry export", "Grafana"])(
+    "finds the OpenTelemetry export settings for %s",
+    (query) => {
+      expect(searchSettings(query)).toContainEqual(
+        expect.objectContaining({
+          id: "telemetry-export",
+          to: "/settings/diagnostics",
+          targetId: "telemetry-export",
+        }),
+      );
+    },
+  );
   it("matches only setting titles", () => {
     expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);

@@ -69,6 +69,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
   "/settings/general": Settings2Icon,
+  "/settings/diagnostics": Settings2Icon,
   "/settings/projects": FolderIcon,
   "/settings/appearance": PaletteIcon,
   "/settings/snap-shot": ScanLineIcon,
@@ -88,11 +89,14 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   to: SettingsNavPath;
   icon: ComponentType<{ className?: string }>;
 }> = [
-  ...(Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[]).map((to) => ({
-    to: to as SettingsNavPath,
-    label: SETTINGS_SECTION_LABELS[to],
-    icon: SETTINGS_SECTION_ICONS[to],
-  })),
+  // Diagnostics opens from General, so it has a search target but no nav entry.
+  ...(Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[])
+    .filter((to) => to !== "/settings/diagnostics")
+    .map((to) => ({
+      to: to as SettingsNavPath,
+      label: SETTINGS_SECTION_LABELS[to],
+      icon: SETTINGS_SECTION_ICONS[to],
+    })),
   { label: "T3 Work", to: "/settings/hermes-cron", icon: Clock3Icon },
   { label: "Hermes Skills", to: "/settings/hermes-skills", icon: GraduationCapIcon },
 ];

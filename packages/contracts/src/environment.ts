@@ -128,6 +128,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server evaluates inactivity and PR settlement without an open client. */
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Server checks OTLP endpoints for the telemetry export settings. */
+  otlpEndpointCheck: Schema.optionalKey(Schema.Boolean),
   /** Server honors the `worktreesDirectory` setting. */
   worktreesDirectory: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same

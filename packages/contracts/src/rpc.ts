@@ -247,6 +247,8 @@ import {
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
+  OtlpEndpointCheckInput,
+  OtlpEndpointCheckResult,
   ServerConfig,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
@@ -429,6 +431,7 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
+  serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
   serverReportHostPowerState: "server.reportHostPowerState",
@@ -706,6 +709,12 @@ export const WsProviderConsumeResetCreditRpc = Rpc.make(WS_METHODS.providerConsu
   payload: ProviderConsumeResetCreditInput,
   success: ProviderConsumeResetCreditResult,
   error: Schema.Union([ProviderSetupError, UsageLimitSourceError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerCheckOtlpEndpointRpc = Rpc.make(WS_METHODS.serverCheckOtlpEndpoint, {
+  payload: OtlpEndpointCheckInput,
+  success: OtlpEndpointCheckResult,
+  error: EnvironmentAuthorizationError,
 });
 
 export const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
@@ -1643,6 +1652,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderInstallCancelRpc,
   WsProviderInstallSubscribeRpc,
   WsProviderInstallRemoveRpc,
+  WsServerCheckOtlpEndpointRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
   WsScheduledTasksListRpc,

@@ -8,6 +8,7 @@ import { commandLabel } from "./KeybindingsSettings.logic";
 export type SettingsPath =
   | "/settings/projects"
   | "/settings/general"
+  | "/settings/diagnostics"
   | "/settings/appearance"
   | "/settings/snap-shot"
   | "/settings/keybindings"
@@ -41,6 +42,7 @@ export interface SettingsSearchItem {
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
+  "/settings/diagnostics": "Diagnostics",
   "/settings/projects": "Projects",
   "/settings/appearance": "Appearance",
   "/settings/snap-shot": "SnapShots",
@@ -441,6 +443,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "diagnostics",
     title: "Diagnostics",
     to: "/settings/general",
+  },
+  {
+    id: "telemetry-export",
+    title: "OpenTelemetry export",
+    to: "/settings/diagnostics",
+    targetId: "telemetry-export",
+    searchTerms: ["OTel OTLP telemetry export endpoints traces metrics Grafana"],
   },
   {
     id: "legacy-plan-mode",
