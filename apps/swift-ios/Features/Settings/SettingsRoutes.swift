@@ -9,6 +9,7 @@ enum SettingsRoute: Hashable, Sendable {
     case threads
     case notifications
     case voiceInput
+    case microphone
     case usage
     case devices
     case loadBalancing
@@ -29,6 +30,7 @@ enum SettingsRoute: Hashable, Sendable {
         case .threads: "Chat"
         case .notifications: "Notifications"
         case .voiceInput: "Voice Input"
+        case .microphone: "Microphone"
         case .usage: "Usage Limits"
         case .devices: "Devices & Sessions"
         case .loadBalancing: "Load Balancing"
@@ -46,6 +48,7 @@ enum SettingsRoute: Hashable, Sendable {
         case .threads: "bubble.left.and.bubble.right"
         case .notifications: "bell.badge"
         case .voiceInput: "mic"
+        case .microphone: "headphones"
         case .usage: "gauge.with.dots.needle.33percent"
         case .devices: "laptopcomputer.and.iphone"
         case .loadBalancing: "scalemass"
@@ -61,7 +64,7 @@ enum SettingsRoute: Hashable, Sendable {
         case .servers, .addServer, .serverDetail: .gray
         case .appearance, .devices: .blue
         case .threads, .loadBalancing: .indigo
-        case .notifications, .voiceInput: .red
+        case .notifications, .voiceInput, .microphone: .red
         case .usage: .green
         case .t3Connect: .teal
         case .sourceControl: .orange

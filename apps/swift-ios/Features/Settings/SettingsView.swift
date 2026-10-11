@@ -88,6 +88,7 @@ public struct SettingsView: View {
             if hasServers {
                 routeLink(.voiceInput)
             }
+            routeLink(.microphone)
             Toggle(isOn: $settings.hapticsEnabled) {
                 SettingsTileLabel(title: "Haptics", systemImage: "hand.tap", tint: .pink)
             }
@@ -206,6 +207,8 @@ public struct SettingsView: View {
             SettingsNotificationsView(settings: $settings, saveError: saveError)
         case .voiceInput:
             SettingsVoiceInputView(manager: voiceSettingsManager)
+        case .microphone:
+            SettingsMicrophoneView()
         case .usage:
             SettingsUsageLimitsView(model: model)
         case .devices:
