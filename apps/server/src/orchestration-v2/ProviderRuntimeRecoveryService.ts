@@ -20,6 +20,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { endOrphanedNativeSubagent, endRunlessRootTurns } from "./SubagentProjection.ts";
 import {
   cancelledTurnItemWork,
   mergeRestartCancelledBackgroundWork,
@@ -496,55 +497,35 @@ export const make = Effect.gen(function* () {
           });
         }
       }
+      // No provider process outlives the server, so a native subagent still open
+      // here never reports its end, whatever state its run and item are in.
+      for (const subagent of projection.subagents ?? []) {
+        events.push(
+          ...(yield* endOrphanedNativeSubagent({
+            projection,
+            subagentId: subagent.id,
+            status: "cancelled",
+            now,
+            emitted: events,
+            allocateEventId,
+          })),
+        );
+      }
       // A provider-native subagent thread has no runs: its work is a runless
       // root turn, plus items under it (Claude's live progress item), that
       // only the dead provider process could settle. Left running, the child
       // would show as working forever.
-      const cancelledItemIds = new Set(
-        events.flatMap((event) => (event.type === "turn-item.updated" ? [event.payload.id] : [])),
-      );
-      for (const node of projection.nodes) {
-        if (node.kind !== "root_turn" || node.runId !== null || !isNonterminalStatus(node.status)) {
-          continue;
-        }
-        events.push({
-          id: yield* allocateEventId(),
-          type: "node.updated",
+      events.push(
+        ...(yield* endRunlessRootTurns({
           threadId: projection.thread.id,
-          nodeId: node.id,
           providerInstanceId: projection.thread.providerInstanceId,
-          occurredAt: now,
-          payload: { ...node, status: "cancelled", completedAt: now },
-        });
-        for (const item of projection.turnItems) {
-          if (
-            item.nodeId !== node.id ||
-            item.runId !== null ||
-            !isNonterminalStatus(item.status) ||
-            cancelledItemIds.has(item.id)
-          ) {
-            continue;
-          }
-          cancelledItemIds.add(item.id);
-          events.push({
-            id: yield* allocateEventId(),
-            type: "turn-item.updated",
-            threadId: projection.thread.id,
-            nodeId: node.id,
-            providerInstanceId: projection.thread.providerInstanceId,
-            occurredAt: now,
-            payload: {
-              ...item,
-              status: "cancelled",
-              completedAt: now,
-              updatedAt: now,
-              ...(item.type === "reasoning" || item.type === "assistant_message"
-                ? { streaming: false }
-                : {}),
-            },
-          });
-        }
-      }
+          projection,
+          status: "cancelled",
+          now,
+          emitted: events,
+          allocateEventId,
+        })),
+      );
       for (const providerThread of projection.providerThreads.filter(
         (candidate) => candidate.status === "active",
       )) {

@@ -111,6 +111,8 @@ import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   delegatedTaskAwaitsRestartContinuation,
+  endOrphanedNativeSubagent,
+  endRunlessRootTurns,
   makeSubagentChildThread,
   subagentResultForRun,
   subagentThreadTitle,
@@ -7365,6 +7367,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.gen(function* () {
       const emitEvent = emit(input.events, input.command);
       const runOrdinals = new Map(input.projection.runs.map((run) => [run.id, run.ordinal]));
+      const allocateEventId = () =>
+        idAllocator.allocate.event({
+          threadId: input.command.threadId,
+          commandId: input.command.commandId,
+        });
+      const childThreadIds = new Set<ThreadId>();
       const liveness = new Map<string, boolean>();
       const hasLiveSession = (providerThreadId: OrchestrationV2ProviderThread["id"]) =>
         Effect.gen(function* () {
@@ -7450,6 +7458,63 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             occurredAt: input.now,
             payload: { ...node, status: "interrupted", completedAt: input.now },
           });
+        }
+        // A native subagent died with the process too: end its own thread's
+        // runless root turn and the subagents it started there, which a
+        // provider can record on that thread rather than this one.
+        const dying: Array<{
+          readonly projection: Pick<
+            OrchestrationV2ThreadProjection,
+            "nodes" | "subagents" | "turnItems"
+          >;
+          readonly subagent: Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>;
+          readonly nested: boolean;
+        }> = [{ projection: input.projection, subagent: item, nested: false }];
+        for (const { projection, subagent, nested } of dying) {
+          if (nested) {
+            const ended = yield* endOrphanedNativeSubagent({
+              projection,
+              subagentId: subagent.subagentId,
+              status: "interrupted",
+              now: input.now,
+              emitted: yield* Ref.get(input.events),
+              allocateEventId,
+            }).pipe(mapDispatchError(input.command));
+            yield* Ref.update(input.events, (events) => [...events, ...ended]);
+          }
+          const childThreadId = subagent.childThreadId;
+          if (
+            subagent.origin !== "provider_native" ||
+            childThreadId === null ||
+            childThreadIds.has(childThreadId)
+          ) {
+            continue;
+          }
+          childThreadIds.add(childThreadId);
+          const child = yield* projectionStore
+            .getThreadProjection(childThreadId)
+            .pipe(Effect.orElseSucceed(() => null));
+          if (child === null) continue;
+          const childEnded = yield* endRunlessRootTurns({
+            threadId: childThreadId,
+            providerInstanceId: subagent.providerInstanceId,
+            projection: child,
+            status: "interrupted",
+            now: input.now,
+            emitted: yield* Ref.get(input.events),
+            allocateEventId,
+          }).pipe(mapDispatchError(input.command));
+          yield* Ref.update(input.events, (events) => [...events, ...childEnded]);
+          // Runless items are the subagent's; any run there is the user's own.
+          for (const nestedItem of child.turnItems) {
+            if (
+              nestedItem.type === "subagent" &&
+              nestedItem.runId === null &&
+              isOrchestrationV2WorkActive(nestedItem.status)
+            ) {
+              dying.push({ projection: child, subagent: nestedItem, nested: true });
+            }
+          }
         }
       }
     });
