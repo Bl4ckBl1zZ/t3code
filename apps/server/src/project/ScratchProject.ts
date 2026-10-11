@@ -8,17 +8,20 @@
  *
  * Offered only when the data dir sits outside any Git work tree: inside a
  * checkout (a dev worktree's .t3, a dotfiles home) the folders would inherit
- * that repository's status and checkpoints.
+ * that repository's status and checkpoints. With no Git installed nothing can
+ * see a checkout, so Scratch is offered.
  *
  * @module ScratchProject
  */
 import {
   CommandId,
+  type GitManagerServiceError,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
   ProjectProvisionError,
   type ProjectIconOverride,
   type ThreadId,
+  VcsProcessSpawnError,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Cause from "effect/Cause";
@@ -28,6 +31,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
@@ -64,6 +69,15 @@ export function scratchThreadFolderName(input: {
 const provisionError = (message: string) => (cause: unknown) =>
   new ProjectProvisionError({ message, cause });
 
+const isVcsProcessSpawnError = Schema.is(VcsProcessSpawnError);
+
+// Spawning a `git` that is not on PATH fails with NotFound, on Windows too.
+const isGitMissing = (error: GitManagerServiceError) =>
+  error._tag === "GitManagerError" &&
+  isVcsProcessSpawnError(error.cause) &&
+  error.cause.cause instanceof PlatformError.PlatformError &&
+  error.cause.cause.reason._tag === "NotFound";
+
 /**
  * Builds the Scratch helpers for one connection. The work-tree probe runs
  * once and is cached; detection failures and defects fail closed and hide
@@ -78,6 +92,7 @@ export const make = Effect.fn("ScratchProject.make")(function* (baseDir: string)
 
   const [cachedWorkspaceRoot, invalidateWorkspaceRoot] = yield* Effect.cachedInvalidateWithTTL(
     git.isRepository(baseDir).pipe(
+      Effect.catchIf(isGitMissing, () => Effect.succeed(false)),
       Effect.map((isRepository) => (isRepository ? undefined : path.resolve(baseDir, "scratch"))),
       Effect.catchCause((cause) =>
         Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(undefined),
