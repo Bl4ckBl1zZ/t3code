@@ -36,15 +36,50 @@ enum FeatureUsageLimitsMerge {
         return formatter.date(from: value)
     }
 
+    /// Ported from `accountIdentityResolver` in usageLimits.logic.ts. Keys a
+    /// report by the account it draws on. One email can belong to several
+    /// workspaces, each with its own quota, so a report that names its
+    /// workspace is keyed by it too. One that does not (a hub, an older
+    /// server) joins the only workspace known for its email, and gets no key
+    /// when there are several, since it cannot say which one it read.
+    struct AccountIdentityResolver {
+        private var workspacesByEmail: [String: Set<String>] = [:]
+
+        init(_ reports: [(driver: String, email: String?, workspaceID: String?)]) {
+            for report in reports {
+                guard let key = Self.emailKey(report.driver, report.email),
+                      let workspace = report.workspaceID, !workspace.isEmpty else { continue }
+                workspacesByEmail[key, default: []].insert(workspace)
+            }
+        }
+
+        func identity(driver: String, email: String?, workspaceID: String?) -> String? {
+            guard let key = Self.emailKey(driver, email) else { return nil }
+            if let workspaceID, !workspaceID.isEmpty { return "\(key):\(workspaceID)" }
+            guard let known = workspacesByEmail[key] else { return key }
+            return known.count == 1 ? known.first.map { "\(key):\($0)" } : nil
+        }
+
+        private static func emailKey(_ driver: String, _ email: String?) -> String? {
+            let normalized = email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            return normalized.isEmpty ? nil : "\(driver):\(normalized)"
+        }
+    }
+
     static func merge(_ environments: [FeatureEnvironmentLimits]) -> [FeatureLimitAccount] {
         var accounts: [String: FeatureLimitAccount] = [:]
+        // Every enabled login counts, read or not, so an unreadable workspace
+        // still counts as one.
+        let resolver = AccountIdentityResolver(environments.flatMap { environment in
+            environment.providers.filter(\.enabled).map { ($0.driver, $0.auth.email, $0.auth.workspaceId) }
+                + environment.sources.flatMap(\.accounts).map { ($0.driver, $0.email, $0.workspaceId) }
+        })
         for environment in environments.sorted(by: { $0.id < $1.id }) {
             for provider in environment.providers where provider.enabled {
                 // Unknown identity stays separate: collapsing two unnamed accounts
                 // would claim quota the server cannot prove they share.
-                let email = provider.auth.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                let identity = email.flatMap { $0.isEmpty ? nil : $0 } ?? "instance:\(environment.id):\(provider.instanceId)"
-                let key = "\(provider.driver):\(identity)"
+                let key = resolver.identity(driver: provider.driver, email: provider.auth.email, workspaceID: provider.auth.workspaceId)
+                    ?? "\(provider.driver):instance:\(environment.id):\(provider.instanceId)"
                 // Codex and Claude redeem banked resets through the owning
                 // instance; servers only report credits where redemption works.
                 let resetTarget: FeatureLimitAccount.ResetTarget? = FeatureUsageLimitsMerge.redeemableDrivers.contains(provider.driver)
@@ -63,9 +98,8 @@ enum FeatureUsageLimitsMerge {
             }
             for source in environment.sources {
                 for member in source.accounts {
-                    let email = member.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let identity = email.flatMap { $0.isEmpty ? nil : $0 } ?? "hub:\(environment.id):\(source.id):\(member.id)"
-                    let key = "\(member.driver):\(identity)"
+                    let key = resolver.identity(driver: member.driver, email: member.email, workspaceID: member.workspaceId)
+                        ?? "\(member.driver):hub:\(environment.id):\(source.id):\(member.id)" + (member.workspaceId.map { ":\($0)" } ?? "")
                     let label = "\(environment.label) · \(source.label)"
                     let resetTarget = member.usageLimits.resetCredits?.nextCreditId.map {
                         FeatureLimitAccount.ResetTarget(environmentID: environment.id, sourceID: source.id, accountID: member.id, creditID: $0)
@@ -103,7 +137,11 @@ extension FeatureUsageLimitsMerge {
         for account in accounts {
             guard let limits = account.limits, limits.unavailable == nil else { continue }
             for window in limits.windows where window.usedPercent.isFinite {
-                let key = "\(account.driver):\(window.id):\(window.windowDurationMins ?? 0)"
+                let pooled = poolKey(driver: account.driver, window: window)
+                // An account with two windows of one kind keeps the second apart.
+                let key = grouped[pooled]?.contains { $0.0.id == account.id } == true
+                    ? "\(account.driver):\(window.id):\(window.windowDurationMins ?? 0)"
+                    : pooled
                 grouped[key, default: []].append((account, window))
             }
         }
@@ -115,6 +153,39 @@ extension FeatureUsageLimitsMerge {
     }
 }
 
+
+extension FeatureUsageLimitsMerge {
+    /// Codex ids are slots, not allowances: a weekly-only plan reports its
+    /// weekly window as `primary`, other plans as `secondary`. Its windows pool
+    /// by kind; other drivers' ids name distinct allowances.
+    static func poolKey(driver: String, window: ServerProviderUsageLimits.Window) -> String {
+        driver == "codex"
+            ? "codex:\(window.kind)"
+            : "\(driver):\(window.id):\(window.windowDurationMins ?? 0)"
+    }
+
+    /// Antigravity reports a five-hour and a weekly window per model group
+    /// (`gemini-5h`, `gemini-weekly`, `<family>-quota`, ...): each group's
+    /// windows stay together, Gemini first. Other drivers keep the server's order.
+    static func displayOrder(driver: String, windows: [ServerProviderUsageLimits.Window]) -> [ServerProviderUsageLimits.Window] {
+        guard driver == "antigravity" else { return windows }
+        func group(_ id: String) -> String {
+            id.replacingOccurrences(of: #"-(5h|weekly|quota)$"#, with: "", options: .regularExpression)
+        }
+        func kindRank(_ kind: String) -> Int { windowKindOrder.firstIndex(of: kind) ?? windowKindOrder.count }
+        return windows.enumerated().sorted { left, right in
+            let (l, r) = (left.element, right.element)
+            let lGemini = l.id.hasPrefix("gemini-"), rGemini = r.id.hasPrefix("gemini-")
+            if lGemini != rGemini { return lGemini }
+            if group(l.id) != group(r.id) { return group(l.id) < group(r.id) }
+            if kindRank(l.kind) != kindRank(r.kind) { return kindRank(l.kind) < kindRank(r.kind) }
+            return left.offset < right.offset
+        }.map(\.element)
+    }
+
+    /// `WINDOW_KIND_ORDER`: shortest window first.
+    private static let windowKindOrder = ["session", "weekly", "monthly", "other"]
+}
 
 enum FeatureAccountLabel {
     static func display(_ name: String?, fallback: String) -> String {

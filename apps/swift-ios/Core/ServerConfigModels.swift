@@ -54,6 +54,9 @@ public struct ServerProviderAuthSnapshot: Codable, Equatable, Sendable {
     public let type: String?
     public let label: String?
     public let email: String?
+    /// The workspace or organization whose quota the login draws on. One email
+    /// can belong to several, each with its own quota. Absent from older servers.
+    public var workspaceId: String? = nil
 }
 
 public struct ServerProviderOptionChoice: Codable, Identifiable, Equatable, Sendable {

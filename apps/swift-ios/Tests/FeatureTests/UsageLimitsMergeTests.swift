@@ -4,14 +4,59 @@ import Testing
 
 @Suite("Subscription limit pooling")
 struct UsageLimitsMergeTests {
-    private func provider(_ id: String, email: String?, percent: Double, credits: Int = 0, checkedAt: String = "2026-09-06T00:00:00Z", driver: String = "codex") throws -> ServerProviderSnapshot {
+    private func provider(_ id: String, email: String?, percent: Double, credits: Int = 0, checkedAt: String = "2026-09-06T00:00:00Z", driver: String = "codex", workspaceID: String? = nil, windowID: String = "primary", windowKind: String = "session") throws -> ServerProviderSnapshot {
         var auth: [String: Any] = ["status": "authenticated"]
         if let email { auth["email"] = email }
+        if let workspaceID { auth["workspaceId"] = workspaceID }
         return try JSONDecoder().decode(ServerProviderSnapshot.self, from: JSONSerialization.data(withJSONObject: [
             "instanceId": id, "driver": driver, "enabled": true, "installed": true,
             "status": "ready", "auth": auth, "checkedAt": checkedAt, "models": [],
-            "usageLimits": ["checkedAt": checkedAt, "resetCredits": ["availableCount": credits], "windows": [["id": "primary", "kind": "session", "label": "Session", "usedPercent": percent, "windowDurationMins": 300]]],
+            "usageLimits": ["checkedAt": checkedAt, "resetCredits": ["availableCount": credits], "windows": [["id": windowID, "kind": windowKind, "label": "Session", "usedPercent": percent, "windowDurationMins": 300]]],
         ]))
+    }
+
+    /// Ports "keep one email in two workspaces as two accounts".
+    @Test func oneEmailInTwoWorkspacesIsTwoAccounts() throws {
+        let identity = FeatureUsageLimitsMerge.AccountIdentityResolver([
+            ("codex", "me@example.com", "ws-a"), ("codex", "me@example.com", "ws-b"), ("codex", "solo@example.com", "ws-c"),
+        ])
+        #expect(identity.identity(driver: "codex", email: "ME@example.com", workspaceID: "ws-a") == "codex:me@example.com:ws-a")
+        // A report without a workspace joins the only one known for its email,
+        // and gets no key when there are several.
+        #expect(identity.identity(driver: "codex", email: "solo@example.com", workspaceID: nil) == "codex:solo@example.com:ws-c")
+        #expect(identity.identity(driver: "codex", email: "me@example.com", workspaceID: nil) == nil)
+        #expect(identity.identity(driver: "codex", email: "new@example.com", workspaceID: nil) == "codex:new@example.com")
+
+        let merged = FeatureUsageLimitsMerge.merge([
+            .init(id: "mac", label: "Mac", providers: [
+                try provider("one", email: "me@example.com", percent: 20, workspaceID: "ws-a"),
+                try provider("two", email: "me@example.com", percent: 80, workspaceID: "ws-b"),
+            ]),
+        ])
+        #expect(merged.count == 2)
+    }
+
+    /// Codex ids are slots: a weekly window pools by kind whichever slot it uses.
+    @Test func codexWindowsPoolByKind() throws {
+        let merged = FeatureUsageLimitsMerge.merge([
+            .init(id: "mac", label: "Mac", providers: [
+                try provider("one", email: "a@example.com", percent: 20, windowID: "primary", windowKind: "weekly"),
+                try provider("two", email: "b@example.com", percent: 60, windowID: "secondary", windowKind: "weekly"),
+            ]),
+        ])
+        let pool = try #require(FeatureUsageLimitsMerge.pools(merged).first)
+        #expect(pool.accountCount == 2)
+        #expect(pool.usedPercent == 40)
+    }
+
+    @Test func antigravityKeepsEachGroupTogetherGeminiFirst() throws {
+        func window(_ id: String, _ kind: String) -> ServerProviderUsageLimits.Window {
+            .init(id: id, kind: kind, label: id, usedPercent: 0, resetsAt: nil, windowDurationMins: nil)
+        }
+        let windows = [window("3p-weekly", "weekly"), window("gemini-weekly", "weekly"), window("3p-5h", "session"), window("gemini-5h", "session")]
+        #expect(FeatureUsageLimitsMerge.displayOrder(driver: "antigravity", windows: windows).map(\.id)
+            == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"])
+        #expect(FeatureUsageLimitsMerge.displayOrder(driver: "codex", windows: windows).map(\.id) == windows.map(\.id))
     }
 
     @Test func mergesHubQuotaAndTargetsItsExactResetCredit() throws {
