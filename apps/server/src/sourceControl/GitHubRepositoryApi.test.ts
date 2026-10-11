@@ -559,6 +559,43 @@ describe("GitHubRepositoryApi writes", () => {
       assert.deepStrictEqual(requests, ["GET user", "POST orgs/acme/repos"]);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect("looks up a bare repository name under the signed-in account", () => {
+    const requests: Array<string> = [];
+    const { layer } = harness({
+      remotes: "",
+      api: {
+        rest: (input) =>
+          Effect.sync(() => {
+            requests.push(`${input.host} ${input.method ?? "GET"} ${input.path}`);
+            return input.path === "user"
+              ? restResponse({ login: "me" })
+              : restResponse({
+                  full_name: "me/notes",
+                  html_url: `https://${input.host}/me/notes`,
+                  ssh_url: `git@${input.host}:me/notes.git`,
+                });
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubRepositoryApi.GitHubRepositoryApi;
+      const urls = yield* gh.getRepositoryCloneUrls({ cwd: "/repo", repository: " notes.git " });
+
+      assert.deepStrictEqual(urls, {
+        nameWithOwner: "me/notes",
+        url: "https://github.com/me/notes",
+        sshUrl: "git@github.com:me/notes.git",
+      });
+      assert.deepStrictEqual(requests, ["github.com GET user", "github.com GET repos/me/notes"]);
+      // Malformed names are still refused before any request.
+      for (const repository of ["me/", "/notes", "a/b/c/d", "", "two words"]) {
+        const error = yield* Effect.flip(gh.getRepositoryCloneUrls({ cwd: "/repo", repository }));
+        assert.include(error.message, "Repositories are named owner/name.");
+      }
+      assert.strictEqual(requests.length, 2);
+    }).pipe(Effect.provide(layer));
+  });
 });
 
 describe("GitHubRepositoryApi.checkoutPullRequest", () => {

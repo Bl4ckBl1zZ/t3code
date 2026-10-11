@@ -1132,7 +1132,17 @@ export const make = Effect.gen(function* () {
           Effect.map((locator) => locator.host),
           Effect.orElseSucceed(() => environment.GH_HOST ?? "github.com"),
         )).toLowerCase();
-        const locator = parseGitHubRepositorySelector(input.repository, fallbackHost);
+        // A bare name is the signed-in account's repository, the way `gh repo view` reads it.
+        const bareName = input.repository.trim().replace(/\.git$/i, "");
+        const locator =
+          parseGitHubRepositorySelector(input.repository, fallbackHost) ??
+          (/^[^/\s]+$/.test(bareName)
+            ? {
+                host: fallbackHost,
+                owner: yield* readViewerLogin(input.cwd, fallbackHost),
+                name: bareName,
+              }
+            : null);
         if (locator === null) {
           return yield* commandFailure(input.cwd, "Repositories are named owner/name.");
         }
