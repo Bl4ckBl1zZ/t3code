@@ -2420,6 +2420,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       hardenedRuntime: signed,
       notarize: signed,
       extendInfo: {
+        NSLocalNetworkUsageDescription:
+          "T3 Code connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
         NSMicrophoneUsageDescription:
           "Allow T3 Code to record speech for Voice Input transcription.",
         // macOS lists an app under Default web browser only when it opens web
