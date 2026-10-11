@@ -52,7 +52,10 @@ T3 Code works with the platforms your team already uses:
 
 **Stay on top of open reviews**
 
-- See if your current branch already has an open PR/MR
+- See if your current branch already has an open PR/MR. An existing fork PR can appear beside the
+  branch even if you pushed without setting an upstream. If its badge is missing because several
+  remotes hold that branch, set the branch's upstream to the intended remote with
+  `git branch --set-upstream-to=<remote>/<branch>`
 - Open several reviews from the **Pull requests** page as tabs in the right panel
 - Filter the list by author or labels, rank authors by merges in the loaded results, see label and
   change-size context on each row, and sort the results currently shown by update time, creation
