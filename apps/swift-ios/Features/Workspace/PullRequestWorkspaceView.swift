@@ -352,8 +352,8 @@ private struct PullRequestWorkspaceRow: View {
                     }
                     Spacer(minLength: 0)
                     if row.sizeKnown {
-                        Text("+\(row.entry.additions)").foregroundStyle(T3Colors.diffAddition)
-                        Text("−\(row.entry.deletions)").foregroundStyle(T3Colors.diffDeletion)
+                        Text(verbatim: "+\(DiffCount.format(row.entry.additions))").foregroundStyle(T3Colors.diffAddition)
+                        Text(verbatim: "−\(DiffCount.format(row.entry.deletions))").foregroundStyle(T3Colors.diffDeletion)
                     }
                 }.font(T3Typography.homeMetadata).foregroundStyle(T3Colors.textSecondary)
                 HStack {

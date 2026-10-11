@@ -217,7 +217,7 @@ enum PullRequestDetailSections {
 
     static func statsLine(_ detail: PullRequestDetail) -> String {
         let files = detail.changedFiles == 1 ? "1 file" : "\(detail.changedFiles) files"
-        return "+\(detail.additions) −\(detail.deletions) · \(files)"
+        return "+\(DiffCount.format(detail.additions)) −\(DiffCount.format(detail.deletions)) · \(files)"
     }
 
     /// The header's second line: repository and number. The title is the

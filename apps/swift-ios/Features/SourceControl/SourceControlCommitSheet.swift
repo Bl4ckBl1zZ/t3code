@@ -30,9 +30,9 @@ struct SourceControlCommitSheet: View {
                         HStack(spacing: 6) {
                             Text(fileCount)
                             if status.insertions > 0 || status.deletions > 0 {
-                                Text("+\(status.insertions)")
+                                Text(verbatim: "+\(DiffCount.format(status.insertions))")
                                     .foregroundStyle(T3Colors.diffAddition)
-                                Text("−\(status.deletions)")
+                                Text(verbatim: "−\(DiffCount.format(status.deletions))")
                                     .foregroundStyle(T3Colors.diffDeletion)
                             }
                         }
