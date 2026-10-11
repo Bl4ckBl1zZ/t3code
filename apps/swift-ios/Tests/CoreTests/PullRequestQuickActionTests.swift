@@ -58,6 +58,16 @@ final class PullRequestQuickActionTests: XCTestCase {
         XCTAssertEqual(PullRequestActionLogic.quickActions(entry(provider: "gitlab")), [])
     }
 
+    /// Ports `pullRequestHostActions`: a host that reports its actions is
+    /// narrowed to them, whatever its kind.
+    func testRowsFollowTheHostsReportedActions() {
+        XCTAssertEqual(PullRequestActionLogic.quickActions(entry(provider: "gitlab"), hostActions: ["merge", "close"]), [.merge, .close])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(entry(), hostActions: ["merge", "close"]), [.merge, .close])
+        // Bitbucket cannot reopen or ready a pull request.
+        XCTAssertEqual(PullRequestActionLogic.quickActions(entry(state: .closed), hostActions: ["merge", "close"]), [])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(entry(draft: true), hostActions: ["merge", "close"]), [.close])
+    }
+
     // MARK: Linked pull request quick actions
 
     private func link(state: String? = "open", draft: Bool = false, host: String? = "github.com", url: String = "https://github.com/owner/repo/pull/7",

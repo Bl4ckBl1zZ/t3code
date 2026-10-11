@@ -64,6 +64,8 @@ final class NativePullRequestWorkspaceModel {
                 var row = NativePullRequestRow(environmentID: lane.environmentID, entry: entry,
                     sizeKnown: entry.provider != "github" || entry.additions + entry.deletions > 0,
                     viewer: page.result.viewers[entry.host])
+                row.hostActions = page.result.providers
+                    .first { $0.host.lowercased() == entry.host.lowercased() }?.actions
                 if let measured = stats[Self.statKey(environmentID: lane.environmentID, projectID: entry.projectId, repository: entry.repository, number: entry.number)] {
                     row.entry.additions = measured.additions
                     row.entry.deletions = measured.deletions

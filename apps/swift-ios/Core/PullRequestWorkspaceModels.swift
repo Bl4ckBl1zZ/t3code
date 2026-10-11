@@ -54,6 +54,9 @@ public struct PullRequestProviderSummary: Codable, Equatable, Sendable {
     public let host: String
     public let kind: String
     public let searchesOnHost: Bool
+    /// The actions this host can carry out, so a row can offer them before
+    /// its detail is read. Absent from older servers.
+    public var actions: [String]? = nil
     public let projectCount: Int
     public let configured: Bool
     public let detail: String?

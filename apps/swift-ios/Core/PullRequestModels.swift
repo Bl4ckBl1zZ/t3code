@@ -55,6 +55,9 @@ public struct PullRequestComment: Codable, Equatable, Sendable, Identifiable {
     public let url: String?
     public let path: String?
     public let reviewState: String?
+    /// The host's own answer to whether this reader may rewrite this remark.
+    /// Absent where the host doesn't say, which leaves it to authorship.
+    public var canEdit: Bool? = nil
 }
 
 public struct PullRequestCommit: Codable, Equatable, Sendable {
@@ -73,6 +76,8 @@ public struct PullRequestThreadComment: Codable, Equatable, Sendable, Identifiab
     public var body: String
     public let createdAt: String
     public let url: String?
+    /// The host's own answer to whether this reader may rewrite this remark.
+    public var canEdit: Bool? = nil
 }
 
 /// A host review conversation with its original diff coordinates. Outdated
@@ -92,6 +97,9 @@ public struct PullRequestReviewThread: Codable, Equatable, Sendable, Identifiabl
     /// Feeds `pullRequests.threadComments`. Absent once the thread is whole,
     /// so its presence is what says a page is missing.
     public let nextCommentsCursor: String?
+    /// The host's answer for this thread. It can only narrow the reader's
+    /// repository-wide resolve permission, never widen it.
+    public var canResolve: Bool? = nil
 }
 
 public enum PullRequestState: String, Codable, Sendable {
@@ -206,6 +214,9 @@ public struct NativePullRequestViewerPermissions: Codable, Equatable, Sendable {
     public let stackRebase: Bool?
     public let actions: [String]
     public let updateMethods: [String]?
+    /// This viewer may rewrite the title and description. Absent where the
+    /// host doesn't say, which leaves it to authorship and merge access.
+    public var editChangeRequest: Bool? = nil
 }
 
 public struct PullRequestLabelCandidate: Codable, Equatable, Sendable, Identifiable {

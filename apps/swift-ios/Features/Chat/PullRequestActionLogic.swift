@@ -108,11 +108,18 @@ enum PullRequestActionLogic {
     }
 
     /// The one-tap actions a list row offers: the next step for its state and a
-    /// way to close it. GitHub only, where the row's state is enough to know
-    /// what the host offers; nothing on a merged pull request.
-    static func quickActions(_ entry: PullRequestListEntry) -> [NativePullRequestAction] {
-        quickActions(isGitHub: entry.provider == "github", state: entry.state, isDraft: entry.isDraft)
+    /// way to close it, narrowed to what its host can do (`hostActions`, from
+    /// the list's host summary). A server that does not report host actions
+    /// only ever offered them on GitHub, so that is what it keeps getting.
+    /// Nothing on a merged pull request.
+    static func quickActions(_ entry: PullRequestListEntry, hostActions: [String]? = nil) -> [NativePullRequestAction] {
+        let allowed = Set(hostActions ?? (entry.provider == "github" ? legacyHostActions : []))
+        return quickActions(isGitHub: true, state: entry.state, isDraft: entry.isDraft)
+            .filter { allowed.contains($0.rawValue) }
     }
+
+    /// What older servers' GitHub rows offered before hosts reported actions.
+    private static let legacyHostActions = ["close", "merge", "ready", "reopen"]
 
     /// The same for a thread's linked pull request, read from the snapshot the
     /// server keeps on the link: nothing until a snapshot says its state, and

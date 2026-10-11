@@ -198,7 +198,7 @@ struct PullRequestWorkspaceView: View {
 
     private func quickActions(_ row: NativePullRequestRow) -> [NativePullRequestAction] {
         guard canRunActions, !quickActionRunner.isBusy(row.id) else { return [] }
-        return PullRequestActionLogic.quickActions(row.entry)
+        return PullRequestActionLogic.quickActions(row.entry, hostActions: row.hostActions)
     }
 
     /// The row hears sent, done and failed through its access, so the list
