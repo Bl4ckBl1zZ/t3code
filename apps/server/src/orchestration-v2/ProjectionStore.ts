@@ -3416,6 +3416,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
+              -- Keep bindings outermost: one provider instance can hold every session.
               FROM orchestration_v2_projection_provider_session_bindings binding
               CROSS JOIN orchestration_v2_projection_provider_sessions session
                 ON session.provider_session_id = binding.provider_session_id
