@@ -1357,6 +1357,49 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("names what blocks settling a thread", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-settle-blocker-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-blocker-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-settle-blocker-project"),
+        title: "Settle blocker",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-settle-blocker",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-blocker-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-settle-blocker-message"),
+        text: "Keep this run active.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      const error = yield* orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("runtime-layer-settle-blocker-settle"),
+          threadId,
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "OrchestratorDispatchError");
+      assert.equal(error.cause, `Thread ${threadId} is still running. Stop it before settling.`);
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.settledOverride);
+    }),
+  );
+
   for (const action of ["answer", "dismiss", "reject-callback-dismiss"] as const) {
     it.effect(`handles V2 question action ${action} without a live session`, () =>
       Effect.gen(function* () {
