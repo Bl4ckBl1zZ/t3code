@@ -20,6 +20,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { AgentScope } from "@t3tools/shared/AgentScope";
 
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
@@ -237,6 +238,7 @@ export const layer: Layer.Layer<
     const idAllocator = yield* IdAllocatorV2;
     const projections = yield* ProjectionStoreV2;
     const threadCommands = yield* ThreadCommandExecutor;
+    const agentScope = yield* AgentScope;
 
     const makeDomainEvent = (
       input: ProviderEventIngestInput,
@@ -527,6 +529,11 @@ export const layer: Layer.Layer<
               return [];
             }
             const occurredAt = yield* DateTime.now;
+            // A turn that failed because systemd killed the agent's scope for
+            // memory would otherwise read as a plain provider crash.
+            const failure = (yield* agentScope.oomKilled(input.threadId))
+              ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
+              : input.event.failure;
             return [
               yield* makeDomainEvent(input, {
                 type: "turn-item.updated",
@@ -539,7 +546,7 @@ export const layer: Layer.Layer<
                   providerThreadId: input.event.providerThreadId,
                   providerTurnId: input.event.providerTurnId,
                   itemOrdinal: input.event.failureItemOrdinal,
-                  failure: input.event.failure,
+                  failure,
                   ...(input.event.retry === undefined ? {} : { retry: input.event.retry }),
                   ...(input.event.retryStartedAt === undefined
                     ? {}

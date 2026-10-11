@@ -23,6 +23,7 @@ import {
   OrchestrationV2ProviderGoal,
   ProviderDriverKind,
 } from "@t3tools/contracts";
+import { AgentScope } from "@t3tools/shared/AgentScope";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -1537,8 +1538,16 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly cwd?: string | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly extendEnv?: boolean | undefined;
+  readonly threadId?: string | undefined;
 }) {
-  const spawnCommand = yield* resolveSpawnCommand(input.command, input.args, {
+  const launch = yield* (yield* AgentScope).wrap({
+    command: input.command,
+    args: input.args,
+    name: "codex",
+    threadId: input.threadId,
+    env: input.env,
+  });
+  const spawnCommand = yield* resolveSpawnCommand(launch.command, launch.args, {
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
   });
@@ -1671,6 +1680,7 @@ export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers;
+    const agentScope = yield* AgentScope;
 
     return CodexAppServerClientFactory.of({
       open: (input) =>
@@ -1686,7 +1696,8 @@ export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
               resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
             ),
             env: environment,
-          });
+            threadId: input.threadId,
+          }).pipe(Effect.provideService(AgentScope, agentScope));
           const handle = yield* spawner.spawn(command).pipe(
             Effect.provideService(Scope.Scope, scope),
             Effect.mapError(
