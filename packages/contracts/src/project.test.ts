@@ -12,6 +12,7 @@ import {
   ProjectSearchEntriesInput,
   ProjectWriteFileError,
 } from "./project.ts";
+import { ProjectFaviconPath } from "./orchestration.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 import { ReceivedProjectIcon } from "./projectIcon.ts";
 
@@ -191,5 +192,15 @@ describe("received project icons", () => {
     const decoded = Schema.decodeUnknownSync(shellCodec)(shell(null));
     expect(decoded.projectIcon).toBeNull();
     expect(Schema.encodeSync(shellCodec)(decoded)).toMatchObject({ projectIcon: null });
+  });
+});
+
+describe("project favicon paths", () => {
+  const decodeFaviconPath = Schema.decodeUnknownSync(ProjectFaviconPath);
+
+  it("accepts only supported image files", () => {
+    expect(decodeFaviconPath("brand/icon.svg")).toBe("brand/icon.svg");
+    expect(decodeFaviconPath("Resources/AppIcon.icns")).toBe("Resources/AppIcon.icns");
+    expect(() => decodeFaviconPath(".env")).toThrow();
   });
 });

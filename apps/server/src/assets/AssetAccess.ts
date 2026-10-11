@@ -31,7 +31,10 @@ import {
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
   WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
-import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
+import {
+  isProjectFaviconPath,
+  PROJECT_FAVICON_FALLBACK_MARKER,
+} from "@t3tools/shared/projectFavicon";
 import { MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH, toolOutputImages } from "@t3tools/shared/toolOutput";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - O_NOFOLLOW open and fd-backed streaming have no Effect FileSystem equivalent.
 import * as NodeFS from "node:fs";
@@ -59,6 +62,7 @@ import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { expandHomePathWith } from "../pathExpansion.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { extractIcnsPng } from "./icns.ts";
 
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
 
@@ -85,6 +89,8 @@ const SIGNING_SECRET_NAME = "asset-access-signing-key";
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const PROJECT_FAVICON_VERSION_PREFIX = "v";
+// Clients draw project icons from a 96px thumbnail at most.
+const PROJECT_FAVICON_ICNS_MIN_SIZE = 96;
 const INLINE_VIDEO_MIME_TYPE_PATTERN = /^video\/[\w!#$&^.+-]+$/i;
 // Extensions a document viewer may request inline. The extension comes from
 // the attachment id the server assigned, never from the client's mime type.
@@ -248,6 +254,26 @@ const optionOnNotFound = <A, R>(
         error.reason._tag === "NotFound" ? Effect.succeed(Option.none<A>()) : Effect.fail(error),
     }),
   );
+
+/** Serves an `.icns` favicon as its embedded PNG, since browsers cannot draw it. */
+const projectFaviconAsset = Effect.fn("AssetAccess.projectFaviconAsset")(function* (
+  filePath: string,
+) {
+  if (!filePath.toLowerCase().endsWith(".icns")) {
+    return { kind: "file", path: filePath } satisfies ResolvedAsset;
+  }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const bytes = yield* fileSystem.readFile(filePath).pipe(
+    Effect.tapError((cause) =>
+      Effect.logError("Failed to read project icon image.", { filePath, cause }),
+    ),
+    Effect.orElseSucceed(() => null),
+  );
+  const png = bytes ? extractIcnsPng(bytes, PROJECT_FAVICON_ICNS_MIN_SIZE) : null;
+  return png
+    ? ({ kind: "bytes", bytes: png, mimeType: "image/png" } satisfies ResolvedAsset)
+    : null;
+});
 
 const resolveCanonicalFile = Effect.fn("AssetAccess.resolveCanonicalFile")(function* (
   filePath: string,
@@ -649,7 +675,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       const relativePath =
         faviconPath && !isExternalOverride ? path.relative(workspaceRoot, faviconPath) : null;
       const sourceFaviconPath = isExternalOverride ? faviconPath : relativePath;
-      if (sourceFaviconPath && !isWorkspaceImagePreviewPath(sourceFaviconPath)) {
+      if (sourceFaviconPath && !isProjectFaviconPath(sourceFaviconPath)) {
         return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
       }
       sourcePath = sourceFaviconPath ?? undefined;
@@ -840,7 +866,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       workspaceRoot: claims.workspaceRoot,
       relativePath: claims.relativePath,
     });
-    return faviconPath ? ({ kind: "file", path: faviconPath } satisfies ResolvedAsset) : null;
+    return faviconPath ? yield* projectFaviconAsset(faviconPath) : null;
   }
 
   if (claims.kind === "project-favicon-external") {
@@ -853,9 +879,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       ),
       Effect.orElseSucceed(() => null),
     );
-    return faviconPath === claims.filePath
-      ? ({ kind: "file", path: faviconPath } satisfies ResolvedAsset)
-      : null;
+    return faviconPath === claims.filePath ? yield* projectFaviconAsset(faviconPath) : null;
   }
 
   const decodedPath = decodeRelativePath(relativePath);
