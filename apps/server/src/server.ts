@@ -50,6 +50,7 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import {
   HermesSessionBindingRepository,
@@ -416,6 +417,7 @@ const SourceControlRepositoryServiceLayerLive = SourceControlRepositoryService.l
 );
 
 const ReviewLayerLive = ReviewService.layer.pipe(
+  Layer.provide(ProjectionProjectRepositoryLive),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
 );
