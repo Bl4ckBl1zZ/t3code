@@ -2632,7 +2632,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 attachments: uploads,
                 // The shell is live, so a steer whose run just ended goes out
                 // as an ordinary send instead of being rejected.
-                dispatchMode: ComposerFollowUp.dispatchMode(steer: steer, liveActiveRunID: shellThread.activeRunId),
+                dispatchMode: ComposerFollowUp.dispatchMode(
+                    steer: steer,
+                    liveActiveRunID: shellThread.activeRunId,
+                    liveThreadStatus: shellThread.status
+                ),
                 commandID: pending.identity.commandID,
                 messageID: pending.identity.messageID
             )
