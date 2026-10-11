@@ -25,14 +25,7 @@ import {
 /** What a row must know to act; list rows and linked pull requests both supply it. */
 type PullRequestSpeedActionEntry = Pick<
   EnvironmentPullRequestEntry,
-  | "environmentId"
-  | "projectId"
-  | "host"
-  | "repository"
-  | "number"
-  | "state"
-  | "isDraft"
-  | "provider"
+  "environmentId" | "projectId" | "host" | "repository" | "number" | "state" | "isDraft"
 >;
 
 export interface PullRequestSpeedActionResult<Entry = EnvironmentPullRequestEntry> {
@@ -54,12 +47,15 @@ const ACTIONS = {
  */
 export function PullRequestSpeedActions<Entry extends PullRequestSpeedActionEntry>({
   entry,
+  hostActions,
   onActed,
   closing = false,
   sweeping = false,
   onCloseSweepStart,
 }: {
   entry: Entry;
+  /** What the row's host can do; actions it cannot are not offered. */
+  hostActions: ReadonlySet<PullRequestAction>;
   onActed?: (result: PullRequestSpeedActionResult<Entry>) => void;
   /** Closing as part of a swept batch. */
   closing?: boolean;
@@ -111,7 +107,7 @@ export function PullRequestSpeedActions<Entry extends PullRequestSpeedActionEntr
       aria-label={`Quick actions for pull request #${entry.number}`}
       data-pull-request-action-pending={pendingAction !== null || closing}
     >
-      {pullRequestSpeedActions(entry).map((action) => {
+      {pullRequestSpeedActions(entry, hostActions).map((action) => {
         const { label, Icon } = ACTIONS[action];
         return (
           <Tooltip key={action}>

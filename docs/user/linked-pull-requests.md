@@ -27,8 +27,9 @@ readable project in the same environment. Unlinking removes the association with
 changing the request on its host.
 
 In a thread's **Pull requests** panel, right-click a linked request to open its actions, and hold
-**Shift** to show the same quick actions as the pull-request list on GitHub rows whose project is
-in the thread's environment. Merged requests and requests whose state has not loaded yet show none.
+**Shift** to show the same quick actions as the pull-request list on rows whose project is in the
+thread's environment, limited to what the request's host supports. Merged requests and requests
+whose state has not loaded yet show none.
 
 On iOS, swipe right or long-press a request in **Linked pull requests** for the same quick actions,
 or long-press the pull request row in Details. **Close** asks first. **Merge** works as it does in
@@ -56,9 +57,10 @@ available on web, desktop and iOS.
 Project choices combine checkouts of the same repository on one machine and distinguish
 matching names across machines.
 
-On web and desktop, hold **Shift** over the pull-request list to show quick actions on GitHub rows:
+On web and desktop, hold **Shift** over the pull-request list to show quick actions:
 **Close** and **Merge** on open requests, **Close** and **Ready for review** on drafts, and
-**Reopen** on closed ones. They act at once, without opening the request. Quick actions are hidden
+**Reopen** on closed ones. Each row offers only what its host supports; Bitbucket, for example,
+cannot reopen a declined request or mark a draft ready. They act at once, without opening the request. Quick actions are hidden
 while you type in a field. **Merge** uses the project's merge method, then the machine's, then the
 one you last picked, falling back to a method the repository allows. A request that belongs to a
 stack, or that you may not merge, says so instead; open it to merge from the stack controls. The

@@ -1,5 +1,8 @@
 import type { ProjectId, ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
+import {
+  changeRequestActionsForKind,
+  detectSourceControlProviderFromRemoteUrl,
+} from "@t3tools/shared/sourceControl";
 import {
   resolveThreadPullRequestChains,
   visibleThreadPullRequests,
@@ -40,6 +43,7 @@ import {
   pullRequestChecksStatePresentation,
 } from "./pullRequestPresentation";
 import { PullRequestSpeedActions } from "./PullRequestSpeedActions";
+import { pullRequestSpeedActions } from "./pullRequestDetail.logic";
 
 const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
   manual: "Linked by you",
@@ -100,12 +104,14 @@ function LinkRow({
   const [pending, setPending] = useState(false);
   const open = snapshot === null || snapshot.state === "open";
   const watching = link.watch !== undefined;
-  // Quick actions, shown while Shift is held, need a known state and a GitHub pull request.
+  // A link carries no host summary, so the host's own action set says what it can do.
+  const linkKind = detectSourceControlProviderFromRemoteUrl(link.url)?.kind;
+  const linkHostActions = new Set(
+    linkKind === undefined ? [] : changeRequestActionsForKind(linkKind),
+  );
+  // Quick actions, shown while Shift is held, need a known state and a host that can act.
   const actionEntry =
-    projectId !== null &&
-    snapshot !== null &&
-    snapshot.state !== "merged" &&
-    detectSourceControlProviderFromRemoteUrl(link.url)?.kind === "github"
+    projectId !== null && snapshot !== null && snapshot.state !== "merged"
       ? {
           environmentId: threadRef.environmentId,
           projectId,
@@ -114,9 +120,11 @@ function LinkRow({
           number: link.number,
           state: snapshot.state,
           isDraft: snapshot.isDraft,
-          provider: "github" as const,
         }
       : null;
+  // Speed mode swaps the menu for quick actions only where a row has some to offer.
+  const hasQuickActions =
+    actionEntry !== null && pullRequestSpeedActions(actionEntry, linkHostActions).length > 0;
   return (
     <div
       className="group/pr-row flex items-center gap-2 rounded-md py-1 pr-1 hover:bg-accent/60"
@@ -252,7 +260,9 @@ function LinkRow({
           ) : null}
         </span>
       </a>
-      {actionEntry !== null ? <PullRequestSpeedActions entry={actionEntry} /> : null}
+      {hasQuickActions ? (
+        <PullRequestSpeedActions entry={actionEntry} hostActions={linkHostActions} />
+      ) : null}
       <Menu
         open={menuOpen}
         onOpenChange={(open) => {
@@ -269,7 +279,7 @@ function LinkRow({
               className={cn(
                 "opacity-100 sm:opacity-0 group-hover/pr-row:opacity-100 group-focus-within/pr-row:opacity-100 data-[popup-open]:opacity-100",
                 "group-has-[[data-pull-request-action-pending=true]]/pr-row:hidden",
-                actionEntry !== null && "group-data-[speed-actions]/pr-list:hidden",
+                hasQuickActions && "group-data-[speed-actions]/pr-list:hidden",
               )}
             >
               <MoreHorizontalIcon className="size-3.5" />

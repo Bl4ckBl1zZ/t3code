@@ -1,3 +1,4 @@
+import { changeRequestActionsForKind } from "@t3tools/shared/sourceControl";
 import * as Effect from "effect/Effect";
 import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 
@@ -19,15 +20,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   // Reading a conversation is a plain REST read, but posting one is not something this can
   // claim without having run it, so the composer stays hidden.
   comment: false,
-  actions: [
-    "merge",
-    "ready",
-    "draft",
-    "close",
-    "reopen",
-    "enable-auto-merge",
-    "disable-auto-merge",
-  ],
+  actions: [...changeRequestActionsForKind("azure-devops")],
   // Azure squashes as a completion option; it has no rebase strategy of its own.
   mergeMethods: ["merge", "squash"],
   // `az repos pr list` filters by status, creator, reviewer and branch, and by no text at all.

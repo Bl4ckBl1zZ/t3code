@@ -78,6 +78,7 @@ import {
   pullRequestDiffStatKey,
   pullRequestEntryKey,
   pullRequestEntryViewer,
+  pullRequestHostActions,
   rankPullRequestMatches,
   pullRequestEnvironmentSetKey,
   readPullRequestListSnapshot,
@@ -1693,6 +1694,7 @@ function PullRequestsRouteView() {
     );
   }, [answered, search.host]);
   const showProvider = hosts.length > 1;
+  const hostActionsOf = useMemo(() => pullRequestHostActions(hosts), [hosts]);
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
   const expectedHosts = useMemo(() => {
@@ -1777,8 +1779,14 @@ function PullRequestsRouteView() {
       ),
     [displayGroups],
   );
-  const closeSweepRef = useRef({ displayGroups, closeSweepRows, closingKeys, closeBatch });
-  closeSweepRef.current = { displayGroups, closeSweepRows, closingKeys, closeBatch };
+  const closeSweepRef = useRef({
+    displayGroups,
+    closeSweepRows,
+    closingKeys,
+    closeBatch,
+    hostActionsOf,
+  });
+  closeSweepRef.current = { displayGroups, closeSweepRows, closingKeys, closeBatch, hostActionsOf };
   useEffect(() => () => closeSensorRef.current?.cancel(), [filterKey, search.q, sort]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1804,7 +1812,7 @@ function PullRequestsRouteView() {
       return (
         row?.groupKey === group.key &&
         row.entry.state === "open" &&
-        row.entry.provider === "github" &&
+        closeSweepRef.current.hostActionsOf(row.entry).has("close") &&
         !closeSweepRef.current.closingKeys.has(key) &&
         !scrollRef.current?.querySelector(
           `[data-pull-request-key="${CSS.escape(key)}"] [data-pull-request-action-pending="true"]`,
@@ -1982,6 +1990,7 @@ function PullRequestsRouteView() {
                       selected.number === entry.number
                     }
                     onSelect={selectEntry}
+                    hostActions={hostActionsOf(entry)}
                     onActed={onSpeedAction}
                     closing={closingKeys.has(entryKey)}
                     sweeping={closeSweepKeys.has(entryKey)}

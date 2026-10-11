@@ -4,10 +4,17 @@ import {
   readPullRequestListPreferences,
   writePullRequestListPreferences,
 } from "./pullRequestListPreferences";
-import type { EnvironmentId, ProjectId, PullRequestListEntry } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  PullRequestAction,
+  PullRequestListEntry,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  pullRequestHostActions,
   filterPullRequestsByInvolvement,
   findScopedProject,
   mergePullRequestLists,
@@ -1680,5 +1687,36 @@ describe("pull request list override settlement", () => {
     const swapped = reusePullRequestEntries(previous, [entry(2, "open"), entry(1, "open")], key);
     expect(swapped).not.toBe(previous);
     expect(swapped.map((row) => row.number)).toEqual([2, 1]);
+  });
+});
+
+describe("pull request host actions", () => {
+  const summary = (host: string, kind: string, actions?: ReadonlyArray<PullRequestAction>) => ({
+    host,
+    kind: kind as SourceControlProviderKind,
+    searchesOnHost: true,
+    projectCount: 1,
+    configured: true,
+    detail: null,
+    ...(actions === undefined ? {} : { actions }),
+  });
+
+  it("offers what each host reports, and GitHub's legacy set when a server reports none", () => {
+    const actionsOf = pullRequestHostActions([
+      summary("bitbucket.org", "bitbucket", ["merge", "close"]),
+      summary("github.com", "github"),
+    ]);
+    expect([...actionsOf({ host: "Bitbucket.org", provider: "bitbucket" })]).toEqual([
+      "merge",
+      "close",
+    ]);
+    expect([...actionsOf({ host: "github.com", provider: "github" })]).toEqual([
+      "close",
+      "merge",
+      "ready",
+      "reopen",
+    ]);
+    // A host the answer does not name, on a server too old to say, offers nothing off GitHub.
+    expect(actionsOf({ host: "gitlab.com", provider: "gitlab" }).size).toBe(0);
   });
 });

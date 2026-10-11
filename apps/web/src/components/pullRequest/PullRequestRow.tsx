@@ -1,3 +1,4 @@
+import type { PullRequestAction } from "@t3tools/contracts";
 import { SearchIcon } from "lucide-react";
 import { memo, type RefCallback } from "react";
 
@@ -75,6 +76,7 @@ function PullRequestRowImpl({
   statsKey,
   statsRef,
   onSelect,
+  hostActions,
   onActed,
   closing = false,
   sweeping = false,
@@ -96,6 +98,8 @@ function PullRequestRowImpl({
   statsKey?: string;
   statsRef?: RefCallback<HTMLDivElement>;
   onSelect: (entry: EnvironmentPullRequestEntry) => void;
+  /** What this row's host can do, which is what the quick actions offer. */
+  hostActions: ReadonlySet<PullRequestAction>;
   /** A quick action's phases, held with Shift; the list shows the buttons, not the row. */
   onActed: (result: PullRequestSpeedActionResult) => void;
   /** Closing as part of a swept batch. */
@@ -230,9 +234,10 @@ function PullRequestRowImpl({
           />
         </span>
       </button>
-      {pullRequestSpeedActions(entry).length > 0 ? (
+      {pullRequestSpeedActions(entry, hostActions).length > 0 ? (
         <PullRequestSpeedActions
           entry={entry}
+          hostActions={hostActions}
           onActed={onActed}
           closing={closing}
           sweeping={sweeping}

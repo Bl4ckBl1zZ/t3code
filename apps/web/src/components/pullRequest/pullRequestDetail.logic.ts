@@ -51,18 +51,26 @@ export type PullRequestSpeedAction = Extract<
 >;
 
 /**
- * The one-press actions a list row offers while Shift is held: the next step for its state and a
- * way to close it. GitHub only, where the row's state is enough to know what the host offers;
- * nothing on a merged pull request, which has no step left.
+ * The one-press actions a row offers while Shift is held: the next step for its state and a way
+ * to close it, narrowed to what its host can do. Nothing on a merged pull request, which has no
+ * step left.
  */
-export function pullRequestSpeedActions(entry: {
-  readonly provider: SourceControlProviderKind;
-  readonly state: PullRequestState;
-  readonly isDraft: boolean;
-}): ReadonlyArray<PullRequestSpeedAction> {
-  if (entry.provider !== "github" || entry.state === "merged") return [];
-  if (entry.state === "closed") return ["reopen"];
-  return entry.isDraft ? ["close", "ready"] : ["close", "merge"];
+export function pullRequestSpeedActions(
+  entry: {
+    readonly state: PullRequestState;
+    readonly isDraft: boolean;
+  },
+  hostActions: ReadonlySet<PullRequestAction>,
+): ReadonlyArray<PullRequestSpeedAction> {
+  const forState: ReadonlyArray<PullRequestSpeedAction> =
+    entry.state === "merged"
+      ? []
+      : entry.state === "closed"
+        ? ["reopen"]
+        : entry.isDraft
+          ? ["close", "ready"]
+          : ["close", "merge"];
+  return forState.filter((action) => hostActions.has(action));
 }
 
 const safeShellArgument = /^[A-Za-z0-9._/@+=,-]+$/;
