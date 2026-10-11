@@ -1968,7 +1968,7 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
   return (
     <TimelineSystemDivider
       label={row.label}
-      detail="Partial output retained"
+      detail="Cut off by a steer"
       icon={Icon}
       expanded={row.expanded}
       actionLabel={row.expanded ? "Collapse superseded attempt" : "Expand superseded attempt"}
