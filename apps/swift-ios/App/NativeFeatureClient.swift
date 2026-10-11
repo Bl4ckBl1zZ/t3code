@@ -17,7 +17,7 @@ extension FeatureInputAnswer {
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
-    FeatureMcpAppHosting, FeatureThreadFinding, T3ConnectCapable
+    FeatureMcpAppHosting, FeatureThreadFinding, FeatureSubagentStopping, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -2672,6 +2672,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             return false
         }
         return snapshot.projection.containsUserMessage(id: messageID)
+    }
+
+    func stopSubagent(threadID: String, runID: String, subagentID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.stopSubagent(threadID: route.wireID, runID: runID, subagentID: subagentID)
+        try? await refreshUnlessStreamed(client: route.client)
     }
 
     func cancelTurn(threadID: String) async throws {

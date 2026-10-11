@@ -1035,8 +1035,15 @@ public struct ThreadDetailView: View {
 
     /// Stop on a subagent's lineage row: the composer's interrupt, aimed at the
     /// child thread. Throws so the sheet on screen can say why it failed.
+    /// A Claude-native subagent stops through this thread, whose run keeps
+    /// working; a T3-owned one by interrupting its child thread.
     private func stopSubagent(_ childThreadID: String) async throws {
-        try await model.client.cancelTurn(threadID: childThreadID)
+        if let link = relationships?.subagent(for: childThreadID), link.stopsThroughOwner, let runID = link.runID,
+           let stopper = model.client as? any FeatureSubagentStopping {
+            try await stopper.stopSubagent(threadID: thread.id, runID: runID, subagentID: link.id)
+        } else {
+            try await model.client.cancelTurn(threadID: childThreadID)
+        }
         _ = await model.detail(for: thread.id, force: true)
     }
 

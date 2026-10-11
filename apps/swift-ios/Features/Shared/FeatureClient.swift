@@ -801,6 +801,12 @@ extension FeatureClient {
     public func setActiveOrder(id: String, key: String?) async throws { throw FeatureCapabilityUnavailable("Active thread ordering") }
 }
 
+/// Stops one provider-native subagent through its owning thread, whose run
+/// keeps working. `threadID` is the owner's feature id; the others are wire ids.
+public protocol FeatureSubagentStopping {
+    func stopSubagent(threadID: String, runID: String, subagentID: String) async throws
+}
+
 
 extension FeatureClient {
     public func hostResources(environmentID: String) async throws -> HostResourcesSnapshot {

@@ -331,6 +331,24 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         XCTAssertFalse(ThreadRelationships.canStopSubagent(nil, childThreadStatus: "running"))
     }
 
+    /// A Claude-native subagent with a strong task handle stops through its
+    /// owner while its task is live; other native ones still cannot.
+    func testALiveClaudeNativeSubagentStopsThroughItsOwner() {
+        func native(driver: String = "claudeAgent", strong: Bool = true, status: String = "running") -> ThreadRelationshipSubagentLink {
+            var link = stoppable(origin: "provider_native", status: status)
+            link.driver = driver
+            link.runID = "run-1"
+            link.hasStrongNativeTask = strong
+            return link
+        }
+        XCTAssertTrue(native().stopsThroughOwner)
+        XCTAssertTrue(ThreadRelationships.canStopSubagent(native(), childThreadStatus: nil))
+        XCTAssertFalse(ThreadRelationships.canStopSubagent(native(status: "completed"), childThreadStatus: "running"))
+        XCTAssertFalse(ThreadRelationships.canStopSubagent(native(driver: "codex"), childThreadStatus: "running"))
+        XCTAssertFalse(ThreadRelationships.canStopSubagent(native(strong: false), childThreadStatus: "running"))
+        XCTAssertFalse(stoppable().stopsThroughOwner)
+    }
+
     /// `liveSubagent`: the parent can send a settled task's child a follow-up,
     /// and Stop follows that run rather than the settled task.
     func testASettledTaskCanBeStoppedWhileItsChildRunsAFollowUp() {

@@ -1166,6 +1166,11 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     /// When the task settled. Lineage shows a finished agent's elapsed time
     /// from the two; absent from older servers, which keeps the status word.
     public var completedAt: OrchestrationV2Timestamp? = nil
+    /// The owning thread's run that spawned it; `subagent.stop` names it.
+    public var runId: String? = nil
+    /// The provider's handle on a native task. A strong one with an id is
+    /// what lets the owning session stop that one task.
+    public var nativeTaskRef: OrchestrationV2ProviderRef? = nil
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {

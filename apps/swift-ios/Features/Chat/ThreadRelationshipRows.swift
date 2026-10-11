@@ -111,6 +111,13 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
     public let startedAt: String?
     /// When the task settled; nil while it runs or when the server predates it.
     public let completedAt: String?
+    /// The provider driver running it, such as `claudeAgent`.
+    public var driver: String? = nil
+    /// The owning thread's run that spawned it, for `subagent.stop`.
+    public var runID: String? = nil
+    /// A strong native task handle with an id: the owning session can stop
+    /// this one task. Only provider-native subagents carry one.
+    public var hasStrongNativeTask = false
 
     public init(
         id: String,
@@ -161,6 +168,9 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
             startedAt: subagent.startedAt,
             completedAt: subagent.completedAt
         )
+        driver = subagent.driver
+        runID = subagent.runId
+        hasStrongNativeTask = subagent.nativeTaskRef.map { $0.strength == "strong" && $0.nativeId != nil } ?? false
     }
 
     /// The observability annotations restated in this layer's value types. They
@@ -209,7 +219,7 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
 
     /// The same link pointing at a rescoped child thread id.
     public func withChildThreadID(_ childThreadID: String) -> Self {
-        Self(
+        var link = Self(
             id: id,
             childThreadID: childThreadID,
             status: status,
@@ -220,6 +230,16 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
             startedAt: startedAt,
             completedAt: completedAt
         )
+        link.driver = driver
+        link.runID = runID
+        link.hasStrongNativeTask = hasStrongNativeTask
+        return link
+    }
+
+    /// A Claude-native subagent stops through its owning session, whose run
+    /// keeps working, rather than by interrupting a child thread.
+    public var stopsThroughOwner: Bool {
+        origin == "provider_native" && driver == "claudeAgent" && hasStrongNativeTask && runID != nil
     }
 
     /// The orb seed, preferring the child thread id over the subagent id.
@@ -590,15 +610,21 @@ public struct ThreadRelationshipDecay: Equatable, Sendable {
 
 public extension ThreadRelationships {
     /// Ports `canStopSubagent` and `liveSubagent` from
-    /// apps/web/src/components/chat/ThreadRelationshipsControl.tsx. Only a
+    /// apps/web/src/components/chat/ThreadRelationshipsControl.tsx. A
     /// T3-owned subagent with a started run has a child turn Stop can
     /// interrupt. A settled task whose child thread is running a follow-up the
-    /// parent sent counts as live, because that run is what Stop would end.
+    /// parent sent counts as live, because that run is what Stop would end. A
+    /// Claude-native one is stopped through its owning session while its task
+    /// is still live.
     static func canStopSubagent(
         _ subagent: ThreadRelationshipSubagentLink?,
         childThreadStatus: String?
     ) -> Bool {
-        guard let subagent, subagent.origin == "app_owned" else { return false }
+        guard let subagent else { return false }
+        if subagent.stopsThroughOwner {
+            return subagent.startedAt != nil && stoppableStatuses.contains(subagent.status)
+        }
+        guard subagent.origin == "app_owned" else { return false }
         if let childThreadStatus, liveRunStatuses.contains(childThreadStatus) { return true }
         return subagent.startedAt != nil && stoppableStatuses.contains(subagent.status)
     }
@@ -655,12 +681,13 @@ public struct ThreadRelationshipsModel: Equatable, Sendable {
     }
 
     /// Whether this row is a subagent the open thread spawned with a live turn
-    /// Stop can end. The interrupt is routed through the child's shell, so a
-    /// child this client does not hold has nothing to aim at.
+    /// Stop can end. A T3-owned interrupt is routed through the child's shell,
+    /// so a child this client does not hold has nothing to aim at; a
+    /// Claude-native stop goes through this thread instead.
     public func canStopSubagent(_ row: ThreadRelationshipRow) -> Bool {
         row.edge.kind == .subagent
             && row.edge.sourceThreadID == currentThreadID
-            && availability(for: row.threadID) == nil
+            && (subagent(for: row.threadID)?.stopsThroughOwner == true || availability(for: row.threadID) == nil)
             && ThreadRelationships.canStopSubagent(
                 subagent(for: row.threadID),
                 childThreadStatus: graph.node(row.threadID)?.thread?.status
