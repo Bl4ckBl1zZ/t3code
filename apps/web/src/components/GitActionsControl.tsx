@@ -107,6 +107,7 @@ import {
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./chat/threadDetailsPanelStyles";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
+import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
 
 interface GitActionsControlProps {
@@ -1885,8 +1886,12 @@ export default function GitActionsControl({
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
           <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Changes</span>
           <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
-            <span className="text-diff-addition">+{changesTotals?.insertions ?? 0}</span>
-            <span className="text-diff-deletion">-{changesTotals?.deletions ?? 0}</span>
+            <span className="text-diff-addition">
+              +{formatDiffCount(changesTotals?.insertions ?? 0)}
+            </span>
+            <span className="text-diff-deletion">
+              -{formatDiffCount(changesTotals?.deletions ?? 0)}
+            </span>
           </span>
         </Button>
       ) : null}
@@ -1994,11 +1999,11 @@ export default function GitActionsControl({
                                     ) : (
                                       <>
                                         <span className="text-diff-addition">
-                                          +{file.insertions}
+                                          +{formatDiffCount(file.insertions)}
                                         </span>
                                         <span className="text-muted-foreground"> / </span>
                                         <span className="text-diff-deletion">
-                                          -{file.deletions}
+                                          -{formatDiffCount(file.deletions)}
                                         </span>
                                       </>
                                     )}
@@ -2012,11 +2017,11 @@ export default function GitActionsControl({
                     </div>
                     <div className="flex justify-end font-mono">
                       <span className="text-diff-addition">
-                        +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
+                        +{formatDiffCount(selectedFiles.reduce((sum, f) => sum + f.insertions, 0))}
                       </span>
                       <span className="text-muted-foreground"> / </span>
                       <span className="text-diff-deletion">
-                        -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
+                        -{formatDiffCount(selectedFiles.reduce((sum, f) => sum + f.deletions, 0))}
                       </span>
                     </div>
                   </div>

@@ -1,3 +1,4 @@
+import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { ThreadPullRequestsControl } from "./pullRequest/ThreadPullRequestsControl";
 import {
@@ -2157,8 +2158,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   {isWork || prLine ? null : prBadge}
                   {!isHermes && diff ? (
                     <span className="shrink-0 font-mono">
-                      <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}
-                      <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
+                      <span className="text-diff-addition-foreground">
+                        +{formatDiffCount(diff.insertions)}
+                      </span>{" "}
+                      <span className="text-diff-deletion-foreground">
+                        −{formatDiffCount(diff.deletions)}
+                      </span>
                     </span>
                   ) : null}
                   {rowIconCluster}
