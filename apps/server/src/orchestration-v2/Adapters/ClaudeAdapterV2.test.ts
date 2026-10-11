@@ -1,4 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - the fake Claude CLI hands the SDK Node streams.
+import * as NodeEvents from "node:events";
 import * as NodeOS from "node:os";
+import * as NodeStream from "node:stream";
 
 import { type ClaudeModelCatalog } from "../../provider/ClaudeModelCatalog.ts";
 import type {
@@ -6,6 +9,8 @@ import type {
   SDKMessage,
   SDKRateLimitInfo,
   SDKUserMessage,
+  SpawnedProcess,
+  SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -55,6 +60,10 @@ import { OrchestratorToolkit } from "../../mcp/toolkits/orchestrator/tools.ts";
 import { ClaudeExecutableFileCheck } from "../../provider/Drivers/ClaudeExecutable.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import {
+  NoOpProviderEventLoggers,
+  ProviderEventLoggers,
+} from "../../provider/Layers/ProviderEventLoggers.ts";
+import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
@@ -71,6 +80,7 @@ import {
   CLAUDE_T3_MCP_TOOL_WILDCARD,
   ClaudeAdapterV2Driver,
   ClaudeAgentSdkQueryRunner,
+  claudeAgentSdkQueryRunnerLiveLayer,
   ClaudeBackgroundWorkBlocksQueryReplacementError,
   ClaudeProviderCapabilitiesV2,
   claudeEffectiveQueryPolicyKey,
@@ -393,13 +403,10 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       type: "http",
       url: "http://127.0.0.1:43123/mcp",
       headers: {
-        Authorization: "${T3_CODE_MCP_AUTHORIZATION}",
+        Authorization: "Bearer secret-claude-token",
       },
       timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
     },
-  } as const;
-  const T3_MCP_ENVIRONMENT = {
-    T3_CODE_MCP_AUTHORIZATION: "Bearer secret-claude-token",
   } as const;
 
   const withMcpSession = (threadId: ThreadId, run: () => void) => {
@@ -445,7 +452,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       assert.deepEqual(overrides, {
         allowedTools: [CLAUDE_T3_MCP_TOOL_WILDCARD],
         mcpServers: T3_MCP_SERVERS,
-        mcpEnvironment: T3_MCP_ENVIRONMENT,
       });
     });
   });
@@ -462,7 +468,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       assert.deepEqual(overrides, {
         allowedTools: ["Read", "mcp__t3-code__*"],
         mcpServers: T3_MCP_SERVERS,
-        mcpEnvironment: T3_MCP_ENVIRONMENT,
       });
     });
   });
@@ -479,7 +484,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       assert.deepEqual(overrides, {
         allowedTools: [...CLAUDE_READ_ONLY_ALLOWED_TOOLS, ...CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS],
         mcpServers: T3_MCP_SERVERS,
-        mcpEnvironment: T3_MCP_ENVIRONMENT,
       });
       assert.isFalse(overrides.allowedTools?.includes(CLAUDE_T3_MCP_TOOL_WILDCARD));
     });
@@ -593,12 +597,11 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
             type: "http",
             url: "http://127.0.0.1:43123/mcp",
             headers: {
-              Authorization: "${T3_CODE_MCP_AUTHORIZATION}",
+              Authorization: "Bearer secret-claude-token",
             },
             timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
           },
         },
-        mcpEnvironment: { T3_CODE_MCP_AUTHORIZATION: "Bearer secret-claude-token" },
       });
 
       const options = makeClaudeQueryOptions({
@@ -611,12 +614,8 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
         cwd: "/workspace",
         allowedTools: overrides.allowedTools ?? [],
         mcpServers: overrides.mcpServers ?? {},
-        environment: { ...overrides.mcpEnvironment },
+        environment: {},
       });
-      // mcpServers becomes a CLI argument, readable by every local user; the
-      // credential may only travel in the child's environment.
-      assert.notInclude(JSON.stringify(options.mcpServers), "secret-claude-token");
-      assert.equal(options.env?.T3_CODE_MCP_AUTHORIZATION, "Bearer secret-claude-token");
       assert.isObject(options.systemPrompt);
       const systemPrompt = options.systemPrompt as {
         readonly type: string;
@@ -1250,6 +1249,117 @@ describe("ClaudeAdapterV2 native fork", () => {
         assert.equal(openedQueries[0]?.options.sessionId, undefined);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
+  );
+});
+
+// Stands in for the Claude CLI behind the SDK's spawn hook: records how it was
+// started and answers stdin control requests, except mcp_set_servers if asked.
+function makeFakeClaudeCli(answerSetServers = true) {
+  const spawns: Array<SpawnOptions> = [];
+  const controlRequests: Array<object> = [];
+  const stdins: Array<NodeStream.PassThrough> = [];
+  const spawn = (options: SpawnOptions): SpawnedProcess => {
+    spawns.push(options);
+    const stdin = new NodeStream.PassThrough();
+    const stdout = new NodeStream.PassThrough();
+    stdins.push(stdin);
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      killed: false,
+      exitCode: null as number | null,
+      kill: () => {
+        stdout.end();
+        child.emit("exit", null, "SIGTERM");
+        return true;
+      },
+    });
+    let pending = "";
+    stdin.on("data", (chunk: Buffer) => {
+      pending += chunk.toString("utf8");
+      for (let end = pending.indexOf("\n"); end >= 0; end = pending.indexOf("\n")) {
+        const frame = JSON.parse(pending.slice(0, end));
+        pending = pending.slice(end + 1);
+        if (frame.type !== "control_request") continue;
+        controlRequests.push(frame.request);
+        const setServers = frame.request.subtype === "mcp_set_servers";
+        if (setServers && !answerSetServers) continue;
+        const response = {
+          subtype: "success",
+          request_id: frame.request_id,
+          response: setServers ? { added: [], removed: [], errors: {} } : {},
+        };
+        stdout.write(`${JSON.stringify({ type: "control_response", response })}\n`);
+      }
+    });
+    stdin.on("end", () => {
+      stdout.end();
+      child.emit("exit", 0, null);
+    });
+    return child;
+  };
+  // The SDK closes the CLI by ending its stdin.
+  const closed = () => stdins.length > 0 && stdins.every((stdin) => stdin.writableEnded);
+  return { spawn, spawns, controlRequests, closed };
+}
+
+describe("ClaudeAdapterV2 MCP credential channel", () => {
+  const t3McpServer = {
+    type: "http" as const,
+    url: "http://127.0.0.1:43123/mcp",
+    headers: { Authorization: "Bearer dummy-mcp-credential" },
+  };
+  const openWith = (cli: ReturnType<typeof makeFakeClaudeCli>) =>
+    Effect.gen(function* () {
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      return yield* runner.open({
+        threadId: ThreadId.make("thread-claude-mcp-channel"),
+        providerSessionId: ProviderSessionId.make("provider-session-claude-mcp-channel"),
+        options: {
+          ...makeClaudeQueryOptions({
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            nativeThreadId: "native-thread-claude-mcp-channel",
+            resume: false,
+            cwd: null,
+            environment: { PATH: "/usr/bin" },
+            mcpServers: { "t3-code": t3McpServer },
+          }),
+          pathToClaudeCodeExecutable: "/opt/claude/cli.js",
+          spawnClaudeCodeProcess: cli.spawn,
+        },
+      });
+    }).pipe(
+      Effect.provide(claudeAgentSdkQueryRunnerLiveLayer),
+      Effect.provideService(ProviderEventLoggers, NoOpProviderEventLoggers),
+      Effect.provide(NodeServices.layer),
+    );
+
+  it.effect("sends MCP servers over stdin, not argv or the environment", () =>
+    Effect.gen(function* () {
+      const cli = makeFakeClaudeCli();
+      const session = yield* openWith(cli);
+      yield* session.close;
+
+      assert.deepInclude(cli.controlRequests, {
+        subtype: "mcp_set_servers",
+        servers: { "t3-code": t3McpServer },
+      });
+      const spawned = JSON.stringify(cli.spawns);
+      assert.notInclude(spawned, "--mcp-config");
+      assert.notInclude(spawned, "dummy-mcp-credential");
+    }),
+  );
+
+  it.effect("closes the CLI when it never answers the MCP registration", () =>
+    Effect.gen(function* () {
+      const cli = makeFakeClaudeCli(false);
+      const opening = yield* openWith(cli).pipe(Effect.result, Effect.forkChild);
+      yield* TestClock.adjust("90 seconds");
+      const opened = yield* Fiber.join(opening);
+
+      assert.equal(opened._tag, "Failure");
+      assert.isTrue(cli.closed());
+    }),
   );
 });
 
