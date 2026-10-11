@@ -1088,6 +1088,9 @@ public struct OrchestrationV2ContextUsage: Codable, Equatable, Sendable {
 public struct OrchestrationV2ProviderTurnTokenUsage: Codable, Equatable, Sendable {
     public let usedTokens: Int
     public var maxTokens: Int? = nil
+    /// Prompt cache lifetime the provider wrote with this report. The cache is
+    /// cold once `updatedAt` is this old. Absent from older servers.
+    public var promptCacheTtlMs: Int? = nil
     /// ISO timestamp of the report.
     public let updatedAt: String
 }

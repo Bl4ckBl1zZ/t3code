@@ -16,6 +16,8 @@ public struct ThreadContextWindow: Equatable, Sendable {
     /// True when the provider compacts on its own; nil when it never said.
     public var compactsAutomatically: Bool? = nil
     public var autoCompactThreshold: Int? = nil
+    /// The prompt cache lifetime, carried only by a live provider report.
+    public var promptCacheTtlMs: Int? = nil
 
     static func latest(
         providerTurns: [OrchestrationV2ProviderTurn],
@@ -23,12 +25,16 @@ public struct ThreadContextWindow: Equatable, Sendable {
         items: [OrchestrationV2TurnItem],
         parseDate: (String) -> Date?
     ) -> ThreadContextWindow? {
-        if let live = providerTurns.last(where: { $0.tokenUsage != nil })?.tokenUsage {
+        // The newest report wins, not the last turn: snapshots order provider
+        // turns by thread, so an older thread's turn can come last.
+        let reports = providerTurns.compactMap(\.tokenUsage).map { ($0, parseDate($0.updatedAt)) }
+        if let (live, updatedAt) = reports.max(by: { ($0.1 ?? .distantPast) < ($1.1 ?? .distantPast) }) {
             return ThreadContextWindow(
                 usedTokens: max(0, live.usedTokens),
-                updatedAt: parseDate(live.updatedAt),
+                updatedAt: updatedAt,
                 maxTokens: live.maxTokens,
-                compactsAutomatically: true
+                compactsAutomatically: true,
+                promptCacheTtlMs: live.promptCacheTtlMs
             )
         }
         if let usage = providerThread?.contextUsage, let updatedAt = providerThread?.updatedAt {
@@ -61,7 +67,9 @@ public struct ThreadContextWindow: Equatable, Sendable {
 /// `shouldOfferResumeCompaction` and the compact-disabled rule in web's
 /// ContextWindowMeter.logic / ChatView.
 enum ClaudeResumeCompaction {
-    /// Claude's own resume prompt thresholds: a session idle this long and this large.
+    /// Claude's own resume prompt thresholds: a session idle this long and this
+    /// large. The idle time is the fallback for a report without its cache
+    /// TTL: Claude's 1h cache plus slack.
     static let idleMinutes: Double = 70
     static let minimumTokens = 100_000
 
@@ -84,7 +92,8 @@ enum ClaudeResumeCompaction {
         guard input.driver == "claudeAgent", input.providerAvailable, input.isIdle,
               let window = input.contextWindow, window.usedTokens >= minimumTokens,
               let updatedAt = window.updatedAt,
-              input.now.timeIntervalSince(updatedAt) >= idleMinutes * 60,
+              input.now.timeIntervalSince(updatedAt)
+                >= window.promptCacheTtlMs.map { Double($0) / 1000 } ?? idleMinutes * 60,
               hasCompactableConversation(input.items) else { return nil }
         return window.usedTokens
     }
