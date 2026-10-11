@@ -12,6 +12,13 @@ import type {
   SpawnedProcess,
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  TaskCreateInput,
+  TaskCreateOutput,
+  TaskListOutput,
+  TaskUpdateInput,
+  TaskUpdateOutput,
+} from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ChatAttachmentId,
@@ -2251,6 +2258,268 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
       ),
+  );
+
+  type TaskToolCall =
+    | { name: "TaskCreate"; input: TaskCreateInput; output: TaskCreateOutput }
+    | { name: "TaskUpdate"; input: TaskUpdateInput; output: TaskUpdateOutput }
+    | { name: "TaskList"; input: Record<string, never>; output: TaskListOutput };
+
+  function taskToolFrames(
+    tool: TaskToolCall,
+    nextUuid: () => string,
+    options?: { parentToolUseId?: string; isError?: boolean; extraToolResult?: boolean },
+  ): ReadonlyArray<SDKMessage> {
+    const uuid = nextUuid();
+    const toolUseId = `tool-${uuid}`;
+    const parentToolUseId = options?.parentToolUseId ?? null;
+    return [
+      claudeSdkFrame({
+        type: "assistant",
+        message: {
+          id: `msg_${uuid}`,
+          model: "claude-sonnet-4-6",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "tool_use", id: toolUseId, name: tool.name, input: tool.input }],
+          stop_reason: "tool_use",
+          stop_sequence: null,
+          usage: {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+        parent_tool_use_id: parentToolUseId,
+        uuid,
+        session_id: WAKE_NATIVE_SESSION,
+      }),
+      claudeSdkFrame({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUseId,
+              content: "Task tool finished.",
+              is_error: options?.isError ?? false,
+            },
+            ...(options?.extraToolResult
+              ? [{ type: "tool_result", tool_use_id: "unrelated-tool", content: "ok" }]
+              : []),
+          ],
+        },
+        tool_use_result: tool.output,
+        parent_tool_use_id: parentToolUseId,
+        uuid: nextUuid(),
+        session_id: WAKE_NATIVE_SESSION,
+      }),
+    ];
+  }
+
+  const makeTaskToolHarness = Effect.gen(function* () {
+    const harness = yield* makeWakeHarness;
+    let sequence = 600;
+    let turn = 0;
+    const nextUuid = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
+    const startTurn = Effect.fnUntraced(function* () {
+      turn++;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make(`attempt-claude-task-tools-${turn}`),
+          providerTurnOrdinal: turn,
+          text: "Update the task list.",
+          attachments: [],
+        }),
+      );
+    });
+    const call = Effect.fnUntraced(function* (
+      tool: TaskToolCall,
+      options?: { parentToolUseId?: string; isError?: boolean; extraToolResult?: boolean },
+    ) {
+      yield* Queue.offerAll(harness.sdkMessages, taskToolFrames(tool, nextUuid, options));
+    });
+    // Frames are handled in order, so every task frame is projected once the
+    // turn's result terminalizes it.
+    const finishTurn = Effect.fnUntraced(function* () {
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: nextUuid(), result: "Task list updated." }),
+      );
+      yield* awaitUntil(() => harness.terminalEvents().length === turn, "task tool turn");
+    });
+    const plans = () =>
+      harness.events.flatMap((event) =>
+        event.type === "plan.updated" && event.plan.kind === "todo_list" ? [event.plan] : [],
+      );
+    return { startTurn, call, finishTurn, plans };
+  });
+
+  const createTask = (id: string, subject: string): TaskToolCall => ({
+    name: "TaskCreate",
+    input: { subject: `Requested ${subject}`, description: `Work on ${subject}.` },
+    output: { task: { id, subject } },
+  });
+  const updateTask = (input: TaskUpdateInput, success = true): TaskToolCall => ({
+    name: "TaskUpdate",
+    input,
+    output: { success, taskId: input.taskId, updatedFields: ["status"] },
+  });
+
+  it.effect(
+    "projects TaskCreate and TaskUpdate into one plan per turn and supersedes it later",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeTaskToolHarness;
+        yield* harness.startTurn();
+        yield* harness.call(createTask("1", "Inspect"));
+        yield* harness.call(createTask("2", "Implement"));
+        yield* harness.call(updateTask({ taskId: "1", status: "in_progress" }));
+        yield* harness.finishTurn();
+
+        const firstTurnPlans = harness.plans();
+        assert.lengthOf(firstTurnPlans, 3);
+        assert.equal(new Set(firstTurnPlans.map((plan) => plan.id)).size, 1);
+        assert.deepEqual(firstTurnPlans.at(-1)?.steps, [
+          { id: "task-1", text: "Inspect", status: "running" },
+          { id: "task-2", text: "Implement", status: "pending" },
+        ]);
+        const firstPlan = firstTurnPlans.at(-1)!;
+
+        yield* harness.startTurn();
+        yield* harness.call(updateTask({ taskId: "1", status: "completed", subject: "Inspected" }));
+        yield* harness.finishTurn();
+
+        const laterPlans = harness.plans().slice(firstTurnPlans.length);
+        assert.lengthOf(laterPlans, 2);
+        assert.equal(laterPlans[0]?.id, firstPlan.id);
+        assert.equal(laterPlans[0]?.status, "superseded");
+        const newPlan = laterPlans[1]!;
+        assert.notEqual(newPlan.id, firstPlan.id);
+        assert.notEqual(newPlan.runId, firstPlan.runId);
+        assert.deepEqual(newPlan.steps, [
+          { id: "task-1", text: "Inspected", status: "completed" },
+          { id: "task-2", text: "Implement", status: "pending" },
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("removes deleted tasks without resurrecting them on later updates or turns", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Discard"));
+      yield* harness.call(createTask("2", "Keep"));
+      yield* harness.call(updateTask({ taskId: "1", status: "deleted" }));
+      yield* harness.call(updateTask({ taskId: "1", status: "pending" }));
+      yield* harness.finishTurn();
+      assert.lengthOf(harness.plans(), 3);
+      assert.deepEqual(harness.plans().at(-1)?.steps, [
+        { id: "task-2", text: "Keep", status: "pending" },
+      ]);
+
+      yield* harness.startTurn();
+      yield* harness.call(updateTask({ taskId: "2", status: "in_progress" }));
+      yield* harness.finishTurn();
+      assert.deepEqual(harness.plans().at(-1)?.steps, [
+        { id: "task-2", text: "Keep", status: "running" },
+      ]);
+      for (const plan of harness.plans().slice(2)) {
+        assert.isFalse(plan.steps.some((step) => step.id === "task-1"));
+      }
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect.each(["success false", "error result", "unknown id"] as const)(
+    "does not emit a plan update for TaskUpdate with %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const harness = yield* makeTaskToolHarness;
+        yield* harness.startTurn();
+        yield* harness.call(createTask("1", "Inspect"));
+        yield* harness.call(
+          updateTask(
+            { taskId: reason === "unknown id" ? "missing" : "1", status: "completed" },
+            reason !== "success false",
+          ),
+          { isError: reason === "error result" },
+        );
+        yield* harness.finishTurn();
+        assert.lengthOf(harness.plans(), 1);
+        assert.deepEqual(harness.plans()[0]?.steps, [
+          { id: "task-1", text: "Inspect", status: "pending" },
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("replaces task state with TaskList, including an empty list", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Stale"));
+      yield* harness.call({
+        name: "TaskList",
+        input: {},
+        output: {
+          tasks: [
+            { id: "2", subject: "Queued", status: "pending", blockedBy: [] },
+            { id: "3", subject: "Working", status: "in_progress", blockedBy: [] },
+            { id: "4", subject: "Done", status: "completed", blockedBy: [] },
+          ],
+        },
+      });
+      yield* harness.call(updateTask({ taskId: "1", status: "in_progress" }));
+      yield* harness.call(updateTask({ taskId: "2", status: "in_progress" }));
+      yield* harness.call({ name: "TaskList", input: {}, output: { tasks: [] } });
+      yield* harness.call(updateTask({ taskId: "2", status: "pending" }));
+      yield* harness.finishTurn();
+      const plans = harness.plans();
+      assert.lengthOf(plans, 4);
+      assert.deepEqual(plans[1]?.steps, [
+        { id: "task-2", text: "Queued", status: "pending" },
+        { id: "task-3", text: "Working", status: "running" },
+        { id: "task-4", text: "Done", status: "completed" },
+      ]);
+      assert.deepEqual(plans[2]?.steps, [
+        { id: "task-2", text: "Queued", status: "running" },
+        { id: "task-3", text: "Working", status: "running" },
+        { id: "task-4", text: "Done", status: "completed" },
+      ]);
+      assert.deepEqual(plans[3]?.steps, []);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("keeps subagent TaskCreate, TaskUpdate and TaskList out of the main plan", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Main task"));
+      const child = { parentToolUseId: "tool-parent-agent" };
+      yield* harness.call(createTask("2", "Child task"), child);
+      yield* harness.call(updateTask({ taskId: "1", status: "completed" }), child);
+      yield* harness.call({ name: "TaskList", input: {}, output: { tasks: [] } }, child);
+      yield* harness.call(updateTask({ taskId: "1", status: "in_progress" }));
+      yield* harness.finishTurn();
+      assert.lengthOf(harness.plans(), 2);
+      assert.deepEqual(harness.plans().at(-1)?.steps, [
+        { id: "task-1", text: "Main task", status: "running" },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("does not associate structured task output with multiple tool results", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeTaskToolHarness;
+      yield* harness.startTurn();
+      yield* harness.call(createTask("1", "Ambiguous"), { extraToolResult: true });
+      yield* harness.finishTurn();
+      assert.deepEqual(harness.plans(), []);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );
 
   it.effect("reports when a rejected Claude usage window resets", () =>
