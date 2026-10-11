@@ -13,7 +13,7 @@ import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
-import { type ServerProviderSkill } from "@t3tools/contracts";
+import { type EnvironmentId, type ServerProviderSkill } from "@t3tools/contracts";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import {
   $applyNodeReplacement,
@@ -92,6 +92,7 @@ import {
   SKILL_CHIP_ICON_SVG,
 } from "./composerInlineChip";
 import { FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
+import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
 import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTerminalContexts";
 import { formatProviderSkillDisplayName } from "@t3tools/client-runtime/providerSkills";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -144,6 +145,12 @@ type SerializedComposerTerminalContextNode = Spread<
   SerializedLexicalNode
 >;
 
+/** Where mention chips look up file metadata for their icon and size. */
+const ComposerMentionTargetContext = createContext<{
+  environmentId: EnvironmentId | null;
+  cwd: string | undefined;
+}>({ environmentId: null, cwd: undefined });
+
 const ComposerTerminalContextActionsContext = createContext<{
   onRemoveTerminalContext: (contextId: string) => void;
 }>({
@@ -152,6 +159,7 @@ const ComposerTerminalContextActionsContext = createContext<{
 
 function ComposerMentionDecorator(props: { path: string }) {
   const theme = resolvedThemeFromDocument();
+  const { environmentId, cwd } = use(ComposerMentionTargetContext);
   const chip = (
     <span
       className={FILE_TAG_CHIP_CLASS_NAME}
@@ -159,14 +167,22 @@ function ComposerMentionDecorator(props: { path: string }) {
       spellCheck={false}
       data-composer-mention-chip="true"
     >
-      <FileTagChipContent path={props.path} label={basenameOfPath(props.path)} theme={theme} />
+      <FileTagChipContent
+        path={props.path}
+        environmentId={environmentId}
+        cwd={cwd}
+        label={basenameOfPath(props.path)}
+        theme={theme}
+      />
     </span>
   );
 
   return (
     <Tooltip>
       <TooltipTrigger render={chip} />
-      <TooltipPopup side="top">{props.path}</TooltipPopup>
+      <TooltipPopup side="top">
+        <WorkspaceEntryTooltip path={props.path} environmentId={environmentId} cwd={cwd} />
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -913,6 +929,9 @@ export interface ComposerPromptEditorHandle {
 
 interface ComposerPromptEditorProps {
   onCitationSubmitAndSend?: () => void;
+  /** Environment and workspace that mention chips resolve file metadata against. */
+  environmentId?: EnvironmentId | null | undefined;
+  cwd?: string | undefined;
   value: string;
   cursor: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
@@ -1701,6 +1720,8 @@ function ComposerPromptEditorInner({
   onPaste,
   editorRef,
   literalText = false,
+  environmentId = null,
+  cwd,
 }: ComposerPromptEditorProps) {
   const [editor] = useLexicalComposerContext();
   const onChangeRef = useRef(onChange);
@@ -1738,6 +1759,7 @@ function ComposerPromptEditorInner({
     () => ({ onRemoveTerminalContext }),
     [onRemoveTerminalContext],
   );
+  const mentionTarget = useMemo(() => ({ environmentId, cwd }), [environmentId, cwd]);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -2035,75 +2057,77 @@ function ComposerPromptEditorInner({
 
   return (
     <ComposerCitationCommentContext value={citationCommentActions}>
-      <ComposerTerminalContextActionsContext value={terminalContextActions}>
-        <div
-          className={cn(
-            "relative flow-root font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)",
-            containerClassName,
-          )}
-        >
-          <PlainTextPlugin
-            contentEditable={
-              <ContentEditable
-                className={cn(
-                  // The wrapper owns the appearance preference; keep everything else here.
-                  "-m-1 block max-h-52 min-h-19.5 overflow-y-auto p-1 whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
-                  className,
-                )}
-                data-testid="composer-editor"
-                ariaLabel={ariaLabel}
-                ariaMultiline
-                {...(suggestionListId
-                  ? {
-                      ariaAutoComplete: "list" as const,
-                      "aria-haspopup": "listbox" as const,
-                      ...(activeSuggestionId
-                        ? {
-                            ariaControls: suggestionListId,
-                            ariaActiveDescendant: activeSuggestionId,
-                          }
-                        : {}),
-                    }
-                  : {})}
-                aria-placeholder={placeholder}
-                placeholder={<span />}
-                onPaste={onPaste}
-              />
-            }
-            placeholder={
-              terminalContexts.length > 0 ? null : (
-                <div
+      <ComposerMentionTargetContext value={mentionTarget}>
+        <ComposerTerminalContextActionsContext value={terminalContextActions}>
+          <div
+            className={cn(
+              "relative flow-root font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)",
+              containerClassName,
+            )}
+          >
+            <PlainTextPlugin
+              contentEditable={
+                <ContentEditable
                   className={cn(
-                    "pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75",
-                    placeholderClassName,
+                    // The wrapper owns the appearance preference; keep everything else here.
+                    "-m-1 block max-h-52 min-h-19.5 overflow-y-auto p-1 whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
+                    className,
                   )}
-                >
-                  {placeholder}
-                </div>
-              )
-            }
-            ErrorBoundary={LexicalErrorBoundary}
-          />
-          <OnChangePlugin onChange={handleEditorChange} />
-          <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
-          <ComposerHomeEndKeyPlugin />
-          {literalText ? null : (
-            <>
-              <ComposerSurroundSelectionPlugin
-                terminalContexts={terminalContexts}
-                skills={skills}
-              />
-              <ComposerInlineTokenArrowPlugin />
-              <ComposerCitationTabPlugin />
-              <ComposerInlineTokenSelectionNormalizePlugin />
-              <ComposerInlineTokenBackspacePlugin />
-              <ComposerInlineTokenPastePlugin />
-              <ComposerChipSelectionPlugin />
-            </>
-          )}
-          <HistoryPlugin />
-        </div>
-      </ComposerTerminalContextActionsContext>
+                  data-testid="composer-editor"
+                  ariaLabel={ariaLabel}
+                  ariaMultiline
+                  {...(suggestionListId
+                    ? {
+                        ariaAutoComplete: "list" as const,
+                        "aria-haspopup": "listbox" as const,
+                        ...(activeSuggestionId
+                          ? {
+                              ariaControls: suggestionListId,
+                              ariaActiveDescendant: activeSuggestionId,
+                            }
+                          : {}),
+                      }
+                    : {})}
+                  aria-placeholder={placeholder}
+                  placeholder={<span />}
+                  onPaste={onPaste}
+                />
+              }
+              placeholder={
+                terminalContexts.length > 0 ? null : (
+                  <div
+                    className={cn(
+                      "pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75",
+                      placeholderClassName,
+                    )}
+                  >
+                    {placeholder}
+                  </div>
+                )
+              }
+              ErrorBoundary={LexicalErrorBoundary}
+            />
+            <OnChangePlugin onChange={handleEditorChange} />
+            <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
+            <ComposerHomeEndKeyPlugin />
+            {literalText ? null : (
+              <>
+                <ComposerSurroundSelectionPlugin
+                  terminalContexts={terminalContexts}
+                  skills={skills}
+                />
+                <ComposerInlineTokenArrowPlugin />
+                <ComposerCitationTabPlugin />
+                <ComposerInlineTokenSelectionNormalizePlugin />
+                <ComposerInlineTokenBackspacePlugin />
+                <ComposerInlineTokenPastePlugin />
+                <ComposerChipSelectionPlugin />
+              </>
+            )}
+            <HistoryPlugin />
+          </div>
+        </ComposerTerminalContextActionsContext>
+      </ComposerMentionTargetContext>
     </ComposerCitationCommentContext>
   );
 }
@@ -2128,6 +2152,8 @@ export function ComposerPromptEditor({
   onPaste,
   editorRef,
   literalText = false,
+  environmentId,
+  cwd,
 }: ComposerPromptEditorProps) {
   const initialValueRef = useRef(value);
   const initialLiteralTextRef = useRef(literalText);
@@ -2176,6 +2202,8 @@ export function ComposerPromptEditor({
         onPaste={onPaste}
         editorRef={editorRef}
         literalText={literalText}
+        environmentId={environmentId}
+        cwd={cwd}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
         containerClassName={containerClassName}

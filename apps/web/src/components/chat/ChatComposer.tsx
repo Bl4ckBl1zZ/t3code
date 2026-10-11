@@ -4172,6 +4172,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             >
               <ComposerPromptEditor
                 ariaLabel="Message"
+                environmentId={environmentId}
+                cwd={gitCwd ?? undefined}
                 suggestionListId={composerSuggestionListId}
                 activeSuggestionId={
                   composerSuggestionListVisible && activeComposerMenuItem

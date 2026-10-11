@@ -69,6 +69,11 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
+  /** Refreshes the query when this signal changes, but only while something reads it. */
+  readonly refreshTrigger?: (target: {
+    readonly environmentId: EnvironmentIdType;
+    readonly input: Input;
+  }) => Atom.Atom<unknown> | undefined;
 }
 
 interface EnvironmentSubscriptionAtomOptions<Input, A, E, R> {
@@ -497,6 +502,35 @@ export function runInEnvironment<A, E, R>(
   );
 }
 
+/**
+ * Refreshes a query when `signal` changes, but only while something reads it.
+ * `Atom.makeRefreshOnSignal` subscribes to the signal, so a query that outlives its view on an
+ * idle TTL still re-runs on every change. Reading the signal as a dependency instead lets the
+ * registry re-run a mounted query right away and only mark an idle one stale, which then
+ * refreshes on its next read.
+ */
+const refreshOnSignalWhileRead =
+  (signal: Atom.Atom<unknown>) =>
+  <A>(self: Atom.Atom<A>): Atom.Atom<A> => {
+    // The signal value each registry's data was read under. Held outside the node because the
+    // registry can sweep this node while `self` keeps the data, and the rebuilt node must still
+    // see a change it missed.
+    const readUnder = new WeakMap<AtomRegistry.AtomRegistry, unknown>();
+    return Atom.transform(
+      self,
+      (get) => {
+        const current = get(signal);
+        get.subscribe(self, (value) => get.setSelf(value));
+        const changed =
+          readUnder.has(get.registry) && !Object.is(readUnder.get(get.registry), current);
+        readUnder.set(get.registry, current);
+        if (changed) get.refresh(self);
+        return get.once(self);
+      },
+      { initialValueTarget: self },
+    );
+  };
+
 export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: EnvironmentQueryAtomOptions<Input, A, E, EnvironmentSupervisor | R>,
@@ -569,10 +603,15 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         }),
         Atom.setIdleTTL(idleTtlMs),
       );
-    return (
+    const intervalQuery =
       options.refreshIntervalMs === undefined
         ? queryAtom
-        : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs))
+        : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs));
+    const refreshTrigger = options.refreshTrigger?.(target);
+    return (
+      refreshTrigger === undefined
+        ? intervalQuery
+        : intervalQuery.pipe(refreshOnSignalWhileRead(refreshTrigger))
     ).pipe(Atom.setIdleTTL(idleTtlMs), Atom.withLabel(`${options.label}:${key}`));
   });
   return (target) => family(environmentRpcKey(target));
@@ -659,6 +698,14 @@ export function createEnvironmentRpcQueryAtomFamily<
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
+    /** Replaces the plain request, e.g. to seed shared caches from the response. */
+    readonly execute?: (
+      input: EnvironmentRpcInput<TTag>,
+    ) => Effect.Effect<
+      EnvironmentRpcSuccess<TTag>,
+      EnvironmentRpcFailure<TTag> | EnvironmentRpcUnavailableError,
+      EnvironmentSupervisor
+    >;
   },
 ) {
   return createEnvironmentQueryAtomFamily(runtime, {
@@ -669,7 +716,8 @@ export function createEnvironmentRpcQueryAtomFamily<
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
-    execute: (input: EnvironmentRpcInput<TTag>) => request(options.tag, input),
+    execute: (input: EnvironmentRpcInput<TTag>) =>
+      options.execute ? options.execute(input) : request(options.tag, input),
   });
 }
 
@@ -736,6 +784,7 @@ export function createEnvironmentRpcCommand<
         readonly input: NoInfer<Input>;
       },
       registry: AtomRegistry.AtomRegistry,
+      result: EnvironmentRpcSuccess<TTag>,
     ) => Effect.Effect<void, never, R>;
     readonly onSettled?: (
       target: {
@@ -764,7 +813,7 @@ export function createEnvironmentRpcCommand<
           authorize: (id, method, payload) =>
             createCommandPermissions(runtime, method).authorize(registry, id, payload),
         }),
-        Effect.tap(() => options.onSuccess?.(target, registry) ?? Effect.void),
+        Effect.tap((result) => options.onSuccess?.(target, registry, result) ?? Effect.void),
         Effect.ensuring(options.onSettled?.(target, registry) ?? Effect.void),
       );
     },
