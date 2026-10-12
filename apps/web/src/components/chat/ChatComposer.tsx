@@ -208,6 +208,12 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
 
     const updatePosition = () => {
       const rect = anchor.getBoundingClientRect();
+      // A maximized right panel collapses the chat column to zero width; the
+      // menu must not float over the panel then.
+      if (rect.width <= 0) {
+        setPosition(null);
+        return;
+      }
       const next = {
         bottom: window.innerHeight - rect.top + 8,
         left: rect.left,
