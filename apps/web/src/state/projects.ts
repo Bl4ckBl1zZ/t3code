@@ -5,6 +5,7 @@ import { WS_METHODS } from "@t3tools/contracts";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { serverEnvironment } from "./server";
 import { environmentSnapshotAtom } from "./shell";
 
 export const projectEnvironment = createProjectEnvironmentAtoms(connectionAtomRuntime);
@@ -22,4 +23,5 @@ export const projectContentSearch = createEnvironmentRpcQueryAtomFamily(connecti
 export const environmentProjects = createEnvironmentProjectAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: environmentSnapshotAtom,
+  serverConfigValueAtom: serverEnvironment.configValueAtom,
 });
