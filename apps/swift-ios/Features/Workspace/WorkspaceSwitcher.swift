@@ -247,6 +247,8 @@ public enum WorkspaceSwitcher {
 enum HomeProjectFilter {
     /// The selection that stands for "No Project".
     static let noProjectID = "t3:no-project"
+    /// Where the selection is kept between launches.
+    static let storageKey = "workspace.project-filter"
 
     /// The projects a selection keeps, or nil for all of them.
     static func projectIDs(selected: String?, scratchProjectIDs: Set<String>) -> Set<String>? {

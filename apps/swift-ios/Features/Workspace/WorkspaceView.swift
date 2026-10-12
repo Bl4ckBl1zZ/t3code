@@ -42,7 +42,9 @@ public struct WorkspaceView: View {
     @State private var compactColumns: [MobileWorkspace: NavigationSplitViewColumn] = [:]
     /// Per tab, the threads Back returns to before the list.
     @State private var threadBackStacks: [MobileWorkspace: ThreadBackStack] = [:]
-    @State private var selectedProjectID: String?
+    /// The Code list's project filter, kept for the next launch as on web and
+    /// mobile. Empty is All Projects.
+    @AppStorage(HomeProjectFilter.storageKey) private var storedProjectFilter = ""
     @State private var searchText = ""
     @State private var isSearchPresented = false
     /// Which workspace a search looks through. It starts at the tab the search
@@ -524,7 +526,7 @@ public struct WorkspaceView: View {
         Menu {
             if WorkspaceSwitcher.showsProjectFilter(tab), !filterableProjects.isEmpty {
                 Section("Project") {
-                    Picker("Project", selection: $selectedProjectID) {
+                    Picker("Project", selection: Binding(get: { selectedProjectID }, set: { selectedProjectID = $0 })) {
                         Text("All Projects").tag(String?.none)
                         if !scratchProjectIDs.isEmpty {
                             Text("No Project").tag(Optional(HomeProjectFilter.noProjectID))
@@ -1256,7 +1258,9 @@ public struct WorkspaceView: View {
                 showingPullRequests = false
                 openThread(threadID, in: .code)
             } : nil)
-            .onChange(of: selectedProjectIsAvailable) { _, isAvailable in
+            // A saved filter waits for the projects to load before it can
+            // read as gone; one that is still missing then resets.
+            .onChange(of: selectedProjectIsAvailable || isAwaitingData, initial: true) { _, isAvailable in
                 if !isAvailable { selectedProjectID = nil }
             }
             .onChange(of: selectedProjectID) {
@@ -1508,6 +1512,11 @@ public struct WorkspaceView: View {
 
     private var selectedProject: FeatureProject? {
         filterableProjects.first { $0.id == selectedProjectID }
+    }
+
+    private var selectedProjectID: String? {
+        get { storedProjectFilter.isEmpty ? nil : storedProjectFilter }
+        nonmutating set { storedProjectFilter = newValue ?? "" }
     }
 
     private var creationProjects: [FeatureProject] {
