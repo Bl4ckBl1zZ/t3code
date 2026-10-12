@@ -12,20 +12,6 @@ export function ProviderIcon(props: ProviderIconProps) {
   const size = props.size ?? 16;
   const mono = isDarkMode ? "#e5e5e5" : "#171717";
 
-  if (props.provider === "hermes") {
-    const color = isDarkMode ? "#f4f4f5" : "#18181b";
-    return (
-      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <Path fill={color} d="M4 4.5h3.2v5.8h9.6V4.5H20v15h-3.2v-6.1H7.2v6.1H4v-15Z" />
-        <Path
-          fill={color}
-          opacity={0.55}
-          d="M1.5 7.2 4 8.5v3L1.5 10V7.2Zm21 0L20 8.5v3l2.5-1.5V7.2Z"
-        />
-      </Svg>
-    );
-  }
-
   if (props.provider === "openclaw") {
     return (
       <Svg width={size} height={size} viewBox="0 0 32 32" fill="none">

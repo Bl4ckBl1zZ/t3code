@@ -9,7 +9,7 @@ import {
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
-  canPinWorkInboxThread,
+  canPinSidebarThread,
   createThreadJumpHintVisibilityController,
   filterSidebarV2VisibleThreads,
   formatBackgroundWorkTooltip,
@@ -28,7 +28,6 @@ import {
   isSidebarNestedLinkClick,
   isSidebarSubagentThread,
   isSidebarThreadWorking,
-  isThreadVisibleInSidebarWorkspace,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
@@ -37,11 +36,8 @@ import {
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
-  resolveWorkInboxBadge,
   pullRequestMatchesSearchQuery,
   searchSidebarThreads,
-  resolveWorkspaceSwitchNavigation,
-  sidebarProviderInstanceKey,
   formatWorkingDurationLabel,
   shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
@@ -54,8 +50,6 @@ import {
   sortSettledThreadsForSidebar,
   applyManualThreadOrderForSidebarV2,
   sortThreadsForSidebar,
-  workInboxActiveSection,
-  workspaceLandingKind,
   pinOrderKeyBetween,
   planPinnedReorder,
   sortPinnedThreadsForSidebar,
@@ -65,14 +59,7 @@ import {
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import {
-  EnvironmentId,
-  ProjectId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  RunId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -112,58 +99,27 @@ describe("resolveSidebarRowAccessibility", () => {
   });
 });
 
-describe("Hermes Work inbox semantics", () => {
-  const hermesEnvironmentId = EnvironmentId.make("environment-hermes");
-  const hermesInstanceId = ProviderInstanceId.make("hermes-primary");
-  const driverKinds = new Map([
-    [`${hermesEnvironmentId}\u0000${hermesInstanceId}`, ProviderDriverKind.make("hermes")] as const,
-  ]);
-
-  it("projects durable main and needs-you roles into structured sections", () => {
-    expect(workInboxActiveSection(makeThreadFixture({ workInboxRole: "main" }))).toBe("main");
-    expect(workInboxActiveSection(makeThreadFixture({ hasPendingApprovals: true }))).toBe(
-      "needs-you",
-    );
-    expect(workInboxActiveSection(makeThreadFixture({ hasPendingUserInput: true }))).toBe(
-      "needs-you",
-    );
-    expect(workInboxActiveSection(makeThreadFixture())).toBe("active");
-  });
-
-  it("only permits unsettled ordinary Hermes sidebar threads to be pinned", () => {
-    const ordinaryHermes = makeThreadFixture({
-      environmentId: hermesEnvironmentId,
-      providerInstanceId: hermesInstanceId,
-    });
-    const canPin = (overrides: Partial<Parameters<typeof canPinWorkInboxThread>[0]>) =>
-      canPinWorkInboxThread({
-        thread: ordinaryHermes,
-        providerDriverKindByInstance: driverKinds,
+describe("canPinSidebarThread", () => {
+  it("only permits unsettled lifecycle threads on pinning-capable environments", () => {
+    const thread = makeThreadFixture();
+    const canPin = (overrides: Partial<Parameters<typeof canPinSidebarThread>[0]>) =>
+      canPinSidebarThread({
+        thread,
+        supportsPinning: true,
         isSnoozed: false,
         isSettled: false,
         ...overrides,
       });
 
     expect(canPin({})).toBe(true);
+    expect(canPin({ supportsPinning: false })).toBe(false);
     expect(canPin({ isSettled: true })).toBe(false);
     expect(canPin({ isSnoozed: true })).toBe(false);
-    expect(canPin({ thread: { ...ordinaryHermes, workInboxRole: "main" } })).toBe(false);
     expect(
       canPin({
         thread: {
-          ...ordinaryHermes,
-          lineage: {
-            ...ordinaryHermes.lineage,
-            relationshipToParent: "subagent",
-          },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      canPin({
-        thread: {
-          ...ordinaryHermes,
-          providerInstanceId: ProviderInstanceId.make("codex"),
+          ...thread,
+          lineage: { ...thread.lineage, relationshipToParent: "subagent" },
         },
       }),
     ).toBe(false);
@@ -495,159 +451,6 @@ describe("sidebar thread lineage helpers", () => {
     ).toBe(false);
   });
 
-  it("filters lifecycle threads by workspace using provider driver metadata", () => {
-    const environmentId = EnvironmentId.make("environment-workspaces");
-    const codexInstanceId = ProviderInstanceId.make("codex_personal");
-    const defaultHermesInstanceId = ProviderInstanceId.make("hermes");
-    const customHermesInstanceId = ProviderInstanceId.make("research_assistant");
-    const parentId = ThreadId.make("thread-parent");
-    const providerDriverKindByInstance = new Map([
-      [
-        sidebarProviderInstanceKey(environmentId, codexInstanceId),
-        ProviderDriverKind.make("codex"),
-      ],
-      [
-        sidebarProviderInstanceKey(environmentId, defaultHermesInstanceId),
-        ProviderDriverKind.make("hermes"),
-      ],
-      [
-        sidebarProviderInstanceKey(environmentId, customHermesInstanceId),
-        ProviderDriverKind.make("hermes"),
-      ],
-    ]);
-    const ordinaryThread = makeThreadFixture({
-      environmentId,
-      id: ThreadId.make("thread-code"),
-      providerInstanceId: codexInstanceId,
-    });
-    const hermesThread = makeThreadFixture({
-      environmentId,
-      id: ThreadId.make("thread-hermes"),
-      providerInstanceId: defaultHermesInstanceId,
-    });
-    const customHermesThread = makeThreadFixture({
-      environmentId,
-      id: ThreadId.make("thread-custom-hermes"),
-      providerInstanceId: customHermesInstanceId,
-    });
-    const subagentThread = makeThreadFixture({
-      environmentId,
-      id: ThreadId.make("thread-hermes-subagent"),
-      providerInstanceId: customHermesInstanceId,
-      lineage: {
-        rootThreadId: parentId,
-        parentThreadId: parentId,
-        relationshipToParent: "subagent",
-      },
-    });
-    const threads = [ordinaryThread, hermesThread, customHermesThread, subagentThread];
-
-    expect(
-      threads.filter((thread) =>
-        isThreadVisibleInSidebarWorkspace(thread, "code", providerDriverKindByInstance),
-      ),
-    ).toEqual([ordinaryThread]);
-    expect(
-      threads.filter((thread) =>
-        isThreadVisibleInSidebarWorkspace(thread, "work", providerDriverKindByInstance),
-      ),
-    ).toEqual([hermesThread, customHermesThread]);
-  });
-
-  it("keeps Hermes threads on Code projects in the work workspace", () => {
-    const environmentId = EnvironmentId.make("environment-partition");
-    const hermesInstanceId = ProviderInstanceId.make("hermes-main");
-    const providerDriverKindByInstance = new Map([
-      [
-        sidebarProviderInstanceKey(environmentId, hermesInstanceId),
-        ProviderDriverKind.make("hermes"),
-      ],
-    ]);
-    const workProjectId = ProjectId.make("project:t3-work");
-    const codeProjectId = ProjectId.make("project-code");
-    const hermesWorkThread = makeThreadFixture({
-      environmentId,
-      id: ThreadId.make("thread-hermes-work"),
-      providerInstanceId: hermesInstanceId,
-      projectId: workProjectId,
-    });
-    const hermesCodeThread = makeThreadFixture({
-      environmentId,
-      id: ThreadId.make("thread-hermes-code"),
-      providerInstanceId: hermesInstanceId,
-      projectId: codeProjectId,
-    });
-    expect(
-      isThreadVisibleInSidebarWorkspace(hermesWorkThread, "work", providerDriverKindByInstance),
-    ).toBe(true);
-    // Hermes as a coding provider still belongs to work: Hermes threads are
-    // never listed in the code workspace.
-    expect(
-      isThreadVisibleInSidebarWorkspace(hermesCodeThread, "work", providerDriverKindByInstance),
-    ).toBe(true);
-    expect(
-      isThreadVisibleInSidebarWorkspace(hermesCodeThread, "code", providerDriverKindByInstance),
-    ).toBe(false);
-  });
-
-  it("uses the literal Hermes instance only as a missing-metadata fallback", () => {
-    const environmentId = EnvironmentId.make("environment-history");
-    const historicalHermesThread = makeThreadFixture({
-      environmentId,
-      providerInstanceId: ProviderInstanceId.make("hermes"),
-    });
-    const misleadingCustomThread = makeThreadFixture({
-      environmentId,
-      providerInstanceId: ProviderInstanceId.make("hermes_personal"),
-    });
-
-    expect(isThreadVisibleInSidebarWorkspace(historicalHermesThread, "work", new Map())).toBe(true);
-    expect(isThreadVisibleInSidebarWorkspace(misleadingCustomThread, "work", new Map())).toBe(
-      false,
-    );
-    expect(isThreadVisibleInSidebarWorkspace(historicalHermesThread, "code", new Map())).toBe(
-      false,
-    );
-    expect(isThreadVisibleInSidebarWorkspace(misleadingCustomThread, "code", new Map())).toBe(true);
-  });
-
-  it("scopes Hermes membership to the thread's own environment", () => {
-    const homeEnvironmentId = EnvironmentId.make("environment-home");
-    const otherEnvironmentId = EnvironmentId.make("environment-other");
-    const sharedInstanceId = ProviderInstanceId.make("assistant");
-    const providerDriverKindByInstance = new Map([
-      [
-        sidebarProviderInstanceKey(homeEnvironmentId, sharedInstanceId),
-        ProviderDriverKind.make("hermes"),
-      ],
-      [
-        sidebarProviderInstanceKey(otherEnvironmentId, sharedInstanceId),
-        ProviderDriverKind.make("codex"),
-      ],
-    ]);
-    const homeThread = makeThreadFixture({
-      environmentId: homeEnvironmentId,
-      providerInstanceId: sharedInstanceId,
-    });
-    const otherThread = makeThreadFixture({
-      environmentId: otherEnvironmentId,
-      providerInstanceId: sharedInstanceId,
-    });
-
-    expect(
-      isThreadVisibleInSidebarWorkspace(homeThread, "work", providerDriverKindByInstance),
-    ).toBe(true);
-    expect(
-      isThreadVisibleInSidebarWorkspace(homeThread, "code", providerDriverKindByInstance),
-    ).toBe(false);
-    expect(
-      isThreadVisibleInSidebarWorkspace(otherThread, "work", providerDriverKindByInstance),
-    ).toBe(false);
-    expect(
-      isThreadVisibleInSidebarWorkspace(otherThread, "code", providerDriverKindByInstance),
-    ).toBe(true);
-  });
-
   it("resolves the parent thread for fork sidebar affordances", () => {
     const parentId = ThreadId.make("thread-parent");
     const fallbackParentId = ThreadId.make("thread-fallback-parent");
@@ -670,135 +473,6 @@ describe("sidebar thread lineage helpers", () => {
     expect(getSidebarForkParentThreadId(runFork)).toBe(parentId);
     expect(getSidebarForkParentThreadId(lineageFork)).toBe(fallbackParentId);
     expect(getSidebarForkParentThreadId(makeThreadFixture())).toBeNull();
-  });
-});
-
-describe("workspaceLandingKind", () => {
-  it("gives every workspace the landing it is for", () => {
-    expect(workspaceLandingKind("code")).toBe("code-composer");
-    expect(workspaceLandingKind("work")).toBe("work-composer");
-    expect(workspaceLandingKind("chat")).toBe("chat-composer");
-  });
-});
-
-describe("resolveWorkspaceSwitchNavigation", () => {
-  const environmentId = EnvironmentId.make("environment-switch");
-  const hermesInstanceId = ProviderInstanceId.make("hermes-main");
-  const codexInstanceId = ProviderInstanceId.make("codex-main");
-  const providerDriverKindByInstance = new Map([
-    [
-      sidebarProviderInstanceKey(environmentId, hermesInstanceId),
-      ProviderDriverKind.make("hermes"),
-    ],
-    [sidebarProviderInstanceKey(environmentId, codexInstanceId), ProviderDriverKind.make("codex")],
-  ]);
-  const codeThread = {
-    ...makeThreadFixture({ environmentId, providerInstanceId: codexInstanceId }),
-    threadKey: "code-thread",
-  };
-  const workThread = {
-    ...makeThreadFixture({ environmentId, providerInstanceId: hermesInstanceId }),
-    threadKey: "work-thread",
-  };
-  const threads = [codeThread, workThread];
-
-  it("navigates to the remembered thread when it is still visible in the target workspace", () => {
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "work",
-        rememberedThreadKey: "work-thread",
-        routeThreadKey: "code-thread",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "remembered-thread", threadKey: "work-thread" });
-  });
-
-  it("opens the target-mode composer when the open thread belongs to the other workspace", () => {
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "work",
-        rememberedThreadKey: undefined,
-        routeThreadKey: "code-thread",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "new-chat" });
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "code",
-        rememberedThreadKey: undefined,
-        routeThreadKey: "work-thread",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "new-chat" });
-  });
-
-  it("falls back to the composer when the remembered thread is no longer visible", () => {
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "work",
-        rememberedThreadKey: "archived-work-thread",
-        routeThreadKey: "code-thread",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "new-chat" });
-  });
-
-  it("stays put on workspace-neutral routes and threads already valid in the target workspace", () => {
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "work",
-        rememberedThreadKey: undefined,
-        routeThreadKey: null,
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "stay" });
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "work",
-        rememberedThreadKey: undefined,
-        routeThreadKey: "work-thread",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "stay" });
-  });
-
-  it("routes to the target composer when the open draft belongs to the other workspace", () => {
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "code",
-        rememberedThreadKey: undefined,
-        routeThreadKey: null,
-        routeDraftWorkspace: "work",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "new-chat" });
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "work",
-        rememberedThreadKey: undefined,
-        routeThreadKey: null,
-        routeDraftWorkspace: "code",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "new-chat" });
-    expect(
-      resolveWorkspaceSwitchNavigation({
-        nextWorkspace: "code",
-        rememberedThreadKey: undefined,
-        routeThreadKey: null,
-        routeDraftWorkspace: "code",
-        threads,
-        providerDriverKindByInstance,
-      }),
-    ).toEqual({ kind: "stay" });
   });
 });
 
@@ -1300,9 +974,6 @@ describe("resolveSidebarThreadStatus", () => {
     expect(
       resolveSidebarThreadStatus({ ...idle, runtime: { ...limited, status: "completed" } }),
     ).toBe("ready");
-    expect(resolveWorkInboxBadge({ status: "limited", hasUnseenCompletion: false })).toBe(
-      "limited",
-    );
   });
 
   it("reports failed only while the latest run failed", () => {
@@ -1393,8 +1064,8 @@ describe("unseen completion with background work", () => {
   });
 
   it.each([
-    { kind: "command", status: "ready", working: false, badge: "done", pill: "Completed" },
-    { kind: "monitor", status: "background", working: true, badge: "working", pill: "Completed" },
+    { kind: "command", status: "ready", working: false, pill: "Completed" },
+    { kind: "monitor", status: "background", working: true, pill: "Completed" },
   ] as const)("presents a completed thread left running a $kind", (expected) => {
     const thread = completedThread([{ taskId: "background-work", kind: expected.kind }]);
     const status = resolveSidebarThreadStatus(thread);
@@ -1403,7 +1074,6 @@ describe("unseen completion with background work", () => {
     expect(isUnread).toBe(true);
     expect(status).toBe(expected.status);
     expect(isSidebarThreadWorking(thread)).toBe(expected.working);
-    expect(resolveWorkInboxBadge({ status, hasUnseenCompletion: isUnread })).toBe(expected.badge);
     expect(resolveThreadStatusPill({ thread })).toMatchObject({ label: expected.pill });
   });
 
@@ -2655,38 +2325,6 @@ describe("resolveThreadLastVisitedAt", () => {
 
   it("treats an explicit server-side null as never visited", () => {
     expect(resolveThreadLastVisitedAt(null, "2026-07-30T10:00:00.000Z")).toBeUndefined();
-  });
-});
-
-describe("resolveWorkInboxBadge", () => {
-  it("collapses approval and input into one blocked-on-you badge", () => {
-    // What the Work inbox needs to scan for is that a row wants a human at
-    // all; which of the two things it wants is the line underneath.
-    expect(resolveWorkInboxBadge({ status: "approval", hasUnseenCompletion: false })).toBe(
-      "needs-you",
-    );
-    expect(resolveWorkInboxBadge({ status: "input", hasUnseenCompletion: false })).toBe(
-      "needs-you",
-    );
-  });
-
-  it("badges a finished thread only until it has been opened", () => {
-    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: true })).toBe("done");
-    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: false })).toBeNull();
-  });
-
-  it("carries working and failed through", () => {
-    expect(resolveWorkInboxBadge({ status: "working", hasUnseenCompletion: false })).toBe(
-      "working",
-    );
-    expect(resolveWorkInboxBadge({ status: "failed", hasUnseenCompletion: false })).toBe("failed");
-  });
-
-  it("badges lingering background work as working", () => {
-    // The row is not the reader's problem yet either way.
-    expect(resolveWorkInboxBadge({ status: "background", hasUnseenCompletion: false })).toBe(
-      "working",
-    );
   });
 });
 

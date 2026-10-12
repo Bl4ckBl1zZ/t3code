@@ -21,7 +21,6 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
-import type { MobileWorkspace } from "../../lib/mobileWorkspace";
 import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import {
   buildHomeListFilterMenu,
@@ -38,7 +37,6 @@ export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
 export function HomeHeader(props: {
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
-  readonly workspace: MobileWorkspace;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
@@ -47,7 +45,6 @@ export function HomeHeader(props: {
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
-  readonly onWorkspaceChange: (workspace: MobileWorkspace) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
@@ -66,23 +63,6 @@ type HomeHeaderProps = Parameters<typeof HomeHeader>[0];
 
 function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
-}
-
-function workspaceMenuActions(props: HomeHeaderProps): MenuAction[] {
-  return [
-    {
-      id: "workspace:work",
-      title: "T3 Work",
-      subtitle: "Create, learn, and explore",
-      state: checkedMenuState(props.workspace === "work"),
-    },
-    {
-      id: "workspace:code",
-      title: "T3 Code",
-      subtitle: "Build, debug, and ship",
-      state: checkedMenuState(props.workspace === "code"),
-    },
-  ];
 }
 
 function AndroidHomeHeader(props: HomeHeaderProps) {
@@ -168,7 +148,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       threadListV2Enabled,
     ],
   );
-  const workspaceActions = useMemo(() => workspaceMenuActions(props), [props.workspace]);
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
@@ -217,13 +196,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     },
     [props],
   );
-  const handleWorkspaceAction = useCallback(
-    ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
-      if (nativeEvent.event === "workspace:work") props.onWorkspaceChange("work");
-      if (nativeEvent.event === "workspace:code") props.onWorkspaceChange("code");
-    },
-    [props],
-  );
 
   return (
     <>
@@ -239,36 +211,28 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
           <View className="flex-row items-center gap-2.5">
             {/* Brand slot doubles as the connection status surface: while an
                 environment reconnects, the lockup fades to a status label in
-                place (no layout shift in the list below). While connected it
-                stays the workspace switcher. */}
+                place (no layout shift in the list below). */}
             <WorkspaceConnectionTitle
               grow
               onPress={props.onOpenEnvironments}
               brand={
-                <ControlPillMenu actions={workspaceActions} onPressAction={handleWorkspaceAction}>
-                  <Pressable
-                    accessibilityLabel={`Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`}
-                    accessibilityRole="button"
-                    className="flex-1 flex-row items-center gap-2"
-                  >
-                    {/* Mirrors the desktop SidebarBrand: T3 mark + muted workspace name. */}
-                    <T3Wordmark color={iconColor} height={15} />
-                    <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
-                      {props.workspace === "work" ? "Work" : "Code"}
+                <View
+                  accessibilityLabel="T3 Code"
+                  accessibilityRole="header"
+                  accessible
+                  className="flex-1 flex-row items-center gap-2"
+                >
+                  {/* Mirrors the desktop SidebarBrand: T3 mark + muted product name. */}
+                  <T3Wordmark color={iconColor} height={15} />
+                  <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
+                    Code
+                  </RNText>
+                  <View className="rounded-full bg-subtle px-2 py-0.75">
+                    <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
+                      {stageLabel}
                     </RNText>
-                    <SymbolView
-                      name="chevron.down"
-                      size={12}
-                      tintColor={mutedColor}
-                      type="monochrome"
-                    />
-                    <View className="rounded-full bg-subtle px-2 py-0.75">
-                      <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                        {stageLabel}
-                      </RNText>
-                    </View>
-                  </Pressable>
-                </ControlPillMenu>
+                  </View>
+                </View>
               }
             />
 
@@ -384,9 +348,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
           // reapply cannot clobber options owned by NativeHeaderToolbar.
           ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
             ? {
-                // The native mailSearchToolbar item drops every sibling
-                // toolbar item, so the workspace switcher lives in the
-                // navigation bar's leading brand items (CompactBrandTitle).
                 unstable_headerToolbarItems: () => [
                   createNativeMailSearchToolbarItem({
                     composeButtonId: "home-new-task",
@@ -424,27 +385,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
 
       {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
         <NativeHeaderToolbar placement="bottom">
-          <NativeHeaderToolbar.Menu
-            accessibilityLabel={`Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`}
-            icon="chevron.up.chevron.down"
-            title={`T3 ${props.workspace === "work" ? "Work" : "Code"}`}
-            separateBackground
-          >
-            <NativeHeaderToolbar.MenuAction
-              isOn={props.workspace === "work"}
-              onPress={() => props.onWorkspaceChange("work")}
-              subtitle="Create, learn, and explore"
-            >
-              <NativeHeaderToolbar.Label>T3 Work</NativeHeaderToolbar.Label>
-            </NativeHeaderToolbar.MenuAction>
-            <NativeHeaderToolbar.MenuAction
-              isOn={props.workspace === "code"}
-              onPress={() => props.onWorkspaceChange("code")}
-              subtitle="Build, debug, and ship"
-            >
-              <NativeHeaderToolbar.Label>T3 Code</NativeHeaderToolbar.Label>
-            </NativeHeaderToolbar.MenuAction>
-          </NativeHeaderToolbar.Menu>
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter and sort threads"
             icon={

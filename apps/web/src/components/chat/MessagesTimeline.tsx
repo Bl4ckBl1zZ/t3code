@@ -5,7 +5,6 @@ import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
 import type { ThreadFindMatch, ThreadFindPositionReader } from "./threadFind";
 import { useThreadFindNavigation } from "./useThreadFindNavigation";
 import { readThreadFindPosition } from "./threadFindPosition";
-import { resolveWorkingActivityText } from "./workingActivity";
 import { ActivityFocusText } from "./ActivityFocusText";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useAssetUrlState } from "../../assets/assetUrls";
@@ -105,8 +104,6 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   CircleAlertIcon,
-  DownloadIcon,
-  EraserIcon,
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
@@ -294,7 +291,6 @@ interface TimelineRowSharedState {
 }
 
 interface TimelineRowActivityState {
-  workingActivityText: string | null;
   isPreparingWorktree: boolean;
   /** The agent waits on an approval or an answer from the user. */
   awaitingUser: boolean;
@@ -329,8 +325,6 @@ const EMPTY_RUN_IDS: ReadonlySet<RunId> = new Set();
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
-  /** Transient provider status shown in the existing working row. */
-  workingActivityText?: string | null;
   isPreparingWorktree?: boolean;
   /** The agent waits on an approval or an answer from the user. */
   awaitingUser?: boolean;
@@ -350,7 +344,6 @@ interface MessagesTimelineProps {
   activeTurnStartedAt: string | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReadonlyArray<TimelineEntry>;
-  timelineClearedAt?: string | null;
   latestRun: TimelineLatestRun | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   routeThreadKey: string;
@@ -429,7 +422,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onSendAppMessage,
   onRunShellCommand,
   isWorking,
-  workingActivityText = null,
   runlessWorkActive = false,
   isPreparingWorktree = false,
   awaitingUser = false,
@@ -437,7 +429,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   activeTurnStartedAt,
   listRef,
   timelineEntries,
-  timelineClearedAt = null,
   latestRun,
   turnDiffSummaryByAssistantMessageId,
   routeThreadKey,
@@ -562,22 +553,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
       findActive
         ? timelineTurnFoldRunIdsByEntryId({
             timelineEntries,
-            timelineClearedAt,
             latestRun,
             alwaysExpandActivity,
             isWorking,
             runlessWorkActive,
           })
         : null,
-    [
-      findActive,
-      timelineEntries,
-      timelineClearedAt,
-      latestRun,
-      alwaysExpandActivity,
-      isWorking,
-      runlessWorkActive,
-    ],
+    [findActive, timelineEntries, latestRun, alwaysExpandActivity, isWorking, runlessWorkActive],
   );
   const activeFindRunId = activeFindMatch
     ? findFoldRunIds?.get(activeFindMatch.entryId)
@@ -616,7 +598,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
-        timelineClearedAt,
         latestRun,
         expandedRunIds: visibleExpandedRunIds,
         expandedAttemptIds: visibleExpandedAttemptIds,
@@ -629,7 +610,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
       }),
     [
       timelineEntries,
-      timelineClearedAt,
       latestRun,
       visibleExpandedRunIds,
       visibleExpandedAttemptIds,
@@ -888,7 +868,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   );
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
-      workingActivityText: resolveWorkingActivityText(workingActivityText, isWorking),
       isWorking,
       isPreparingWorktree,
       awaitingUser,
@@ -902,7 +881,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
       activeTurnInProgress,
       isRevertingCheckpoint,
       isWorking,
-      workingActivityText,
       latestRun?.runId,
     ],
   );
@@ -953,7 +931,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
         findFoldRunIds ??
         timelineTurnFoldRunIdsByEntryId({
           timelineEntries,
-          timelineClearedAt,
           latestRun,
           alwaysExpandActivity,
           isWorking,
@@ -1013,7 +990,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     latestRun,
     rows,
     runlessWorkActive,
-    timelineClearedAt,
     timelineEntries,
     timelineViewportElement,
   ]);
@@ -1471,7 +1447,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       data-message-id={row.kind === "message" ? row.message.id : undefined}
       data-message-role={row.kind === "message" ? row.message.role : undefined}
     >
-      {row.kind === "chat-cleared" ? <ChatClearedTimelineRow /> : null}
       {row.kind === "day-divider" ? <DayDividerTimelineRow row={row} /> : null}
       {row.kind === "work" ? (
         row.liveEntry ? (
@@ -1500,10 +1475,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
-
-function ChatClearedTimelineRow() {
-  return <TimelineSystemDivider label="Chat cleared" icon={EraserIcon} />;
-}
 
 function DayDividerTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "day-divider" }> }) {
   return (
@@ -1999,9 +1970,7 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const attachments = row.message.attachments ?? [];
-  const messageText =
-    row.message.text || (row.message.streaming || attachments.length > 0 ? "" : "(empty response)");
+  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
 
   return (
     <>
@@ -2028,7 +1997,6 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             />
           </AssistantCitationSource>
         </div>
-        {attachments.length > 0 ? <AssistantMessageAttachments attachments={attachments} /> : null}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}
@@ -2062,158 +2030,6 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         ) : null}
       </div>
     </>
-  );
-}
-
-function AssistantMessageAttachments({
-  attachments,
-}: {
-  attachments: NonNullable<TimelineMessage["attachments"]>;
-}) {
-  const ctx = use(TimelineRowCtx);
-  const previewableImages = attachments.filter(
-    (attachment) => attachment.type === "image" && attachment.previewUrl,
-  );
-
-  return (
-    <div
-      className="mt-3 grid max-w-3xl grid-cols-1 gap-2 sm:grid-cols-2"
-      data-assistant-attachments
-    >
-      {attachments.map((attachment) => {
-        if (attachment.type === "image" && attachment.previewUrl) {
-          return (
-            <figure
-              key={attachment.id}
-              className="group/media relative min-w-0 overflow-hidden rounded-xl border border-border/60 bg-muted/20"
-            >
-              <button
-                type="button"
-                className="block w-full cursor-zoom-in"
-                aria-label={`Preview ${attachment.name}`}
-                onClick={() => {
-                  const preview = buildExpandedImagePreview(previewableImages, attachment.id);
-                  if (preview) ctx.onImageExpand(preview);
-                }}
-              >
-                <img
-                  src={attachment.previewUrl}
-                  alt={attachment.name}
-                  loading="lazy"
-                  className="block max-h-[28rem] w-full bg-black/5 object-contain"
-                />
-              </button>
-              <figcaption className="flex min-w-0 items-center gap-2 border-t border-border/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-                <Tooltip>
-                  <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
-                    {attachment.name}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{attachment.name}</TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <a
-                        href={attachment.previewUrl}
-                        download={attachment.name}
-                        className="shrink-0 rounded p-1 transition-colors hover:bg-accent hover:text-foreground"
-                        aria-label={`Download ${attachment.name}`}
-                      />
-                    }
-                  >
-                    <DownloadIcon className="size-3.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{`Download ${attachment.name}`}</TooltipPopup>
-                </Tooltip>
-              </figcaption>
-            </figure>
-          );
-        }
-        if (attachment.type === "video" && attachment.previewUrl) {
-          return (
-            <figure
-              key={attachment.id}
-              className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-muted/20 sm:col-span-2"
-            >
-              <MediaVideoPlayer
-                src={attachment.previewUrl}
-                label={attachment.name}
-                className="block w-full"
-                videoClassName="block max-h-[32rem] w-full bg-black object-contain"
-                actionsSource={{ kind: "video", name: attachment.name, src: attachment.previewUrl }}
-              />
-              <figcaption className="truncate border-t border-border/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-                {attachment.name}
-              </figcaption>
-            </figure>
-          );
-        }
-        if (attachment.mimeType.startsWith("audio/") && attachment.previewUrl) {
-          return (
-            <figure
-              key={attachment.id}
-              className="min-w-0 rounded-xl border border-border/60 bg-muted/20 p-3 sm:col-span-2"
-            >
-              <figcaption className="mb-2 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
-                <Tooltip>
-                  <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
-                    {attachment.name}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{attachment.name}</TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <a
-                        href={attachment.previewUrl}
-                        download={attachment.name}
-                        className="shrink-0 rounded p-1 transition-colors hover:bg-accent hover:text-foreground"
-                        aria-label={`Download ${attachment.name}`}
-                      />
-                    }
-                  >
-                    <DownloadIcon className="size-3.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{`Download ${attachment.name}`}</TooltipPopup>
-                </Tooltip>
-              </figcaption>
-              <audio
-                src={attachment.previewUrl}
-                controls
-                preload="metadata"
-                aria-label={attachment.name}
-                className="block h-9 w-full"
-              />
-            </figure>
-          );
-        }
-        if (attachment.previewUrl) {
-          return (
-            <a
-              key={attachment.id}
-              href={attachment.previewUrl}
-              download={attachment.name}
-              className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
-            >
-              <DownloadIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate">{attachment.name}</span>
-            </a>
-          );
-        }
-        return (
-          <Tooltip key={attachment.id}>
-            <TooltipTrigger
-              render={
-                <div className="min-w-0 truncate rounded-lg border border-border/50 bg-muted/15 px-3 py-2 text-xs text-muted-foreground" />
-              }
-            >
-              Media unavailable · {attachment.name}
-            </TooltipTrigger>
-            <TooltipPopup side="top">{attachment.name}</TooltipPopup>
-          </Tooltip>
-        );
-      })}
-    </div>
   );
 }
 
@@ -2644,21 +2460,11 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
-  const { isPreparingWorktree, workingActivityText } = use(TimelineRowActivityCtx);
+  const { isPreparingWorktree } = use(TimelineRowActivityCtx);
   return (
     <div className="min-h-6 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
       {isPreparingWorktree ? (
         <ActivityFocusText text="Setting up worktree…" />
-      ) : workingActivityText ? (
-        <>
-          <span>{workingActivityText}</span>
-          {row.createdAt ? (
-            <>
-              {" "}
-              · <WorkingTimer createdAt={row.createdAt} />
-            </>
-          ) : null}
-        </>
       ) : row.createdAt ? (
         <>
           Working for <WorkingTimer createdAt={row.createdAt} />

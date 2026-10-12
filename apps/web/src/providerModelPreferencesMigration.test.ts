@@ -4,10 +4,10 @@ import type { ProviderModelPreferences } from "@t3tools/contracts/settings";
 
 import { resolveProviderModelPreferencesMigration } from "./providerModelPreferencesMigration";
 
-const hermes = "hermes" as ProviderInstanceId;
+const codex = "codex" as ProviderInstanceId;
 
 const withHides = (...hiddenModels: string[]): ProviderModelPreferences =>
-  ({ [hermes]: { hiddenModels, modelOrder: [] } }) as ProviderModelPreferences;
+  ({ [codex]: { hiddenModels, modelOrder: [] } }) as ProviderModelPreferences;
 
 const EMPTY: ProviderModelPreferences = {} as ProviderModelPreferences;
 

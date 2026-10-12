@@ -4,7 +4,6 @@ import {
   applyProviderInstanceSettings,
   deriveProviderEntriesByEnvironment,
   deriveProviderInstanceEntries,
-  filterProviderInstanceEntriesForScope,
   getDefaultProviderInstanceModel,
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
@@ -620,25 +619,5 @@ describe("resolveDefaultProviderModelSelection", () => {
         null,
       ),
     ).toBeNull();
-  });
-});
-
-describe("filterProviderInstanceEntriesForScope", () => {
-  const entries = deriveProviderInstanceEntries([
-    provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
-    provider({ provider: ProviderDriverKind.make("hermes"), instanceId: "hermes" }),
-    provider({ provider: ProviderDriverKind.make("claude"), instanceId: "claude" }),
-  ]);
-
-  it("gives a T3 Work picker Hermes and nothing else", () => {
-    expect(
-      filterProviderInstanceEntriesForScope(entries, "only").map((entry) => entry.instanceId),
-    ).toEqual(["hermes"]);
-  });
-
-  it("keeps Hermes out of every Code picker", () => {
-    expect(
-      filterProviderInstanceEntriesForScope(entries, "hidden").map((entry) => entry.instanceId),
-    ).toEqual(["codex", "claude"]);
   });
 });

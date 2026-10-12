@@ -4,7 +4,6 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useCallback } from "react";
 
 import { MobilePreferencesStore, type Preferences } from "../persistence/mobile-preferences";
-import type { MobileWorkspace } from "../lib/mobileWorkspace";
 import * as Runtime from "../lib/runtime";
 
 export {
@@ -150,21 +149,4 @@ export function useLastNewTaskProjectKey(): readonly [string | null, (projectKey
     [lastNewTaskProjectKey, updatePreferences],
   );
   return [lastNewTaskProjectKey, setLastNewTaskProjectKey] as const;
-}
-
-export function useMobileWorkspace(): readonly [
-  MobileWorkspace,
-  (workspace: MobileWorkspace) => void,
-] {
-  const preferences = useAtomValue(mobilePreferencesAtom);
-  const updatePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const workspace =
-    AsyncResult.isSuccess(preferences) && preferences.value.workspace === "work" ? "work" : "code";
-  const setWorkspace = useCallback(
-    (nextWorkspace: MobileWorkspace) => {
-      updatePreferences({ workspace: nextWorkspace });
-    },
-    [updatePreferences],
-  );
-  return [workspace, setWorkspace] as const;
 }

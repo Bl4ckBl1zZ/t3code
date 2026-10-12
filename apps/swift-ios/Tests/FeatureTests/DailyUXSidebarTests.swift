@@ -257,27 +257,6 @@ struct DailyUXSidebarTests {
     }
 
     @Test
-    func workMainThreadNeverParks() {
-        // The server refuses to settle or snooze the Work inbox's Main thread;
-        // shelving it client-side would hide a row that cannot be brought back
-        // by the same affordances.
-        var main = thread(
-            id: "main",
-            created: -400_000,
-            updated: -300_000,
-            isSettled: true,
-            workInboxRole: "main"
-        )
-        main.snoozedUntil = now.addingTimeInterval(3_600)
-
-        let index = makeIndex([main])
-
-        #expect(index.active.map(\.id) == ["main"])
-        #expect(index.settled.isEmpty)
-        #expect(index.snoozed.isEmpty)
-    }
-
-    @Test
     func explicitActiveOverridePreventsAutoSettlement() {
         var reopened = thread(
             id: "reopened",
@@ -896,8 +875,7 @@ struct DailyUXSidebarTests {
         unsettled: TimeInterval? = nil,
         userActivity: TimeInterval? = nil,
         supportsSettlement: Bool? = true,
-        supportsSnooze: Bool? = true,
-        workInboxRole: String? = nil
+        supportsSnooze: Bool? = true
     ) -> FeatureThread {
         FeatureThread(
             id: id,
@@ -911,8 +889,7 @@ struct DailyUXSidebarTests {
             lastActivityAt: now.addingTimeInterval(updated),
             latestUserActivityAt: userActivity.map(now.addingTimeInterval),
             supportsSettlement: supportsSettlement,
-            supportsSnooze: supportsSnooze,
-            workInboxRole: workInboxRole
+            supportsSnooze: supportsSnooze
         )
     }
 }

@@ -8,7 +8,6 @@ import {
   RunId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
-  type ServerProvider,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -25,7 +24,6 @@ import {
   createLocalDispatchSnapshot,
   deriveCommittedServerUserMessageIds,
   deriveComposerSendState,
-  deriveIsHermesConversation,
   deriveLockedProvider,
   dismissBranchMismatchForSession,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
@@ -33,10 +31,7 @@ import {
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   shouldRefocusComposerOnWindowFocus,
-  isHermesClearChatCommand,
-  isHermesFreshChatCommand,
   isBranchMismatchDismissedForSession,
-  isWorkspacePreparationTurnItem,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
@@ -45,7 +40,6 @@ import {
   resolveSendEnvMode,
   resolveDraftHeroState,
   scheduleEnvironmentReconnectWarning,
-  shouldExposeWorkspaceArtifacts,
   startNewThreadForProject,
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
@@ -238,31 +232,6 @@ describe("environment reconnect warning grace", () => {
   });
 });
 
-describe("Hermes native fresh-chat commands", () => {
-  it.each(["/new", "  /reset  ", "/RESET"])("recognizes %s only for Hermes", (text) => {
-    expect(isHermesFreshChatCommand({ text, isHermesConversation: true })).toBe(true);
-    expect(isHermesFreshChatCommand({ text, isHermesConversation: false })).toBe(false);
-  });
-
-  it.each(["/newer", "/clear", "/retry", "/reset Work", "/new thread", "please /new"])(
-    "does not intercept %s",
-    (text) => {
-      expect(isHermesFreshChatCommand({ text, isHermesConversation: true })).toBe(false);
-    },
-  );
-
-  it("recognizes exact /clear only for Hermes", () => {
-    expect(isHermesClearChatCommand({ text: "  /clear  ", isHermesConversation: true })).toBe(true);
-    expect(isHermesClearChatCommand({ text: "/clear", isHermesConversation: false })).toBe(false);
-    expect(isHermesClearChatCommand({ text: "/clear all", isHermesConversation: true })).toBe(
-      false,
-    );
-    expect(isHermesClearChatCommand({ text: "please /clear", isHermesConversation: true })).toBe(
-      false,
-    );
-  });
-});
-
 describe("working timeline visibility", () => {
   it.each(["connecting", "running"] as const)("stays visible while a run is %s", (phase) => {
     expect(
@@ -282,50 +251,6 @@ describe("working timeline visibility", () => {
         isSendBusy: false,
         isConnecting: false,
         isRevertingCheckpoint: false,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("deriveIsHermesConversation", () => {
-  const providers = [
-    {
-      instanceId: ProviderInstanceId.make("hermes_local"),
-      driver: ProviderDriverKind.make("hermes"),
-    },
-    { instanceId: ProviderInstanceId.make("codex"), driver: ProviderDriverKind.make("codex") },
-  ] as unknown as ReadonlyArray<ServerProvider>;
-
-  it("uses the running thread's provider instead of the composer selection", () => {
-    expect(
-      deriveIsHermesConversation({
-        runtimeProviderInstanceId: ProviderInstanceId.make("hermes_local"),
-        providers,
-        selectedProvider: ProviderDriverKind.make("codex"),
-      }),
-    ).toBe(true);
-    expect(
-      deriveIsHermesConversation({
-        runtimeProviderInstanceId: ProviderInstanceId.make("codex"),
-        providers,
-        selectedProvider: ProviderDriverKind.make("hermes"),
-      }),
-    ).toBe(false);
-  });
-
-  it("falls back to the selected provider for drafts and unknown runtimes", () => {
-    expect(
-      deriveIsHermesConversation({
-        runtimeProviderInstanceId: null,
-        providers,
-        selectedProvider: ProviderDriverKind.make("hermes"),
-      }),
-    ).toBe(true);
-    expect(
-      deriveIsHermesConversation({
-        runtimeProviderInstanceId: ProviderInstanceId.make("gone"),
-        providers,
-        selectedProvider: ProviderDriverKind.make("codex"),
       }),
     ).toBe(false);
   });
@@ -379,31 +304,31 @@ const readySession = {
 
 describe("deriveLockedProvider", () => {
   it("resolves a custom provider instance id to its owning driver", () => {
-    const hermesInstanceId = ProviderInstanceId.make("hermes_local");
+    const personalInstanceId = ProviderInstanceId.make("codex_personal");
     expect(
       deriveLockedProvider({
         thread: makeThread({
           modelSelection: {
-            instanceId: hermesInstanceId,
+            instanceId: personalInstanceId,
             model: "default",
           },
           latestRun: completedTurn,
           runtime: {
             ...readySession,
-            providerName: hermesInstanceId,
-            providerInstanceId: hermesInstanceId,
+            providerName: personalInstanceId,
+            providerInstanceId: personalInstanceId,
           },
         }),
         selectedProvider: null,
-        threadProvider: hermesInstanceId,
+        threadProvider: personalInstanceId,
         providerInstances: [
           {
-            instanceId: hermesInstanceId,
-            driver: ProviderDriverKind.make("hermes"),
+            instanceId: personalInstanceId,
+            driver: ProviderDriverKind.make("codex"),
           },
         ],
       }),
-    ).toBe("hermes");
+    ).toBe("codex");
   });
 
   it("preserves an unknown open driver kind when no instance metadata exists", () => {
@@ -460,22 +385,9 @@ describe("shouldShowComposerContextStrip", () => {
         isDraftHeroState: true,
         isGitRepo: true,
         hasActiveProject: true,
-        isProjectlessConversation: false,
         persistInActiveThreads: false,
       }),
     ).toBe(true);
-  });
-
-  it("hides git context for a projectless conversation backed by an internal project", () => {
-    expect(
-      shouldShowComposerContextStrip({
-        isDraftHeroState: true,
-        isGitRepo: true,
-        hasActiveProject: true,
-        isProjectlessConversation: true,
-        persistInActiveThreads: true,
-      }),
-    ).toBe(false);
   });
 
   it("keeps git context in an active thread only when requested", () => {
@@ -484,7 +396,6 @@ describe("shouldShowComposerContextStrip", () => {
         isDraftHeroState: false,
         isGitRepo: true,
         hasActiveProject: true,
-        isProjectlessConversation: false,
         persistInActiveThreads: true,
       }),
     ).toBe(true);
@@ -493,7 +404,6 @@ describe("shouldShowComposerContextStrip", () => {
         isDraftHeroState: false,
         isGitRepo: true,
         hasActiveProject: true,
-        isProjectlessConversation: false,
         persistInActiveThreads: false,
       }),
     ).toBe(false);
@@ -505,7 +415,6 @@ describe("shouldShowComposerContextStrip", () => {
         isDraftHeroState: true,
         isGitRepo: false,
         hasActiveProject: true,
-        isProjectlessConversation: false,
         persistInActiveThreads: true,
       }),
     ).toBe(false);
@@ -514,47 +423,7 @@ describe("shouldShowComposerContextStrip", () => {
         isDraftHeroState: true,
         isGitRepo: true,
         hasActiveProject: false,
-        isProjectlessConversation: false,
         persistInActiveThreads: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldExposeWorkspaceArtifacts", () => {
-  it("hides git and workspace artifacts for projectless conversations", () => {
-    expect(
-      shouldExposeWorkspaceArtifacts({
-        isProjectlessConversation: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps git and workspace artifacts for project conversations", () => {
-    expect(
-      shouldExposeWorkspaceArtifacts({
-        isProjectlessConversation: false,
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("isWorkspacePreparationTurnItem", () => {
-  it("matches only T3's synthetic workspace item, not provider commands", () => {
-    expect(
-      isWorkspacePreparationTurnItem({
-        type: "command_execution",
-        input: "Preparing workspace",
-        providerTurnId: null,
-        nativeItemRef: null,
-      }),
-    ).toBe(true);
-    expect(
-      isWorkspacePreparationTurnItem({
-        type: "command_execution",
-        input: "Preparing workspace",
-        providerTurnId: "provider-turn-1",
-        nativeItemRef: { id: "tool-1" },
       }),
     ).toBe(false);
   });
@@ -717,25 +586,6 @@ describe("resolveSendEnvMode", () => {
   it("keeps worktree mode only for git repositories", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
-  });
-
-  it("forces local for a projectless conversation even inside a git repository", () => {
-    // T3 Work threads have no checkout to branch from, so a requested worktree
-    // would demand a base branch that cannot exist.
-    expect(
-      resolveSendEnvMode({
-        requestedEnvMode: "worktree",
-        isGitRepo: true,
-        isProjectlessConversation: true,
-      }),
-    ).toBe("local");
-    expect(
-      resolveSendEnvMode({
-        requestedEnvMode: "worktree",
-        isGitRepo: true,
-        isProjectlessConversation: false,
-      }),
-    ).toBe("worktree");
   });
 });
 

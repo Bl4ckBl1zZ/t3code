@@ -208,8 +208,6 @@ export interface ThreadFeedProps {
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   readonly activeWorkActivityText: string | null;
-  /** Hermes "clear chat" marker; entries at or before it are hidden. */
-  readonly timelineClearedAt?: string | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
@@ -475,7 +473,7 @@ interface MarkdownMediaContext {
 }
 
 /**
- * Inline assistant media. Hermes emits generated images as markdown, and the
+ * Inline assistant media. Agents emit generated images as markdown, and the
  * src may be a plain URL, a workspace-relative path, or a browser artifact —
  * resolveMarkdownMediaSource decides which, and everything but a direct URL is
  * fetched through a signed asset URL.
@@ -1194,10 +1192,6 @@ function renderFeedEntry(
         />
       </Pressable>
     );
-  }
-
-  if (entry.type === "chat-cleared") {
-    return <TimelineSystemDivider label="Chat cleared" symbol="eraser" />;
   }
 
   if (entry.type === "day-divider") {
@@ -2219,7 +2213,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         ),
         props.activeWorkStartedAt,
         {
-          timelineClearedAt: props.timelineClearedAt ?? null,
           expandedAttemptIds,
           alwaysExpandActivity,
         },
@@ -2232,7 +2225,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.activeWorkStartedAt,
       props.feed,
       props.latestRun,
-      props.timelineClearedAt,
     ],
   );
 

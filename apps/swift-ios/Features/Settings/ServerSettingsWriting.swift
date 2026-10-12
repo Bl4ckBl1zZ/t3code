@@ -172,7 +172,6 @@ extension ServerSettingsPatchInput {
         if let value = later.environmentIcon { result.environmentIcon = value }
         result.usageLimitSources = mergeMap(usageLimitSources, later.usageLimitSources)
         result.usagePriceOverrides = mergeMap(usagePriceOverrides, later.usagePriceOverrides)
-        if let value = later.enableHermes { result.enableHermes = value }
         if let value = later.enableAgentBrowserAccess { result.enableAgentBrowserAccess = value }
         if let value = later.claudeAutoCompactWindow { result.claudeAutoCompactWindow = value }
         result.hiddenModelsByProvider = mergeMap(hiddenModelsByProvider, later.hiddenModelsByProvider)

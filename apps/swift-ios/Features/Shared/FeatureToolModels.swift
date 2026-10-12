@@ -23,14 +23,6 @@ public protocol FeatureWorkspaceAssetResolving: AnyObject {
     func browserArtifactAssetURL(threadID: String, fileName: String) async throws -> URL
 }
 
-/// Optional thread-role capability: marks a Hermes conversation as belonging
-/// to the Chat surface (`workInboxRole: "chat"`) via the thread metadata
-/// command. Older servers reject the value, which callers treat as cosmetic.
-@MainActor
-public protocol FeatureThreadRoleAssigning: AnyObject {
-    func setWorkInboxRole(threadID: String, role: String?) async throws
-}
-
 /// Optional usage-dashboard capability: the same `server.getUsageSummary`
 /// scan the desktop and Expo dashboards read, asked of one environment at a
 /// time so the caller can merge and report partial coverage per environment.

@@ -200,7 +200,6 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   // "default" defers to the user's own Pi settings.json model selection.
   [PI_DRIVER_KIND]: "default",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
-  [ProviderDriverKind.make("hermes")]: "default",
 };
 
 /** Per-provider text generation model defaults. */
@@ -283,5 +282,4 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [OPENCLAW_DRIVER_KIND]: "OpenClaw",
   [PI_DRIVER_KIND]: "Pi",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
-  [ProviderDriverKind.make("hermes")]: "Hermes",
 };

@@ -214,10 +214,6 @@ public protocol FeatureClient: AnyObject {
 
     /// One entry per environment whose server config this client has seen, in
     /// the order the environments are listed.
-    ///
-    /// Exists because `FeatureSnapshot` carries provider catalogues but not
-    /// `t3WorkDirectory`, and without that a T3 Work launch cannot tell its
-    /// backing project apart from any other project on the server.
     func workspaceServerConfigs() -> [MobileWorkspaceEnvironmentConfig]
 
     /// Moves a queued run before `beforeRunID`, or to the end when it is nil.
@@ -460,8 +456,6 @@ public extension FeatureClient {
         throw FeatureCapabilityUnavailable("Checkpoint rollback")
     }
 
-    /// No server config, so no Work checkout: T3 Work reports itself
-    /// unavailable rather than attaching a conversation to an arbitrary project.
     func workspaceServerConfigs() -> [MobileWorkspaceEnvironmentConfig] {
         []
     }

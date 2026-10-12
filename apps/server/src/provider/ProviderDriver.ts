@@ -33,7 +33,6 @@ import type * as Scope from "effect/Scope";
 
 import type { TextGenerationShape } from "../textGeneration/TextGeneration.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
-import type { HermesSessionCatalogShape } from "../hermes/HermesSessionCatalog.ts";
 import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
 import type { ServerProvider, ServerProviderWorkspaceSnapshot } from "@t3tools/contracts";
 import type { ProviderDriverError } from "./Errors.ts";
@@ -91,11 +90,6 @@ export interface ProviderInstance {
   ) => Effect.Effect<ProviderWorkspaceSnapshot, ProviderDriverError>;
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
   readonly textGeneration: TextGenerationShape;
-  /**
-   * Provider-owned, credential-encapsulated durable session inventory.
-   * Present only for Hermes instances.
-   */
-  readonly hermesSessionCatalog?: HermesSessionCatalogShape;
 }
 
 export interface ProviderContinuationIdentity {

@@ -774,10 +774,6 @@ export const make = (options?: StartupOptions) =>
       Effect.withSpan("server.startup", { kind: "server", root: true }),
     );
 
-    // Independent of the startup phases: watching the Hermes schedule needs no
-    // projection and blocks nothing, and a run that fires during a slow startup
-    // should still be noticed.
-
     yield* Effect.forkScoped(
       Effect.exit(startup).pipe(
         Effect.flatMap((startupExit) => {

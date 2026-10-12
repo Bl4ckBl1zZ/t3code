@@ -375,15 +375,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// Absence hides the switch rather than sending a field the server drops.
     public var supportsAutoSettleOptOut: Bool? = nil
     public var supportsSnooze: Bool?
-    /// `main` marks the thread the T3 Work inbox pins to the top as the current
-    /// main line of work. Absent means an ordinary thread. The inbox's Main
-    /// section does not exist without this.
-    public var workInboxRole: String?
-    /// The user cleared the chat here: everything up to it stays out of the
-    /// transcript and the row preview. Set by T3 Work's `/clear`.
-    public var timelineClearedAt: Date? = nil
     /// `fork`, `subagent`, or nil for a root thread. Subagent threads are
-    /// excluded from both workspaces: they are steps inside their parent, not
+    /// excluded from the thread list: they are steps inside their parent, not
     /// work of their own.
     public var relationshipToParent: String?
     /// The scoped id of the thread this one was spawned from or forked off.
@@ -480,7 +473,6 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         autoSettleDisabledAt: Date? = nil,
         supportsAutoSettleOptOut: Bool? = nil,
         supportsSnooze: Bool? = nil,
-        workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
         parentThreadID: String? = nil,
         creationSource: String? = nil,
@@ -542,7 +534,6 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.autoSettleDisabledAt = autoSettleDisabledAt
         self.supportsAutoSettleOptOut = supportsAutoSettleOptOut
         self.supportsSnooze = supportsSnooze
-        self.workInboxRole = workInboxRole
         self.relationshipToParent = relationshipToParent
         self.parentThreadID = parentThreadID
         self.creationSource = creationSource
@@ -596,15 +587,14 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// sidebar's partition: the environment must affirmatively support
     /// settlement — on a server without it (or while the descriptor is still
     /// loading) auto-settling would strand rows on a shelf the user could not
-    /// reopen — and the Work inbox's Main thread never parks; the server
-    /// refuses to settle it.
+    /// reopen.
     public var canShelveSettled: Bool {
-        supportsSettlement == true && workInboxRole != "main"
+        supportsSettlement == true
     }
 
     /// The Snoozed-shelf counterpart of ``canShelveSettled``.
     public var canShelveSnoozed: Bool {
-        supportsSnooze == true && workInboxRole != "main"
+        supportsSnooze == true
     }
 }
 

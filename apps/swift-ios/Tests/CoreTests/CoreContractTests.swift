@@ -452,8 +452,6 @@ final class CoreContractTests: XCTestCase {
             "Build the native app"
         )
         XCTAssertEqual(input["initialMessage"]?["attachments"], .array([]))
-        // Omitted rather than false: the server's default is to prepare.
-        XCTAssertNil(input["prepareWorkspace"])
     }
 
     func testFirstSendCanPrepareAWorktreeBeforeDispatchingTheTurn() throws {
@@ -494,15 +492,13 @@ final class CoreContractTests: XCTestCase {
             model: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
             runtimeMode: .fullAccess,
             branch: "feature",
-            worktreePath: "/work/t3-feature",
-            prepareWorkspace: false
+            worktreePath: "/work/t3-feature"
         )
 
         let strategy = try XCTUnwrap(input["workspaceStrategy"])
         XCTAssertEqual(strategy["type"]?.stringValue, "existing_worktree")
         XCTAssertEqual(strategy["worktreePath"]?.stringValue, "/work/t3-feature")
         XCTAssertEqual(strategy["branch"]?.stringValue, "feature")
-        XCTAssertEqual(input["prepareWorkspace"], .bool(false))
     }
 
     /// The contract's optional strings are trimmed and non-empty, so a blank

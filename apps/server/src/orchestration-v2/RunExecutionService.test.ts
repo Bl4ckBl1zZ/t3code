@@ -721,7 +721,7 @@ it.effect("expands citations on the V2 start path while preserving the stored so
   }).pipe(Effect.provide(RunExecutionTestLayer)),
 );
 
-it.effect("skips Git baseline capture for projectless Hermes runs", () =>
+it.effect("skips Git baseline capture for runs without filesystem checkpoints", () =>
   Effect.gen(function* () {
     const captures = yield* Ref.make(0);
     const testLayer = runExecutionServiceLayer.pipe(
@@ -738,29 +738,29 @@ it.effect("skips Git baseline capture for projectless Hermes runs", () =>
         ),
       ),
     );
-    const threadId = ThreadId.make("thread:hermes-no-project");
-    const runId = RunId.make("run:hermes-no-project");
-    const attemptId = RunAttemptId.make("attempt:hermes-no-project");
-    const providerInstanceId = ProviderInstanceId.make("hermes");
-    const providerThreadId = ProviderThreadId.make("provider-thread:hermes-no-project");
-    const providerSessionId = ProviderSessionId.make("session:hermes-no-project");
+    const threadId = ThreadId.make("thread:no-checkpoint");
+    const runId = RunId.make("run:no-checkpoint");
+    const attemptId = RunAttemptId.make("attempt:no-checkpoint");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const providerThreadId = ProviderThreadId.make("provider-thread:no-checkpoint");
+    const providerSessionId = ProviderSessionId.make("session:no-checkpoint");
 
     yield* RunExecutionServiceV2.pipe(
       Effect.flatMap((runExecution) =>
         runExecution.startRootRun({
-          commandId: CommandId.make("command:hermes-no-project"),
+          commandId: CommandId.make("command:no-checkpoint"),
           appThread: { id: threadId, worktreePath: null } as OrchestrationV2AppThread,
           providerSessionId,
           session: { events: Stream.never } as unknown as ProviderAdapterV2SessionRuntime,
           run: { id: runId, threadId, ordinal: 1, providerInstanceId } as OrchestrationV2Run,
-          rootNode: { id: NodeId.make("node:hermes-no-project") } as OrchestrationV2ExecutionNode,
+          rootNode: { id: NodeId.make("node:no-checkpoint") } as OrchestrationV2ExecutionNode,
           checkpointScope: {
-            id: CheckpointScopeId.make("checkpoint-scope:hermes-no-project"),
-            cwd: "/tmp/t3-work-no-git",
+            id: CheckpointScopeId.make("checkpoint-scope:no-checkpoint"),
+            cwd: "/tmp/no-git",
           } as OrchestrationV2CheckpointScope,
           providerThread: {
             id: providerThreadId,
-            driver: ProviderDriverKind.make("hermes"),
+            driver: ProviderDriverKind.make("codex"),
           } as OrchestrationV2ProviderThread,
           attempt: { id: attemptId, providerTurnId: null } as OrchestrationV2RunAttempt,
           attemptId,
@@ -768,17 +768,17 @@ it.effect("skips Git baseline capture for projectless Hermes runs", () =>
           shouldStartProviderTurn: () => Effect.succeed(false),
           captureFilesystemCheckpoint: false,
           message: {
-            messageId: MessageId.make("message:hermes-no-project"),
-            text: "Hello Hermes",
+            messageId: MessageId.make("message:no-checkpoint"),
+            text: "Hello",
             attachments: [],
             createdBy: "user",
             creationSource: "web",
           },
-          modelSelection: { instanceId: providerInstanceId, model: "hermes" },
+          modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
           runtimePolicy: {
             runtimeMode: "full-access",
             interactionMode: "default",
-            cwd: "/tmp/t3-work-no-git",
+            cwd: "/tmp/no-git",
           },
         }),
       ),

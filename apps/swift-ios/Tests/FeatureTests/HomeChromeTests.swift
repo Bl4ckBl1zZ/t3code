@@ -24,7 +24,6 @@ final class HomeChromeTests: XCTestCase {
         pinnedAt: Date? = nil,
         supportsSettlement: Bool? = true,
         supportsSnooze: Bool? = true,
-        workInboxRole: String? = nil,
         archiveBlockedByLiveRun: Bool? = nil
     ) -> FeatureThread {
         FeatureThread(
@@ -36,7 +35,6 @@ final class HomeChromeTests: XCTestCase {
             pinnedAt: pinnedAt,
             supportsSettlement: supportsSettlement,
             supportsSnooze: supportsSnooze,
-            workInboxRole: workInboxRole,
             archiveBlockedByLiveRun: archiveBlockedByLiveRun
         )
     }
@@ -152,7 +150,6 @@ final class HomeChromeTests: XCTestCase {
 
     func testCodeSubtitleCountsWorkingAndWaitingThreads() {
         let text = HomeListSubtitle.text(
-            workspace: .code,
             projectName: nil,
             threads: [
                 thread("a", state: .working),
@@ -168,7 +165,6 @@ final class HomeChromeTests: XCTestCase {
 
     func testSubtitleNamesTheFilteredProjectAndPluralises() {
         let text = HomeListSubtitle.text(
-            workspace: .code,
             projectName: "t3code",
             threads: [thread("a", state: .waitingForInput), thread("b", state: .waitingForApproval)],
             connection: FeatureConnection(state: .connected),
@@ -177,20 +173,9 @@ final class HomeChromeTests: XCTestCase {
         XCTAssertEqual(text, "t3code · 2 need you")
     }
 
-    func testChatSubtitleIsEmptyWhenNothingIsHappening() {
-        XCTAssertNil(HomeListSubtitle.text(
-            workspace: .chat,
-            projectName: nil,
-            threads: [thread("a")],
-            connection: FeatureConnection(state: .connected),
-            environmentName: "Mac"
-        ))
-    }
-
     func testFirstConnectShowsInTheSubtitle() {
         XCTAssertEqual(
             HomeListSubtitle.text(
-                workspace: .code,
                 projectName: nil,
                 threads: [],
                 connection: FeatureConnection(state: .connecting),
@@ -217,23 +202,16 @@ final class HomeChromeTests: XCTestCase {
 
     func testEmptyStatesOfferTheOneNextStep() {
         XCTAssertEqual(
-            HomeEmptyState.resolve(workspace: .code, hasCreationProjects: false, filteredProjectName: nil, hermesReady: true).action,
+            HomeEmptyState.resolve(hasCreationProjects: false, filteredProjectName: nil).action,
             .addProject
         )
-        let filtered = HomeEmptyState.resolve(workspace: .code, hasCreationProjects: true, filteredProjectName: "t3code", hermesReady: true)
+        let filtered = HomeEmptyState.resolve(hasCreationProjects: true, filteredProjectName: "t3code")
         XCTAssertEqual(filtered.title, "No Tasks in t3code")
         XCTAssertEqual(filtered.action, .showAllProjects)
         XCTAssertEqual(
-            HomeEmptyState.resolve(workspace: .code, hasCreationProjects: true, filteredProjectName: nil, hermesReady: true).action,
+            HomeEmptyState.resolve(hasCreationProjects: true, filteredProjectName: nil).action,
             .newItem
         )
-        XCTAssertEqual(
-            HomeEmptyState.resolve(workspace: .work, hasCreationProjects: true, filteredProjectName: nil, hermesReady: false).action,
-            .setUpHermes
-        )
-        let chat = HomeEmptyState.resolve(workspace: .chat, hasCreationProjects: true, filteredProjectName: nil, hermesReady: true)
-        XCTAssertEqual(chat.title, "No Conversations")
-        XCTAssertEqual(chat.actionTitle, "New Conversation")
     }
 
     // MARK: - Row text
@@ -258,13 +236,6 @@ final class HomeChromeTests: XCTestCase {
         XCTAssertEqual(HomeRowDate.wake(date(30, 9), now: now, calendar: calendar), "Sep 30")
     }
 
-    func testConversationDatesFollowMessages() {
-        let now = date(21, 9)
-        XCTAssertEqual(HomeRowDate.conversation(date(20, 9), now: now, calendar: calendar), "Yesterday")
-        XCTAssertEqual(HomeRowDate.conversation(date(17, 9), now: now, calendar: calendar), "Thursday")
-        XCTAssertEqual(HomeRowDate.conversation(date(1, 9), now: now, calendar: calendar), "Sep 1")
-    }
-
     func testGeneratedWorktreeBranchesReadAsWorktree() {
         XCTAssertEqual(HomeBranchLabel.display(branch: "t3code/ffeef775", worktreePath: nil), "Worktree")
         XCTAssertEqual(HomeBranchLabel.display(branch: "feature/tabs", worktreePath: nil), "feature/tabs")
@@ -281,7 +252,6 @@ final class HomeChromeTests: XCTestCase {
                 thread("asking", state: .waitingForApproval),
                 thread("pinned", pinnedAt: .now),
             ],
-            workspace: .code,
             now: .now,
             changeRequests: [:]
         )
@@ -295,7 +265,6 @@ final class HomeChromeTests: XCTestCase {
     func testRunningAndAskingThreadsLimitTheSelection() {
         let availability = HomeBatchAvailability.resolve(
             [thread("asking", state: .waitingForInput, pinnedAt: .now, archiveBlockedByLiveRun: true)],
-            workspace: .code,
             now: .now,
             changeRequests: [:]
         )
@@ -303,18 +272,6 @@ final class HomeChromeTests: XCTestCase {
         XCTAssertFalse(availability.canArchive, "A live run must not be detached")
         XCTAssertFalse(availability.canPin)
         XCTAssertTrue(availability.canUnpin)
-    }
-
-    func testChatHasNoParkingShelves() {
-        let availability = HomeBatchAvailability.resolve(
-            [thread("chat", workInboxRole: "chat")],
-            workspace: .chat,
-            now: .now,
-            changeRequests: [:]
-        )
-        XCTAssertFalse(availability.canSnooze)
-        XCTAssertFalse(availability.canSettle)
-        XCTAssertTrue(availability.canArchive)
     }
 
     func testSettledAndSnoozedSelectionsOfferTheWayBack() {
@@ -326,7 +283,6 @@ final class HomeChromeTests: XCTestCase {
         snoozed.snoozedAt = now
         let availability = HomeBatchAvailability.resolve(
             [settled, snoozed],
-            workspace: .code,
             now: now,
             changeRequests: [:]
         )
@@ -334,7 +290,7 @@ final class HomeChromeTests: XCTestCase {
         XCTAssertTrue(availability.canWake)
         XCTAssertTrue(availability.canSettle, "The snoozed thread can still settle")
 
-        let onlySettled = HomeBatchAvailability.resolve([settled], workspace: .code, now: now, changeRequests: [:])
+        let onlySettled = HomeBatchAvailability.resolve([settled], now: now, changeRequests: [:])
         XCTAssertFalse(onlySettled.canSettle, "Reopen takes the Settle slot")
         XCTAssertTrue(onlySettled.canUnsettle)
         XCTAssertFalse(onlySettled.canWake)
@@ -344,45 +300,21 @@ final class HomeChromeTests: XCTestCase {
         let now = Date.now
         var expired = thread("expired")
         expired.snoozedUntil = now.addingTimeInterval(-60)
-        XCTAssertFalse(HomeBatchAvailability.canWake(expired, in: .code, now: now), "An expired snooze is already awake")
+        XCTAssertFalse(HomeBatchAvailability.canWake(expired, now: now), "An expired snooze is already awake")
         var asking = thread("asking", state: .waitingForInput)
         asking.snoozedUntil = now.addingTimeInterval(3600)
-        XCTAssertFalse(HomeBatchAvailability.canWake(asking, in: .code, now: now), "A thread asking for something is not hidden")
+        XCTAssertFalse(HomeBatchAvailability.canWake(asking, now: now), "A thread asking for something is not hidden")
         var archived = thread("archived", isArchived: true)
         archived.isSettled = true
-        XCTAssertFalse(HomeBatchAvailability.canUnsettle(archived, in: .code, now: now, changeRequest: nil))
+        XCTAssertFalse(HomeBatchAvailability.canUnsettle(archived, now: now, changeRequest: nil))
         var unsupported = thread("old server", supportsSettlement: nil, supportsSnooze: nil)
         unsupported.isSettled = true
         unsupported.snoozedUntil = now.addingTimeInterval(3600)
-        XCTAssertFalse(HomeBatchAvailability.canUnsettle(unsupported, in: .code, now: now, changeRequest: nil))
-        XCTAssertFalse(HomeBatchAvailability.canWake(unsupported, in: .code, now: now))
-        var chat = thread("chat", workInboxRole: "chat")
-        chat.isSettled = true
-        XCTAssertFalse(HomeBatchAvailability.canUnsettle(chat, in: .chat, now: now, changeRequest: nil))
-    }
-
-    func testWorkMainThreadNeverParks() {
-        let main = thread("main", workInboxRole: "main")
-        XCTAssertFalse(HomeBatchAvailability.canSnooze(main, in: .work))
-        XCTAssertFalse(HomeBatchAvailability.canSettle(main, in: .work, now: .now, changeRequest: nil))
+        XCTAssertFalse(HomeBatchAvailability.canUnsettle(unsupported, now: now, changeRequest: nil))
+        XCTAssertFalse(HomeBatchAvailability.canWake(unsupported, now: now))
     }
 
     // MARK: - Row accessibility
-
-    func testWorkRowsReadTheirStatusAndPreviewInsteadOfConstants() {
-        var row = thread("Deploy", state: .waitingForApproval)
-        row.preview = "Run the migration?"
-        let value = FeatureThreadRow.accessibilityValue(
-            thread: row,
-            context: .fallback,
-            style: .inbox,
-            now: .now
-        )
-        XCTAssertTrue(value.hasPrefix("Approval. Run the migration?"), value)
-        XCTAssertFalse(value.contains("Project"))
-        XCTAssertEqual(FeatureThreadRow.accessibilityHint(for: .inbox), "Opens conversation")
-        XCTAssertEqual(FeatureThreadRow.accessibilityHint(for: .rich), "Opens task")
-    }
 
     func testCodeRowsReadProjectAndBranch() {
         var row = thread("Fix tabs")
@@ -394,6 +326,7 @@ final class HomeChromeTests: XCTestCase {
             now: .now
         )
         XCTAssertTrue(value.hasPrefix("Ready. Project Project. Branch feature/tabs"), value)
+        XCTAssertEqual(FeatureThreadRow.accessibilityHint(for: .rich), "Opens task")
     }
 
     func testStaleRowsSayTheirStateIsLastKnown() {
@@ -411,7 +344,7 @@ final class HomeChromeTests: XCTestCase {
         let value = FeatureThreadRow.accessibilityValue(
             thread: thread("Old"),
             context: context,
-            style: .conversation,
+            style: .rich,
             now: .now
         )
         XCTAssertTrue(value.hasSuffix("Studio unreachable, last known state"), value)

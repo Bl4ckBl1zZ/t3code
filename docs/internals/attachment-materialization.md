@@ -11,9 +11,9 @@ Every provider adapter used to re-read the blob store and re-encode attachments 
 payload. That had three costs:
 
 - Non-image files barely worked. `ClaudeAdapterV2` failed the whole turn on a non-image MIME type,
-  and `AcpAdapterV2` shipped a PDF's bytes as an `image` content block. Only Hermes handled PDFs.
-  Web hid this by refusing non-image files unless the provider was Hermes; mobile did not, so a
-  mobile user on Claude could attach a PDF that blew up server-side.
+  and `AcpAdapterV2` shipped a PDF's bytes as an `image` content block. Web hid this by refusing
+  non-image files for most providers; mobile did not, so a mobile user on Claude could attach a PDF
+  that blew up server-side.
 - A 10 MB screenshot is ~13M characters of base64 re-sent on the turn.
 - The agent saw pixels, not a path, so it could not grep a CSV or refer back to the file later.
 
@@ -56,25 +56,21 @@ the common dir, so one worktree's write would leak into the user's main checkout
 
 ## Delivery policy
 
-`resolveAttachmentDelivery(driver, attachment)` in
+`resolveAttachmentDelivery(attachment)` in
 `apps/server/src/attachments/AttachmentMaterialization.ts` is the single place this is decided:
 
 | Case                                                          | Delivery                                                |
 | ------------------------------------------------------------- | ------------------------------------------------------- |
-| Image on a local-filesystem driver                            | `both` — written to disk **and** sent as a vision block |
-| Any other file on a local-filesystem driver                   | `workspace`                                             |
-| Anything on Hermes                                            | `inline`                                                |
+| Image                                                         | `both` — written to disk **and** sent as a vision block |
+| Any other file                                                | `workspace`                                             |
 | Preview annotation screenshots (`role: "preview-annotation"`) | `inline`                                                |
 
 Images are `both` so the agent sees a screenshot immediately and still gets a stable path it can
 cite later or hand to a tool. Image context cost is unchanged from before — it was already inline;
 the savings come from the non-image files, which did not work at all.
 
-Hermes is carved out because `HermesConnectionSecurity` supports remote gateways, and a file in the
-server's worktree is invisible to an agent on another host. Hermes already accepts every file type
-inline, so it loses nothing.
-
-This is driver-level _policy_, deliberately not the same thing as an adapter's runtime image
+Every built-in driver spawns its agent as a local child process, so each can open a file written
+into its workspace. This is _policy_, deliberately not the same thing as an adapter's runtime image
 capability. ACP negotiates image support per session, so an ACP agent that did not negotiate images
 still gets `both`, skips the inline block inside the adapter, and falls back to the path.
 

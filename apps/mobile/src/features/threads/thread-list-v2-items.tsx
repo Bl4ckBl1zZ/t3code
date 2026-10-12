@@ -30,13 +30,10 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
-  resolveWorkInboxBadge,
   threadHasUnseenCompletion,
   type ThreadListV2ChangeRequestState,
   type ThreadListV2Status,
-  type WorkInboxBadge,
 } from "./threadListV2";
-import { resolveThreadPreview } from "@t3tools/client-runtime/state/models";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
@@ -67,40 +64,6 @@ const STATUS_LABEL_BY_STATUS: Partial<
   failed: { label: "Failed", className: "text-red-700 dark:text-red-300" },
   // Amber like Approval: the provider stopped on a usage or rate limit, not an error.
   limited: { label: "Limited", className: "text-amber-700 dark:text-amber-300" },
-};
-
-// The Work lozenge reuses the same hues, as a filled pill rather than a bare
-// word: it stands where a Code card puts its project favicon, so it has to
-// carry that slot's visual weight.
-const WORK_BADGE_STYLE: Record<
-  WorkInboxBadge,
-  { label: string; fillClassName: string; textClassName: string }
-> = {
-  "needs-you": {
-    label: "NEEDS YOU",
-    fillClassName: "bg-amber-500/15",
-    textClassName: "text-amber-700 dark:text-amber-300",
-  },
-  working: {
-    label: "WORKING",
-    fillClassName: "bg-sky-500/15",
-    textClassName: "text-sky-600 dark:text-sky-400",
-  },
-  failed: {
-    label: "FAILED",
-    fillClassName: "bg-red-500/15",
-    textClassName: "text-red-700 dark:text-red-300",
-  },
-  limited: {
-    label: "LIMITED",
-    fillClassName: "bg-amber-500/15",
-    textClassName: "text-amber-700 dark:text-amber-300",
-  },
-  done: {
-    label: "DONE",
-    fillClassName: "bg-emerald-500/15",
-    textClassName: "text-emerald-700 dark:text-emerald-300",
-  },
 };
 
 function threadTimeLabel(thread: EnvironmentThreadShell): string {
@@ -489,10 +452,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const pinTintColor = useThemeColor("--color-foreground-muted");
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
-  const isHermes = props.providerDriver === "hermes";
-  // Chat conversations are Hermes threads born on the Chat surface; the rest of
-  // Hermes is the Work inbox. Same split the workspace routing makes.
-  const isChat = isHermes && thread.workInboxRole === "chat";
 
   const status = resolveThreadListV2Status(thread);
   // "Done" marks a completion the user has not opened yet — same emerald
@@ -506,8 +465,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ? { label: "Done", className: "text-emerald-700 dark:text-emerald-300" }
     : STATUS_LABEL_BY_STATUS[status];
   const timeLabel = threadTimeLabel(thread);
-  const workBadge = resolveWorkInboxBadge({ status, hasUnseenCompletion: isUnread });
-  const preview = resolveThreadPreview(thread);
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleRegenerateTitle = useCallback(
@@ -769,121 +726,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 
   // The sidebar pane fills selected rows with the theme's message surface, so
   // every piece of row text must use that surface's paired foreground.
-  // T3 Chat: a conversation, so title and time share one line and the last
-  // thing said sits under it. No meta line above — every row in Chat would
-  // have filled it with the same word.
-  const chatCardContent = (
-    <>
-      <View className="flex-row items-start gap-2">
-        <Text
-          className={cn(
-            "flex-1 text-base font-t3-medium",
-            selected ? "text-user-bubble-foreground" : "text-foreground",
-          )}
-          numberOfLines={2}
-        >
-          {thread.title}
-        </Text>
-        {pinnedRow ? (
-          <SymbolView name="pin" size={11} tintColor={pinTintColor} type="monochrome" />
-        ) : null}
-        <Text
-          className={cn(
-            "text-xs tabular-nums",
-            selected ? "text-user-bubble-foreground" : "text-foreground-tertiary",
-          )}
-        >
-          {timeLabel}
-        </Text>
-      </View>
-      {props.searchMatch ? (
-        <View className="mt-1">
-          <ThreadSearchMatchExcerpt
-            match={props.searchMatch}
-            query={props.searchQuery ?? ""}
-            selected={selected}
-          />
-        </View>
-      ) : status === "working" ? (
-        <Text className="mt-1 text-xs text-sky-600 dark:text-sky-400">responding…</Text>
-      ) : preview ? (
-        <Text
-          className={cn(
-            "mt-1 text-xs",
-            selected ? "text-user-bubble-foreground-muted" : "text-foreground-muted",
-          )}
-          numberOfLines={1}
-        >
-          {preview.fromUser ? <Text className="opacity-60">You: </Text> : null}
-          {preview.text}
-        </Text>
-      ) : null}
-    </>
-  );
-
-  // T3 Work: an inbox item, so the row leads with its state instead of the
-  // backing checkout's name, and closes with what the work last said instead
-  // of a branch that is `main` on every row.
-  const workCardContent = (
-    <>
-      <View className="flex-row items-center gap-1.5">
-        {workBadge ? (
-          <View
-            className={cn("rounded-full px-2 py-0.5", WORK_BADGE_STYLE[workBadge].fillClassName)}
-          >
-            <Text
-              className={cn("text-[10px] font-t3-bold", WORK_BADGE_STYLE[workBadge].textClassName)}
-            >
-              {WORK_BADGE_STYLE[workBadge].label}
-            </Text>
-          </View>
-        ) : null}
-        <View className="flex-1" />
-        {pinnedRow ? (
-          <SymbolView name="pin" size={11} tintColor={pinTintColor} type="monochrome" />
-        ) : null}
-        <Text
-          className={cn(
-            "text-xs tabular-nums",
-            selected ? "text-user-bubble-foreground" : "text-foreground-tertiary",
-          )}
-        >
-          {timeLabel}
-        </Text>
-      </View>
-      <Text
-        className={cn(
-          "mt-1 text-base font-t3-medium",
-          selected ? "text-user-bubble-foreground" : "text-foreground",
-        )}
-        numberOfLines={2}
-      >
-        {thread.title}
-      </Text>
-      {props.searchMatch ? (
-        <View className="mt-1">
-          <ThreadSearchMatchExcerpt
-            match={props.searchMatch}
-            query={props.searchQuery ?? ""}
-            selected={selected}
-          />
-        </View>
-      ) : preview ? (
-        <Text
-          className={cn(
-            "mt-1 text-xs",
-            selected ? "text-user-bubble-foreground-muted" : "text-foreground-muted",
-          )}
-          numberOfLines={1}
-        >
-          {preview.fromUser ? <Text className="opacity-60">You: </Text> : null}
-          {preview.text}
-        </Text>
-      ) : null}
-    </>
-  );
-
-  const codeCardContent = (
+  const cardContent = (
     <>
       <View className="flex-row items-center gap-1.5">
         {props.project ? (
@@ -1040,11 +883,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </View>
     </>
   );
-
-  // Hermes threads have no repo, branch or PR, and every one of them runs the
-  // same harness — so Work and Chat get their own row rather than a Code row
-  // with four fields blanked out.
-  const cardContent = !isHermes ? codeCardContent : isChat ? chatCardContent : workCardContent;
 
   const rowContent = (close: () => void) =>
     variant === "card" ? (

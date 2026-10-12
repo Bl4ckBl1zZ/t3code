@@ -178,7 +178,7 @@ remain ordinary dynamic tool output.
 ### Initial Provider Support
 
 The V2 provider adapters are Codex, Claude Agent SDK, Cursor Agent SDK, Grok
-plus generic registry agents over ACP, OpenCode, Antigravity, Hermes, OpenClaw, and Pi.
+plus generic registry agents over ACP, OpenCode, Antigravity, OpenClaw, and Pi.
 Capability discovery still reports other registered provider instances, but marks them
 unavailable for orchestration when no V2 adapter exists. This keeps provider
 selection model-visible without allowing a request that cannot run.

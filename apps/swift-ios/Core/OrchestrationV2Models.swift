@@ -987,8 +987,6 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public var activeOrderKey: String? = nil
     public let pinnedAt: OrchestrationV2Timestamp?
     public var pinOrderKey: String? = nil
-    public let workInboxRole: String?
-    public let timelineClearedAt: OrchestrationV2Timestamp?
     /// See `OrchestrationV2ThreadShell.autoSettleDisabledAt`.
     public var autoSettleDisabledAt: OrchestrationV2Timestamp? = nil
     public let snoozedUntil: OrchestrationV2Timestamp?
@@ -1618,8 +1616,6 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     /// Where the thread sits in the user-arranged pinned run. Captured so
     /// undoing an unpin can put the thread back in the same place.
     public var pinOrderKey: String? = nil
-    public var workInboxRole: String?
-    public var timelineClearedAt: OrchestrationV2Timestamp?
     /// Set while the user has turned automatic settlement off for this
     /// thread. Manual settle, snooze and archive still work; only the user
     /// clears it. Absent on servers that predate the switch.

@@ -17,10 +17,8 @@ import {
   BlocksIcon,
   BotIcon,
   CalendarClockIcon,
-  Clock3Icon,
   GitBranchIcon,
   FolderIcon,
-  GraduationCapIcon,
   KeyboardIcon,
   Link2Icon,
   PaletteIcon,
@@ -82,24 +80,18 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/archived": ArchiveIcon,
 };
 
-export type SettingsNavPath = SettingsPath | "/settings/hermes-cron" | "/settings/hermes-skills";
-
-export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
+// Diagnostics opens from General, so it has a search target but no nav entry.
+const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
-  to: SettingsNavPath;
+  to: SettingsPath;
   icon: ComponentType<{ className?: string }>;
-}> = [
-  // Diagnostics opens from General, so it has a search target but no nav entry.
-  ...(Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[])
-    .filter((to) => to !== "/settings/diagnostics")
-    .map((to) => ({
-      to: to as SettingsNavPath,
-      label: SETTINGS_SECTION_LABELS[to],
-      icon: SETTINGS_SECTION_ICONS[to],
-    })),
-  { label: "T3 Work", to: "/settings/hermes-cron", icon: Clock3Icon },
-  { label: "Hermes Skills", to: "/settings/hermes-skills", icon: GraduationCapIcon },
-];
+}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[])
+  .filter((to) => to !== "/settings/diagnostics")
+  .map((to) => ({
+    to,
+    label: SETTINGS_SECTION_LABELS[to],
+    icon: SETTINGS_SECTION_ICONS[to],
+  }));
 
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
@@ -174,7 +166,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   }, [isMobile, open, setOpen, setOpenMobile]);
 
   const handleSectionClick = useCallback(
-    (to: SettingsNavPath) => {
+    (to: SettingsPath) => {
       if (isMobile) {
         setOpenMobile(false);
       }

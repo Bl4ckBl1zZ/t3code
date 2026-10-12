@@ -45,13 +45,11 @@ interface PickerItem {
 interface DraftHeroHeadlineProps {
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly activeProjectTitle: string | null;
-  readonly isProjectlessConversation: boolean;
 }
 
 export function DraftHeroHeadline({
   activeProjectRef,
   activeProjectTitle,
-  isProjectlessConversation,
 }: DraftHeroHeadlineProps) {
   const projects = useProjects();
   const threads = useThreadShells();
@@ -334,11 +332,7 @@ export function DraftHeroHeadline({
       </Tooltip>
     ) : null;
 
-  return isProjectlessConversation ? (
-    <h1 className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
-      What&apos;s on your mind?
-    </h1>
-  ) : (
+  return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
       <h1
         aria-label={headingLabel}

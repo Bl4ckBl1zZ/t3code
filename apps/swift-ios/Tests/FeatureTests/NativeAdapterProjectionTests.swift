@@ -5,8 +5,8 @@ import XCTest
 // The adapter surfaces that render from the *relational* half of a thread
 // projection, plus the two account/environment capabilities that live outside
 // `FeatureClient`. Everything here is about what the client can feed the UI:
-// the queue control, the relationship rows, checkpoint rollback, T3 Work's
-// backing project, and automations.
+// the queue control, the relationship rows, checkpoint rollback, and
+// automations.
 @MainActor
 final class NativeAdapterProjectionTests: XCTestCase {
     // MARK: - GAP 1: queue, lineage, transfers
@@ -137,46 +137,6 @@ final class NativeAdapterProjectionTests: XCTestCase {
             rollbacks.map { $0["checkpointId"]?.stringValue },
             ["checkpoint-2", "checkpoint-3"]
         )
-
-        await fixture.client.disconnect()
-    }
-
-    // MARK: - GAP 3: T3 Work's backing project
-
-    func testWorkspaceServerConfigsResolveTheHermesConversationTarget() async throws {
-        let fixture = try await makeFixture()
-        defer { fixture.tearDown() }
-
-        _ = try await fixture.client.initialSnapshot()
-
-        // The catalog read guarantees the config regardless of whether the
-        // config subscription's own snapshot already delivered it above.
-        _ = try await fixture.client.scheduledTaskModelCatalog(environmentID: "environment-1")
-
-        let configs = fixture.client.workspaceServerConfigs()
-        XCTAssertEqual(configs.map(\.environmentID), ["environment-1"])
-        XCTAssertEqual(configs.first?.t3WorkDirectory, "/work/t3-work")
-        XCTAssertEqual(configs.first?.providers.map(\.instanceId), ["codex", "hermes"])
-
-        let target = MobileWorkspaceRouting.resolveHermesConversationTarget(
-            projects: [
-                MobileWorkspaceProject(
-                    environmentID: "environment-1",
-                    project: V2Fixture.project(id: "project-1", workspaceRoot: "/work/t3")
-                ),
-                MobileWorkspaceProject(
-                    environmentID: "environment-1",
-                    project: V2Fixture.project(
-                        id: "project-work",
-                        workspaceRoot: "/work/t3-work"
-                    )
-                ),
-            ],
-            serverConfigs: configs,
-            requiredEnvironmentID: nil
-        )
-        XCTAssertEqual(target?.project.project.id, "project-work")
-        XCTAssertEqual(target?.modelSelection.instanceId, "hermes")
 
         await fixture.client.disconnect()
     }
@@ -336,8 +296,6 @@ private func adapterProjection() -> OrchestrationV2ThreadProjection {
         settledAt: nil,
         unsettledAt: nil,
         pinnedAt: nil,
-        workInboxRole: nil,
-        timelineClearedAt: nil,
         snoozedUntil: nil,
         snoozedAt: nil,
         lastVisitedAt: nil,
@@ -501,11 +459,6 @@ private func adapterShell() -> OrchestrationV2ShellSnapshot {
     V2Fixture.shellSnapshot(
         projects: [
             V2Fixture.project(id: "project-1", title: "T3 Code", workspaceRoot: "/work/t3"),
-            V2Fixture.project(
-                id: "project-work",
-                title: "T3 Work",
-                workspaceRoot: "/work/t3-work"
-            ),
         ],
         threads: [
             V2Fixture.threadShell(
@@ -620,10 +573,8 @@ private actor AdapterWebSocketConnection: WebSocketConnection {
             .object(["sequence": .number(4)])
         case RPCMethod.serverGetConfig.rawValue:
             .object([
-                "t3WorkDirectory": .string("/work/t3-work"),
                 "providers": .array([
                     adapterProvider(instanceID: "codex", driver: "codex"),
-                    adapterProvider(instanceID: "hermes", driver: "hermes"),
                 ]),
             ])
         case RPCMethod.scheduledTasksList.rawValue:

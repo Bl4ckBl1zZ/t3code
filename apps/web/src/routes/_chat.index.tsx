@@ -1,41 +1,119 @@
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { LinkIcon, PlusIcon } from "lucide-react";
+import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { workspaceLandingKind } from "../components/Sidebar.logic";
+import { isElectron } from "../env";
+import { NoProjectsHero } from "../components/NoProjectsHero";
+import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { useNewThreadHandler, useRememberedNewThreadProjectRef } from "../hooks/useHandleNewThread";
 import {
-  ChatComposerLanding,
-  CodeDraftLanding,
-  WorkComposerLanding,
-} from "../components/WorkspaceLanding";
+  useAllEnvironmentShellsBootstrapped,
+  useProjects,
+  useThreadShells,
+} from "../state/entities";
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { useSidebarWorkspace } from "~/sidebarWorkspace";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments } = useEnvironments();
-  const [workspace] = useSidebarWorkspace();
 
   if (authGateState.status === "hosted-static" && environments.length === 0) {
     return <HostedStaticOnboardingState />;
   }
 
-  // The index route is the landing for every workspace, so it has to open on
-  // the side the user is actually in: dropping T3 Work or T3 Chat into the
-  // Code composer offers a coding thread their own sidebar cannot list.
-  switch (workspaceLandingKind(workspace)) {
-    case "work-composer":
-      return <WorkComposerLanding />;
-    case "chat-composer":
-      return <ChatComposerLanding />;
-    case "code-composer":
-      return <CodeDraftLanding />;
+  return <IndexDraftLanding />;
+}
+
+/**
+ * Landing on the index route drops straight into a draft thread for the
+ * project the user last started a thread in (most recently active project when
+ * nothing is remembered yet), so the first screen is a prompt instead of a dead
+ * end. Falls back to an add-project hero when no project exists yet.
+ */
+function IndexDraftLanding() {
+  const projects = useProjects();
+  const threads = useThreadShells();
+  const bootstrapped = useAllEnvironmentShellsBootstrapped();
+  const handleNewThread = useNewThreadHandler();
+  const rememberedProjectRef = useRememberedNewThreadProjectRef();
+  const startingRef = useRef(false);
+  const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
+
+  // Picking up where the user left off beats recency: they may have opened a
+  // handful of older threads since, which would otherwise reshuffle the
+  // landing target under them.
+  const landingProject = useMemo(() => {
+    if (!bootstrapped) {
+      return null;
+    }
+    const remembered = rememberedProjectRef
+      ? projects.find(
+          (project) =>
+            project.id === rememberedProjectRef.projectId &&
+            project.environmentId === rememberedProjectRef.environmentId,
+        )
+      : undefined;
+    return remembered ?? sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null;
+  }, [bootstrapped, projects, rememberedProjectRef, threads]);
+
+  useEffect(() => {
+    if (landingProject === null || startingRef.current) {
+      return;
+    }
+    startingRef.current = true;
+    void handleNewThread(scopeProjectRef(landingProject.environmentId, landingProject.id), {
+      replace: true,
+    }).catch(() => {
+      startingRef.current = false;
+      setStartState((state) => ({ ...state, failed: true }));
+    });
+  }, [handleNewThread, landingProject, startState.retryRequest]);
+
+  if (!bootstrapped) {
+    return null;
   }
+  if (landingProject !== null) {
+    return startState.failed ? (
+      <DraftStartError
+        onRetry={() => {
+          setStartState((state) => ({
+            failed: false,
+            retryRequest: state.retryRequest + 1,
+          }));
+        }}
+      />
+    ) : null;
+  }
+  return <NoProjectsHero />;
+}
+
+function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
+  return (
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {isElectron ? <WorkspacePageHeader electron /> : null}
+      <Empty className="flex-1">
+        <EmptyHeader className="max-w-md">
+          <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
+          <EmptyDescription>
+            The project is still available. Try opening the draft again.
+          </EmptyDescription>
+          <div className="mt-5 flex justify-center">
+            <Button size="sm" onClick={onRetry}>
+              <RotateCcwIcon className="size-4" />
+              Try again
+            </Button>
+          </div>
+        </EmptyHeader>
+      </Empty>
+    </SidebarInset>
+  );
 }
 
 export const Route = createFileRoute("/_chat/")({

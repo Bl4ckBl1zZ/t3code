@@ -7,40 +7,12 @@ import SwiftUI
 
 // MARK: - Tabs
 
-/// A Home tab. The three workspaces are real destinations; `.new` never is.
-/// Selecting it presents the composer for the tab the user came from and the
-/// selection snaps back, so compose sits where the thumb is without becoming a
-/// page of its own.
+/// A Home tab. Code is the real destination; `.new` never is. Selecting it
+/// presents the composer and the selection snaps back, so compose sits where
+/// the thumb is without becoming a page of its own.
 enum HomeTab: Hashable {
-    case workspace(MobileWorkspace)
+    case code
     case new
-}
-
-extension MobileWorkspace {
-    /// The tab bar symbol.
-    var tabSymbol: String {
-        switch self {
-        case .code: "terminal"
-        case .work: "tray"
-        case .chat: "bubble.left.and.bubble.right"
-        }
-    }
-
-    /// Code starts tasks against a project; Work and Chat start Hermes
-    /// conversations. Every "new …" label and empty state follows this noun.
-    var itemNoun: String {
-        self == .code ? "Task" : "Conversation"
-    }
-
-    var newItemTitle: String { "New \(itemNoun)" }
-
-    var searchPrompt: String {
-        switch self {
-        case .code: "Search tasks"
-        case .work: "Search work"
-        case .chat: "Search conversations"
-        }
-    }
 }
 
 // MARK: - Tab bar
@@ -189,7 +161,6 @@ enum HomeListSubtitle {
     /// pinned and active rows; parked shelves are not what anyone is waiting on.
     /// Nil when there is nothing worth a line.
     static func text(
-        workspace: MobileWorkspace,
         projectName: String?,
         threads: [FeatureThread],
         connection: FeatureConnection,
@@ -198,10 +169,7 @@ enum HomeListSubtitle {
         if connection.state == .connecting {
             return "Connecting to \(environmentName)…"
         }
-        var parts: [String] = []
-        if WorkspaceSwitcher.showsProjectFilter(workspace) {
-            parts.append(projectName ?? "All projects")
-        }
+        var parts: [String] = [projectName ?? "All projects"]
         let working = threads.filter { $0.homeStatus == .working }.count
         if working > 0 {
             parts.append("\(working) working")
@@ -236,7 +204,6 @@ struct HomeEmptyState: Hashable {
         case addProject
         case newItem
         case showAllProjects
-        case setUpHermes
     }
 
     let title: String
@@ -246,59 +213,34 @@ struct HomeEmptyState: Hashable {
     let action: Action
 
     static func resolve(
-        workspace: MobileWorkspace,
         hasCreationProjects: Bool,
-        filteredProjectName: String?,
-        hermesReady: Bool
+        filteredProjectName: String?
     ) -> HomeEmptyState {
-        switch workspace {
-        case .code:
-            if !hasCreationProjects {
-                return HomeEmptyState(
-                    title: "No Projects Yet",
-                    systemImage: "folder.badge.plus",
-                    message: "Add a folder or clone a repository to start your first task.",
-                    actionTitle: "Add Project",
-                    action: .addProject
-                )
-            }
-            if let filteredProjectName {
-                return HomeEmptyState(
-                    title: "No Tasks in \(filteredProjectName)",
-                    systemImage: "tray",
-                    message: "Start a task here, or show every project.",
-                    actionTitle: "Show All Projects",
-                    action: .showAllProjects
-                )
-            }
+        if !hasCreationProjects {
             return HomeEmptyState(
-                title: "No Tasks",
-                systemImage: "square.and.pencil",
-                message: "Start a task in one of your projects.",
-                actionTitle: "New Task",
-                action: .newItem
-            )
-        case .work, .chat:
-            let title = workspace == .work ? "No Work Yet" : "No Conversations"
-            if !hermesReady {
-                return HomeEmptyState(
-                    title: title,
-                    systemImage: workspace.tabSymbol,
-                    message: WorkspaceSwitcher.hermesUnavailableMessage,
-                    actionTitle: "Set Up Hermes",
-                    action: .setUpHermes
-                )
-            }
-            return HomeEmptyState(
-                title: title,
-                systemImage: workspace.tabSymbol,
-                message: workspace == .work
-                    ? "Hand Hermes something to work on."
-                    : "Start a conversation with Hermes.",
-                actionTitle: "New Conversation",
-                action: .newItem
+                title: "No Projects Yet",
+                systemImage: "folder.badge.plus",
+                message: "Add a folder or clone a repository to start your first task.",
+                actionTitle: "Add Project",
+                action: .addProject
             )
         }
+        if let filteredProjectName {
+            return HomeEmptyState(
+                title: "No Tasks in \(filteredProjectName)",
+                systemImage: "tray",
+                message: "Start a task here, or show every project.",
+                actionTitle: "Show All Projects",
+                action: .showAllProjects
+            )
+        }
+        return HomeEmptyState(
+            title: "No Tasks",
+            systemImage: "square.and.pencil",
+            message: "Start a task in one of your projects.",
+            actionTitle: "New Task",
+            action: .newItem
+        )
     }
 }
 
@@ -318,24 +260,6 @@ enum HomeRowDate {
         ).day ?? 0
         if days > 0, days < 7 {
             return "\(weekday(date, calendar: calendar)) \(time(date, calendar: calendar))"
-        }
-        return shortDate(date, calendar: calendar)
-    }
-
-    /// Messages-style: the time today, "Yesterday", the weekday within the
-    /// last week, a short date beyond it.
-    static func conversation(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
-        if calendar.isDate(date, inSameDayAs: now) {
-            return time(date, calendar: calendar)
-        }
-        let days = calendar.dateComponents(
-            [.day],
-            from: calendar.startOfDay(for: date),
-            to: calendar.startOfDay(for: now)
-        ).day ?? 0
-        if days == 1 { return "Yesterday" }
-        if days > 1, days < 7 {
-            return date.formatted(style(calendar: calendar).weekday(.wide))
         }
         return shortDate(date, calendar: calendar)
     }
@@ -515,9 +439,8 @@ struct HomeBatchAvailability: Equatable {
 
     /// Same rule as the row menu's Snooze: never hide a row that is asking for
     /// something, and never offer what the server would refuse.
-    static func canSnooze(_ thread: FeatureThread, in workspace: MobileWorkspace) -> Bool {
-        workspace != .chat
-            && !thread.isArchived
+    static func canSnooze(_ thread: FeatureThread) -> Bool {
+        !thread.isArchived
             && thread.canShelveSnoozed
             && thread.state != .queued
             && thread.state != .waitingForApproval
@@ -526,51 +449,45 @@ struct HomeBatchAvailability: Equatable {
 
     static func canSettle(
         _ thread: FeatureThread,
-        in workspace: MobileWorkspace,
         now: Date,
         changeRequest: FeaturePullRequest?
     ) -> Bool {
-        workspace != .chat
-            && !thread.isArchived
+        !thread.isArchived
             && thread.canShelveSettled
             && !thread.isEffectivelySettled(at: now, changeRequest: changeRequest)
     }
 
     static func canUnsettle(
         _ thread: FeatureThread,
-        in workspace: MobileWorkspace,
         now: Date,
         changeRequest: FeaturePullRequest?
     ) -> Bool {
-        workspace != .chat
-            && !thread.isArchived
+        !thread.isArchived
             && thread.canShelveSettled
             && thread.isEffectivelySettled(at: now, changeRequest: changeRequest)
     }
 
-    static func canWake(_ thread: FeatureThread, in workspace: MobileWorkspace, now: Date) -> Bool {
-        workspace != .chat
-            && !thread.isArchived
+    static func canWake(_ thread: FeatureThread, now: Date) -> Bool {
+        !thread.isArchived
             && thread.canShelveSnoozed
             && thread.isEffectivelySnoozed(at: now)
     }
 
     static func resolve(
         _ threads: [FeatureThread],
-        workspace: MobileWorkspace,
         now: Date,
         changeRequests: [String: FeaturePullRequest]
     ) -> HomeBatchAvailability {
         var result = HomeBatchAvailability()
         for thread in threads {
-            if canSnooze(thread, in: workspace) { result.canSnooze = true }
-            if canSettle(thread, in: workspace, now: now, changeRequest: changeRequests[thread.id]) {
+            if canSnooze(thread) { result.canSnooze = true }
+            if canSettle(thread, now: now, changeRequest: changeRequests[thread.id]) {
                 result.canSettle = true
             }
-            if canUnsettle(thread, in: workspace, now: now, changeRequest: changeRequests[thread.id]) {
+            if canUnsettle(thread, now: now, changeRequest: changeRequests[thread.id]) {
                 result.canUnsettle = true
             }
-            if canWake(thread, in: workspace, now: now) { result.canWake = true }
+            if canWake(thread, now: now) { result.canWake = true }
             if !thread.isArchived, thread.canArchive { result.canArchive = true }
             if thread.pinnedAt == nil { result.canPin = true } else { result.canUnpin = true }
             if thread.canMarkRead(at: now) { result.canMarkRead = true }

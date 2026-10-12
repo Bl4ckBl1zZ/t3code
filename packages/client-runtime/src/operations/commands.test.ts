@@ -351,45 +351,6 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect("marks projectless first-message launches to skip workspace preparation", () =>
-    Effect.gen(function* () {
-      const launches: OrchestrationV2ThreadLaunchInput[] = [];
-      const supervisor = yield* makeSupervisor({ commands: [], projects: [], launches });
-
-      yield* startThreadTurn({
-        commandId: CommandId.make("launch-projectless"),
-        threadId: v2ThreadId,
-        message: {
-          messageId: MessageId.make("message-projectless"),
-          role: "user",
-          text: "Hello Hermes",
-          attachments: [],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        bootstrap: {
-          createThread: {
-            projectId: ProjectId.make("project-1"),
-            title: "Hello Hermes",
-            modelSelection: v2Projection.thread.modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            createdAt: "2026-06-20T00:00:00.000Z",
-          },
-          prepareWorkspace: false,
-        },
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-
-      expect(launches[0]).toMatchObject({
-        threadId: v2ThreadId,
-        prepareWorkspace: false,
-        workspaceStrategy: { type: "root" },
-      });
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
-  );
-
   it.effect("provisions an origin-based worktree for an existing empty thread", () =>
     Effect.gen(function* () {
       const launches: OrchestrationV2ThreadLaunchInput[] = [];
@@ -776,32 +737,6 @@ describe("V2 environment commands", () => {
           commandId: "switch-provider",
           threadId: v2ThreadId,
           modelSelection: { instanceId: "claude", model: "claude-sonnet-4-6" },
-        },
-      ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
-  );
-
-  it.effect("dispatches durable Work inbox metadata through the thread metadata command", () =>
-    Effect.gen(function* () {
-      const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({ commands, projects: [] });
-
-      yield* updateThreadMetadata({
-        commandId: CommandId.make("pin-work-thread"),
-        threadId: v2ThreadId,
-        pinned: true,
-        workInboxRole: "main",
-        clearTimeline: true,
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-
-      expect(commands).toEqual([
-        {
-          type: "thread.metadata.update",
-          commandId: "pin-work-thread",
-          threadId: v2ThreadId,
-          pinned: true,
-          workInboxRole: "main",
-          clearTimeline: true,
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

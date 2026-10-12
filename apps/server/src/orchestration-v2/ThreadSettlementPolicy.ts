@@ -32,7 +32,6 @@ export type SettlementThread = Pick<
   | "snoozedAt"
   | "snoozedUntil"
   | "pinnedAt"
-  | "workInboxRole"
   | "backgroundProcessCount"
   | "activeAgentCount"
   | "pendingBackgroundTasks"
@@ -62,7 +61,6 @@ export function isAutoSettlementCandidate(thread: SettlementThread, now: DateTim
     return false;
   // The user turned automatic settlement off for this thread.
   if (thread.autoSettleDisabledAt != null) return false;
-  if (thread.workInboxRole === "main") return false;
   if (
     thread.activeRunId !== null ||
     (thread.pendingRuntimeRequest !== null &&

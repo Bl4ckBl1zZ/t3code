@@ -783,10 +783,6 @@ public enum ProviderErrorPresentation {
         pattern: "^Failed to start run .+ on ([a-z][a-z0-9_-]*) provider thread .+\\.?$",
         options: [.caseInsensitive]
     )
-    private static let unsupportedAttachment = try? NSRegularExpression(
-        pattern: "^This Hermes gateway does not support (image|PDF|video|file) attachments$",
-        options: [.caseInsensitive]
-    )
 
     public static func present(_ message: String) -> String {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -796,18 +792,6 @@ public enum ProviderErrorPresentation {
             let slug = substring(trimmed, match.range(at: 1)),
             let whole = Range(match.range, in: trimmed) {
             let detail = withoutTrailingPeriod(String(trimmed[whole.upperBound...]))
-            let lowered = detail.lowercased()
-            if lowered == "attachments are disabled for this hermes instance" {
-                return "Hermes attachments are turned off. Enable Attachments in Settings → Providers, then try again."
-            }
-            if lowered == "hermes attachment storage is unavailable" {
-                return "T3 couldn't access the Hermes attachment storage. Remove and reattach the file, then try again."
-            }
-            let detailRange = NSRange(detail.startIndex ..< detail.endIndex, in: detail)
-            if let attachment = unsupportedAttachment?.firstMatch(in: detail, range: detailRange),
-                let kind = substring(detail, attachment.range(at: 1))?.lowercased() {
-                return "This Hermes gateway does not support \(kind) attachments. Remove the \(kind) attachment or update the gateway, then try again."
-            }
             return "\(providerLabel(slug)) couldn't complete the request: \(detail). Check the provider connection in Settings → Providers, then try again."
         }
 
@@ -825,7 +809,6 @@ public enum ProviderErrorPresentation {
     }
 
     private static func providerLabel(_ slug: String) -> String {
-        if slug.lowercased() == "hermes" { return "Hermes" }
         guard let first = slug.first else { return slug }
         return String(first).uppercased() + slug.dropFirst()
     }

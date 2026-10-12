@@ -37,10 +37,8 @@ import { observeResize } from "~/lib/observeResize";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
-  workspaceSelector,
 }: {
   isElectron: boolean;
-  workspaceSelector?: ReactNode;
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
@@ -72,9 +70,9 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         )}
       />
       {/* One visible line: the pill wraps onto the clipped second line once it no longer fits.
-          The padding keeps the brand's and selector's focus rings inside the clip. */}
+          The padding keeps the brand's focus ring inside the clip. */}
       <div className="relative z-10 flex h-9 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
-        {workspaceSelector ?? <SidebarBrand onBackdrop={onBackdrop} />}
+        <SidebarBrand onBackdrop={onBackdrop} />
         {pillLabel ? (
           <div className="ml-1 flex h-8 items-center">
             <Badge data-environment-identification="pill" size="sm" variant="secondary">
@@ -148,7 +146,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-export function T3Wordmark() {
+function T3Wordmark() {
   return (
     <svg
       aria-label="T3"

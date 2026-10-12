@@ -46,7 +46,6 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
-import type { HermesSessionBindingRepository } from "../../hermes/HermesSessionBindingRepository.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "../Drivers/ClaudeDriver.ts";
@@ -564,9 +563,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         },
       };
 
-      const { registry } = yield* makeProviderInstanceRegistry<
-        Exclude<BuiltInDriversEnv, HermesSessionBindingRepository>
-      >({
+      const { registry } = yield* makeProviderInstanceRegistry<BuiltInDriversEnv>({
         drivers: [CodexDriver, ClaudeDriver, CursorDriver, GrokDriver, OpenCodeDriver],
         configMap,
       });

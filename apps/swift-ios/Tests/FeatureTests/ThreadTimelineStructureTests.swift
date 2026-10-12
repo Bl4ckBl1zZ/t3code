@@ -2,8 +2,8 @@ import XCTest
 
 @testable import T3Code
 
-/// The structural rows web derives in `deriveMessagesTimelineRows`: a cleared
-/// chat, agent-update runs, superseded attempts, and subagent fan-outs.
+/// The structural rows web derives in `deriveMessagesTimelineRows`:
+/// agent-update runs, superseded attempts, and subagent fan-outs.
 final class ThreadTimelineStructureTests: XCTestCase {
     private static let utc: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
@@ -29,68 +29,6 @@ final class ThreadTimelineStructureTests: XCTestCase {
 
     private func agentMessage(_ id: String, text: String) -> FeatureMessage {
         FeatureMessage(id: id, role: .user, text: text, createdAt: Self.date(V2Fixture.timestamp), createdBy: "agent")
-    }
-
-    // MARK: - Chat cleared
-
-    func testAClearHidesEverythingThatStartedAtOrBeforeIt() {
-        let clearedAt = Self.date("2026-07-31T12:00:00.000Z")
-        let before = command("before", at: "2026-07-31T11:59:00.000Z")
-        let atClear = command("at", at: "2026-07-31T12:00:00.000Z")
-        let after = command("after", at: "2026-07-31T12:01:00.000Z")
-        let oldMessage = FeatureMessage(id: "old", role: .user, text: "hi", createdAt: clearedAt.addingTimeInterval(-5))
-        let newMessage = FeatureMessage(id: "new", role: .user, text: "hi", createdAt: clearedAt.addingTimeInterval(5))
-
-        let visible = ThreadTimelineClear.visible(
-            timelineItems: [before, atClear, after],
-            messages: [oldMessage, newMessage],
-            clearedAt: clearedAt
-        )
-
-        XCTAssertEqual(visible.timelineItems.map(\.item.id), ["after"])
-        XCTAssertEqual(visible.messages.map(\.id), ["new"])
-        XCTAssertEqual(
-            ThreadTimelineClear.visible(timelineItems: [before], messages: [oldMessage], clearedAt: nil).timelineItems.count,
-            1
-        )
-    }
-
-    func testAClearedFeedOpensOnTheChatClearedDivider() {
-        let clearedAt = Self.date("2026-07-31T11:00:00.000Z")
-        let entries = ThreadTimelineFeed.entries(
-            timelineItems: [command("a")],
-            messages: [],
-            chatClearedAt: clearedAt,
-            calendar: Self.utc
-        )
-
-        guard case let .structural(.chatCleared(_, date)) = entries.first else {
-            return XCTFail("expected the chat-cleared divider first, got \(entries.map(\.id))")
-        }
-        XCTAssertEqual(date, clearedAt)
-        XCTAssertEqual(entries.count, 2)
-    }
-
-    /// Paging back past a clear would only fetch rows the feed then hides.
-    func testLoadingEarlierStopsOnceTheOldestLoadedItemIsBehindTheClear() {
-        var thread = FeatureThread(id: "thread", projectID: "project", title: "Thread")
-        thread.timelineClearedAt = Self.date("2026-07-31T12:00:00.000Z")
-        var detail = FeatureThreadDetail(
-            thread: thread,
-            page: FeatureThreadPage(beforeCursor: nil, hasMore: true),
-            timelineItems: [command("old", at: "2026-07-31T11:00:00.000Z"), command("new", at: "2026-07-31T13:00:00.000Z")]
-        )
-        XCTAssertFalse(ThreadTimelineClear.canLoadEarlier(detail))
-
-        detail.timelineItems = [command("new", at: "2026-07-31T13:00:00.000Z")]
-        XCTAssertTrue(ThreadTimelineClear.canLoadEarlier(detail))
-
-        detail.thread.timelineClearedAt = nil
-        detail.timelineItems = [command("old", at: "2026-07-31T11:00:00.000Z")]
-        XCTAssertTrue(ThreadTimelineClear.canLoadEarlier(detail))
-
-        detail.page = FeatureThreadPage(beforeCursor: nil, hasMore: false)
-        XCTAssertFalse(ThreadTimelineClear.canLoadEarlier(detail))
     }
 
     // MARK: - Agent updates

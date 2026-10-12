@@ -207,11 +207,6 @@ type ThreadFeedEntryVariant =
       readonly expanded: boolean;
     }
   | {
-      readonly type: "chat-cleared";
-      readonly id: string;
-      readonly createdAt: string;
-    }
-  | {
       readonly type: "day-divider";
       readonly id: string;
       readonly createdAt: string;
@@ -1033,8 +1028,6 @@ export function deriveThreadFeedPresentation(
   expandedWorkGroupIds: ReadonlySet<string> = new Set(),
   activeWorkStartedAt: string | null = null,
   options?: {
-    /** Hermes "clear chat" marker: entries at or before it are dropped. */
-    readonly timelineClearedAt?: string | null;
     readonly expandedAttemptIds?: ReadonlySet<RunAttemptId>;
     /**
      * Keeps a settled turn's activity in the feed and every work group open,
@@ -1045,24 +1038,16 @@ export function deriveThreadFeedPresentation(
   },
 ): ThreadFeedEntry[] {
   const expandedAttemptIds = options?.expandedAttemptIds ?? new Set<RunAttemptId>();
-  const clearedAt = options?.timelineClearedAt ?? null;
-  const clearedAtMs = clearedAt === null ? Number.NaN : Date.parse(clearedAt);
-  const chatWasCleared = Number.isFinite(clearedAtMs);
   // Kept as its own narrowing filter: the inferred type predicate is what lets
-  // appendPresentedFeedEntry take the reduced union. Mixing in the cleared-at
-  // test below would defeat that inference.
-  const presentableFeed = feed.filter(
+  // appendPresentedFeedEntry take the reduced union.
+  const sourceFeed = feed.filter(
     (entry) =>
       entry.type !== "run-fold" &&
       entry.type !== "work-toggle" &&
       entry.type !== "working" &&
       entry.type !== "day-divider" &&
-      entry.type !== "chat-cleared" &&
       entry.type !== "attempt-fold",
   );
-  const sourceFeed = chatWasCleared
-    ? presentableFeed.filter((entry) => Date.parse(entry.createdAt) > clearedAtMs)
-    : presentableFeed;
   const alwaysExpandActivity = options?.alwaysExpandActivity === true;
   const foldsByAnchorId = alwaysExpandActivity
     ? new Map<string, ThreadFeedRunFold>()
@@ -1087,13 +1072,6 @@ export function deriveThreadFeedPresentation(
     }
   }
   const result: ThreadFeedEntry[] = [];
-  if (chatWasCleared && clearedAt !== null) {
-    result.push({
-      type: "chat-cleared",
-      id: `chat-cleared:${clearedAt}`,
-      createdAt: clearedAt,
-    });
-  }
   for (const entry of sourceFeed) {
     const fold = foldsByAnchorId.get(entry.id);
     if (fold) {
@@ -1168,13 +1146,7 @@ function appendPresentedFeedEntry(
   entry: Exclude<
     ThreadFeedEntry,
     {
-      readonly type:
-        | "run-fold"
-        | "work-toggle"
-        | "working"
-        | "attempt-fold"
-        | "chat-cleared"
-        | "day-divider";
+      readonly type: "run-fold" | "work-toggle" | "working" | "attempt-fold" | "day-divider";
     }
   >,
   expandedWorkGroupIds: ReadonlySet<string>,

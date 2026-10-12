@@ -23,7 +23,6 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
-  resolveWorkInboxBadge,
   sortThreadsForListV2,
 } from "./threadListV2";
 
@@ -1059,21 +1058,6 @@ describe("buildThreadListV2ListItems", () => {
     ).toHaveLength(1);
   });
 
-  it("uses the same thread rows for Work and Code without legacy inbox sections", () => {
-    const codeLayout = buildThreadListV2Items({
-      threads: [
-        makeThread({ id: ThreadId.make("a"), title: "a", workInboxRole: "main" }),
-        makeThread({ id: ThreadId.make("b"), title: "b", hasPendingApprovals: true }),
-      ],
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-    });
-    const items = buildThreadListV2ListItems({ items: codeLayout.items, pendingTasks: [] });
-
-    expect(items.every((item) => item.type === "v2-thread")).toBe(true);
-  });
-
   it("ends the list with queued tasks when nothing has settled yet", () => {
     const activeOnly = buildThreadListV2Items({
       threads: [makeThread({ id: ThreadId.make("active"), title: "active" })],
@@ -1142,30 +1126,5 @@ describe("buildThreadListV2ListItems", () => {
       "v2-settled-shelf",
       "v2-thread",
     ]);
-  });
-});
-
-describe("resolveWorkInboxBadge", () => {
-  it("collapses approval and input into one blocked-on-you badge", () => {
-    // What the Work inbox needs to scan for is that a row wants a human at
-    // all; which of the two things it wants is the line underneath.
-    expect(resolveWorkInboxBadge({ status: "approval", hasUnseenCompletion: false })).toBe(
-      "needs-you",
-    );
-    expect(resolveWorkInboxBadge({ status: "input", hasUnseenCompletion: false })).toBe(
-      "needs-you",
-    );
-  });
-
-  it("badges a finished thread only until it has been opened", () => {
-    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: true })).toBe("done");
-    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: false })).toBeNull();
-  });
-
-  it("carries working and failed through", () => {
-    expect(resolveWorkInboxBadge({ status: "working", hasUnseenCompletion: false })).toBe(
-      "working",
-    );
-    expect(resolveWorkInboxBadge({ status: "failed", hasUnseenCompletion: false })).toBe("failed");
   });
 });

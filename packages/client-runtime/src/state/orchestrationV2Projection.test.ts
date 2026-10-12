@@ -129,7 +129,7 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     expect(applyOrchestrationV2ProjectionEvent(emptyProjection, event)).toBe(emptyProjection);
   });
 
-  it("applies only newer reconciled Hermes titles", () => {
+  it("applies only newer reconciled provider titles", () => {
     const projection = {
       ...emptyProjection,
       thread: {

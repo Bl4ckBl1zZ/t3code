@@ -10,7 +10,6 @@ import {
   NodeId,
   RuntimeRequestId,
   type ModelSelection,
-  type OrchestrationV2ProviderThread,
   ProjectId,
   type PullRequestDetail,
   type PullRequestComment,
@@ -57,8 +56,7 @@ import {
 import { OrchestrationEffectWorkerV2 } from "./EffectWorker.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { ProjectionMaintenanceV2 } from "./ProjectionMaintenance.ts";
-import type { ProviderAdapterV2SessionRuntime, ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
-import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
+import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { unavailableLayer as textGenerationUnavailableLayer } from "../textGeneration/TextGeneration.ts";
 import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
@@ -88,124 +86,12 @@ const CheckpointStoreTestLayer = CheckpointStore.layer.pipe(
 );
 
 const driver = ProviderDriverKind.make("codex");
-const historyHydrationThreadId = ThreadId.make("runtime-layer-history-hydration-thread");
-let hydrationSnapshotReads = 0;
 const orchestrationAdapter = {
   instanceId: modelSelection.instanceId,
   driver,
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
-  openSession: (input) => {
-    if (input.threadId !== historyHydrationThreadId) {
-      return Effect.die("sessions are not used by lifecycle tests");
-    }
-    const now = DateTime.nowUnsafe();
-    const makeProviderThread = (threadId: ThreadId): OrchestrationV2ProviderThread => ({
-      id: ProviderThreadId.make(`provider-thread:hydration:${threadId}`),
-      driver,
-      providerInstanceId: modelSelection.instanceId,
-      providerSessionId: input.providerSessionId,
-      appThreadId: threadId,
-      ownerNodeId: null,
-      nativeThreadRef: null,
-      nativeConversationHeadRef: null,
-      status: "idle",
-      firstRunOrdinal: null,
-      lastRunOrdinal: null,
-      handoffIds: [],
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const runtime: ProviderAdapterV2SessionRuntime = {
-      instanceId: modelSelection.instanceId,
-      driver,
-      providerSessionId: input.providerSessionId,
-      providerSession: {
-        id: input.providerSessionId,
-        driver,
-        providerInstanceId: modelSelection.instanceId,
-        status: "ready",
-        cwd: input.runtimePolicy.cwd ?? process.cwd(),
-        model: input.modelSelection.model,
-        capabilities: CodexProviderCapabilitiesV2,
-        createdAt: now,
-        updatedAt: now,
-        lastError: null,
-      },
-      events: Stream.never,
-      ensureThread: (threadInput) => Effect.succeed(makeProviderThread(threadInput.threadId)),
-      resumeThread: (threadInput) => Effect.succeed(threadInput.providerThread),
-      startTurn: () => Effect.die("unused startTurn"),
-      steerTurn: () => Effect.die("unused steerTurn"),
-      interruptTurn: () => Effect.die("unused interruptTurn"),
-      respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
-      readThreadSnapshot: ({ providerThread }) =>
-        Effect.sync(() => {
-          hydrationSnapshotReads += 1;
-          const threadId = providerThread.appThreadId!;
-          return {
-            providerThread,
-            providerTurns: [],
-            messages: [
-              {
-                createdBy: "user",
-                creationSource: "provider",
-                id: MessageId.make("message:hydrated:user"),
-                threadId,
-                runId: null,
-                nodeId: null,
-                role: "user",
-                text: "Existing Hermes question",
-                attachments: [],
-                streaming: false,
-                createdAt: now,
-                updatedAt: now,
-              },
-              {
-                createdBy: "agent",
-                creationSource: "provider",
-                id: MessageId.make("message:hydrated:assistant"),
-                threadId,
-                runId: null,
-                nodeId: null,
-                role: "assistant",
-                text: "Existing Hermes answer",
-                attachments: [],
-                streaming: false,
-                createdAt: DateTime.add(now, { milliseconds: 1 }),
-                updatedAt: DateTime.add(now, { milliseconds: 1 }),
-              },
-            ],
-            runtimeRequests: [],
-            turnItems: [
-              {
-                id: TurnItemId.make("turn-item:hydrated:command"),
-                threadId,
-                runId: null,
-                nodeId: null,
-                providerThreadId: null,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: 0,
-                status: "completed",
-                title: "git status",
-                startedAt: now,
-                completedAt: now,
-                updatedAt: DateTime.add(now, { milliseconds: 1 }),
-                type: "command_execution",
-                input: "git status",
-                output: "clean",
-              },
-            ],
-          };
-        }),
-      rollbackThread: () => Effect.die("unused rollbackThread"),
-      forkThread: () => Effect.die("unused forkThread"),
-    };
-    return Effect.succeed(runtime);
-  },
+  openSession: () => Effect.die("sessions are not used by lifecycle tests"),
 } as ProviderAdapterV2Shape;
 const providerInstance = {
   instanceId: modelSelection.instanceId,
@@ -519,70 +405,6 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         DateTime.toEpochMillis(projection.thread.updatedAt),
         DateTime.toEpochMillis(importedAt),
       );
-    }),
-  );
-
-  it.effect("hydrates provider history once and remains idempotent across retries and reopen", () =>
-    Effect.gen(function* () {
-      hydrationSnapshotReads = 0;
-      const orchestrator = yield* OrchestratorV2;
-      const providerSessions = yield* ProviderSessionManagerV2;
-      const threadId = historyHydrationThreadId;
-
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "system",
-        creationSource: "provider",
-        commandId: CommandId.make("runtime-layer-history-hydration-create"),
-        threadId,
-        projectId: ProjectId.make("runtime-layer-history-hydration-project"),
-        title: "Imported Hermes thread",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: "/tmp/runtime-layer-history-hydration",
-      });
-
-      const hydrationInput = {
-        threadId,
-        providerInstanceId: modelSelection.instanceId,
-      };
-      yield* orchestrator.hydrateProviderThreadSnapshot(hydrationInput);
-      const first = yield* orchestrator.getThreadSnapshot(threadId);
-      yield* orchestrator.hydrateProviderThreadSnapshot(hydrationInput);
-      const retry = yield* orchestrator.getThreadSnapshot(threadId);
-
-      assert.deepEqual(
-        retry.projection.messages.map((message) => message.text),
-        ["Existing Hermes question", "Existing Hermes answer"],
-      );
-      assert.equal(retry.projection.messages.length, 2);
-      assert.equal(
-        DateTime.toEpochMillis(retry.projection.thread.updatedAt),
-        Math.max(
-          ...retry.projection.messages.map((message) => DateTime.toEpochMillis(message.updatedAt)),
-        ),
-      );
-      assert.deepEqual(
-        retry.projection.turnItems.map((item) => String(item.id)),
-        ["turn-item:hydrated:command"],
-      );
-      assert.equal(retry.snapshotSequence, first.snapshotSequence);
-
-      const providerSessionId = retry.projection.providerThreads[0]?.providerSessionId;
-      assert.exists(providerSessionId);
-      yield* providerSessions.close(providerSessionId!);
-      yield* orchestrator.hydrateProviderThreadSnapshot(hydrationInput);
-      const reopened = yield* orchestrator.getThreadProjection(threadId);
-
-      assert.equal(hydrationSnapshotReads, 3);
-      assert.equal(reopened.messages.length, 2);
-      assert.deepEqual(
-        reopened.messages.map((message) => message.id),
-        [MessageId.make("message:hydrated:user"), MessageId.make("message:hydrated:assistant")],
-      );
-      assert.equal(reopened.turnItems.length, 1);
     }),
   );
 
@@ -1311,52 +1133,6 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("persists Work inbox pin metadata and protects the main thread lifecycle", () =>
-    Effect.gen(function* () {
-      const orchestrator = yield* OrchestratorV2;
-      const threadId = ThreadId.make("runtime-layer-work-main-thread");
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("runtime-layer-work-main-create"),
-        threadId,
-        projectId: ProjectId.make("runtime-layer-work-main-project"),
-        title: "Main",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      });
-      yield* orchestrator.dispatch({
-        type: "thread.metadata.update",
-        commandId: CommandId.make("runtime-layer-work-main-metadata"),
-        threadId,
-        pinned: true,
-        workInboxRole: "main",
-      });
-
-      const projection = yield* orchestrator.getThreadProjection(threadId);
-      const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
-        (candidate) => candidate.id === threadId,
-      );
-      assert.equal(projection.thread.workInboxRole, "main");
-      assert.isNotNull(projection.thread.pinnedAt);
-      assert.equal(shell?.workInboxRole, "main");
-      assert.deepEqual(shell?.pinnedAt, projection.thread.pinnedAt);
-
-      const settleError = yield* orchestrator
-        .dispatch({
-          type: "thread.settle",
-          commandId: CommandId.make("runtime-layer-work-main-settle"),
-          threadId,
-        })
-        .pipe(Effect.flip);
-      assert.equal(settleError._tag, "OrchestratorDispatchError");
-    }),
-  );
-
   it.effect("names what blocks settling a thread", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
@@ -1922,40 +1698,6 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         (candidate) => candidate.id === threadId,
       );
       assert.isNull(unpinnedShell?.pinOrderKey ?? null);
-    }),
-  );
-
-  it.effect("persists an in-place timeline clear boundary on the thread and shell", () =>
-    Effect.gen(function* () {
-      const orchestrator = yield* OrchestratorV2;
-      const threadId = ThreadId.make("runtime-layer-cleared-thread");
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("runtime-layer-cleared-create"),
-        threadId,
-        projectId: ProjectId.make("runtime-layer-cleared-project"),
-        title: "Cleared chat",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      });
-      yield* orchestrator.dispatch({
-        type: "thread.metadata.update",
-        commandId: CommandId.make("runtime-layer-clear-timeline"),
-        threadId,
-        clearTimeline: true,
-      });
-
-      const projection = yield* orchestrator.getThreadProjection(threadId);
-      const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
-        (candidate) => candidate.id === threadId,
-      );
-      assert.isNotNull(projection.thread.timelineClearedAt);
-      assert.deepEqual(shell?.timelineClearedAt, projection.thread.timelineClearedAt);
     }),
   );
 

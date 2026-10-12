@@ -25,7 +25,6 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Stream from "effect/Stream";
 import * as RpcTest from "effect/unstable/rpc/RpcTest";
 
 import {
@@ -86,32 +85,6 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsRequestReviewers)).toBe(
       requiredScopeForRpcMethod(WS_METHODS.pullRequestsComment),
     );
-  });
-
-  it("separates reading Hermes work from changing assistants or schedules", () => {
-    for (const method of [
-      WS_METHODS.hermesWorkSetupStatus,
-      WS_METHODS.hermesWorkModelStatus,
-      WS_METHODS.hermesWorkConnections,
-      WS_METHODS.hermesWorkQuery,
-      WS_METHODS.hermesWorkSubscribeChanges,
-      WS_METHODS.hermesWorkGroupsQuery,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
-    }
-    for (const method of [WS_METHODS.hermesWorkMutate, WS_METHODS.hermesWorkGroupsMutate]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
-    }
-    // Installing Hermes and signing its model in manage a provider.
-    for (const method of [
-      WS_METHODS.hermesWorkSetupStart,
-      WS_METHODS.hermesWorkModelAuthStart,
-      WS_METHODS.hermesWorkModelAuthPoll,
-      WS_METHODS.hermesWorkModelAuthCancel,
-      WS_METHODS.hermesWorkModelSet,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthProvidersManageScope);
-    }
   });
 
   it("separates provider management and environment maintenance from operating threads", () => {
@@ -276,13 +249,7 @@ describe("RPC authorization scopes", () => {
 });
 
 describe("RPC scope middleware", () => {
-  // Upstream RPCs plus fork-only Hermes RPCs, effect and stream.
-  const tested = [
-    WS_METHODS.serverProbe,
-    WS_METHODS.serverRetryResourceTelemetry,
-    WS_METHODS.hermesWorkSetupStart,
-    WS_METHODS.hermesWorkSubscribeChanges,
-  ] as const;
+  const tested = [WS_METHODS.serverProbe, WS_METHODS.serverRetryResourceTelemetry] as const;
   const group = WsRpcGroup.omit(
     ...[...WsRpcGroup.requests.keys()].filter(
       (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
@@ -310,8 +277,6 @@ describe("RPC scope middleware", () => {
             group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
               Effect.sync(() => handled.push("retry")).pipe(Effect.andThen(Effect.never)),
             ),
-            group.toLayerHandler(WS_METHODS.hermesWorkSetupStart, () => Effect.never),
-            group.toLayerHandler(WS_METHODS.hermesWorkSubscribeChanges, () => Stream.never),
             rpcScopeAuthorizationLayer(scopes),
           ),
         ),
@@ -319,56 +284,6 @@ describe("RPC scope middleware", () => {
       expect(
         yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip),
       ).toMatchObject({ _tag: "EnvironmentAuthorizationError", requiredPermission: missing });
-      expect(handled).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("checks each RPC's declared scope before its handler runs", () =>
-    Effect.gen(function* () {
-      const handled: Array<string> = [];
-      const client = yield* RpcTest.makeClient(group).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
-            group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
-              Effect.sync(() => handled.push("retry")).pipe(Effect.andThen(Effect.never)),
-            ),
-            group.toLayerHandler(WS_METHODS.hermesWorkSetupStart, () =>
-              Effect.sync(() => handled.push("hermes-setup")).pipe(Effect.andThen(Effect.never)),
-            ),
-            group.toLayerHandler(WS_METHODS.hermesWorkSubscribeChanges, (input) =>
-              Stream.make({
-                providerInstanceId: input.providerInstanceId,
-                kind: "reconnected" as const,
-              }),
-            ),
-            rpcScopeAuthorizationLayer([AuthOrchestrationReadScope]),
-          ),
-        ),
-      );
-
-      expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
-      expect(
-        yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip),
-      ).toMatchObject({
-        _tag: "EnvironmentAuthorizationError",
-        // Old clients decode the broad parent; new ones read the exact permission.
-        requiredScope: AuthOrchestrationOperateScope,
-        requiredPermission: AuthEnvironmentMaintainScope,
-      });
-      expect(
-        yield* client[WS_METHODS.hermesWorkSetupStart]({ providerInstanceId: "hermes" }).pipe(
-          Effect.flip,
-        ),
-      ).toMatchObject({
-        _tag: "EnvironmentAuthorizationError",
-        requiredPermission: AuthProvidersManageScope,
-      });
-      expect(
-        yield* client[WS_METHODS.hermesWorkSubscribeChanges]({ providerInstanceId: "hermes" }).pipe(
-          Stream.runCollect,
-        ),
-      ).toEqual([{ providerInstanceId: "hermes", kind: "reconnected" }]);
       expect(handled).toEqual([]);
     }).pipe(Effect.scoped),
   );

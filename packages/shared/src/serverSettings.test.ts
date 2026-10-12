@@ -298,11 +298,11 @@ describe("serverSettings helpers", () => {
   });
 
   it("replaces providerModelPreferences so un-hiding a model actually un-hides it", () => {
-    const hermesId = ProviderInstanceId.make("hermes");
+    const instanceId = ProviderInstanceId.make("opencode");
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
       providerModelPreferences: {
-        [hermesId]: { hiddenModels: ["alpha", "beta"], modelOrder: [] },
+        [instanceId]: { hiddenModels: ["alpha", "beta"], modelOrder: [] },
       },
     };
 
@@ -310,18 +310,18 @@ describe("serverSettings helpers", () => {
     expect(
       applyServerSettingsPatch(current, {
         providerModelPreferences: {
-          [hermesId]: { hiddenModels: ["alpha"], modelOrder: [] },
+          [instanceId]: { hiddenModels: ["alpha"], modelOrder: [] },
         },
-      }).providerModelPreferences[hermesId],
+      }).providerModelPreferences[instanceId],
     ).toEqual({ hiddenModels: ["alpha"], modelOrder: [] });
   });
 
   it("drops providerModelPreferences instance keys the settings editor removed", () => {
-    const hermesId = ProviderInstanceId.make("hermes");
+    const instanceId = ProviderInstanceId.make("opencode");
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
       providerModelPreferences: {
-        [hermesId]: { hiddenModels: ["alpha"], modelOrder: [] },
+        [instanceId]: { hiddenModels: ["alpha"], modelOrder: [] },
       },
     };
 

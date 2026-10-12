@@ -8,7 +8,7 @@ describe("ExpandedImageDialog", () => {
     const markup = renderToStaticMarkup(
       <ExpandedImageDialog
         preview={{
-          images: [{ src: "/assets/hermes-render", name: "comparison-sheet.jpg" }],
+          images: [{ src: "/assets/render", name: "comparison-sheet.jpg" }],
           index: 0,
         }}
         onClose={() => {}}
@@ -16,7 +16,7 @@ describe("ExpandedImageDialog", () => {
     );
 
     expect(markup).toContain("comparison-sheet.jpg");
-    expect(markup).toContain('href="/assets/hermes-render"');
+    expect(markup).toContain('href="/assets/render"');
     expect(markup).toContain('download="comparison-sheet.jpg"');
     expect(markup).toContain('aria-label="Download comparison-sheet.jpg"');
     expect(markup).toContain('aria-label="Close image preview"');
@@ -25,7 +25,7 @@ describe("ExpandedImageDialog", () => {
   it("gives the backdrop an accessible name distinct from the close button", () => {
     const markup = renderToStaticMarkup(
       <ExpandedImageDialog
-        preview={{ images: [{ src: "/assets/hermes-render", name: "sheet.jpg" }], index: 0 }}
+        preview={{ images: [{ src: "/assets/render", name: "sheet.jpg" }], index: 0 }}
         onClose={() => {}}
       />,
     );

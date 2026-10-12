@@ -78,10 +78,7 @@ import {
   deriveThreadRuntime,
   presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
-import {
-  resolveThreadProviderSession,
-  threadSupportsProviderHandoff,
-} from "@t3tools/client-runtime/state/thread-workflows";
+import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import {
   derivePendingThreadRequests,
@@ -367,7 +364,6 @@ import {
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { workspacePreparationRetryRunIds } from "@t3tools/client-runtime/state/turn-item-presentation";
-import { hermesEnvironment } from "../state/hermes";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
@@ -383,7 +379,6 @@ import {
   waitForThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
-import { HERMES_DRIVER_KIND, isT3WorkBackingProject } from "../t3WorkProject";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
 import {
@@ -455,10 +450,6 @@ import {
   hasServerAcknowledgedLocalDispatch,
   shouldRefocusComposerOnWindowFocus,
   isBranchMismatchDismissedForSession,
-  deriveIsHermesConversation,
-  isHermesClearChatCommand,
-  isHermesFreshChatCommand,
-  isWorkspacePreparationTurnItem,
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
   shouldShowBranchMismatchBanner,
@@ -477,7 +468,6 @@ import {
   resolveDraftHeroState,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
-  shouldExposeWorkspaceArtifacts,
   shouldShowWorkingTimeline,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -486,7 +476,6 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
-import { readSidebarWorkspace } from "~/sidebarWorkspace";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
   awaitAttachmentUploads,
@@ -540,7 +529,6 @@ const EMPTY_PROJECTION_RUNS: OrchestrationV2ThreadProjection["runs"] = [];
 const retryingWorkspacePreparationRunIds = new Set<RunId>();
 const EMPTY_ATTACHMENT_IDS: string[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
-const EMPTY_TURN_DIFF_SUMMARIES: ReadonlyArray<TurnDiffSummary> = [];
 
 function useDraftHeroLayoutTransition(
   isDraftHeroState: boolean,
@@ -1447,9 +1435,6 @@ function ChatViewContent(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
-  const openHermesConversation = useAtomCommand(hermesEnvironment.workMutate, {
-    reportFailure: true,
-  });
   const { settleThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -1895,10 +1880,6 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const isProviderSubagent =
     serverProjection !== null && isProviderNativeSubagentThread(serverProjection.thread);
-  const activeProviderSession = useMemo(
-    () => (serverProjection === null ? null : resolveThreadProviderSession(serverProjection)),
-    [serverProjection],
-  );
   const supportsProviderSwitchingViaHandoff = useMemo(
     () => threadSupportsProviderHandoff(serverProjection),
     [serverProjection],
@@ -2830,25 +2811,6 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const selectedProvider: ProviderDriverKind =
     modelPickerLockedProvider ?? unlockedSelectedProvider;
-  const isHermesConversation = deriveIsHermesConversation({
-    runtimeProviderInstanceId: isServerThread ? (activeRuntime?.providerInstanceId ?? null) : null,
-    providers: providerStatuses,
-    selectedProvider,
-  });
-  // Hermes is the T3 Work assistant, not a coding provider, and T3 Work runs
-  // on nothing else — so the model picker shows one side or the other. T3 Work
-  // (and a thread already running Hermes, whose picker has to show what is
-  // driving it) lists only Hermes; every Code surface lists everything but.
-  // This must not depend on `selectedProvider` — that comes from the picker,
-  // and gating the picker on it would be circular.
-  const hermesProviderScope: "only" | "hidden" =
-    (activeProject !== null && isT3WorkBackingProject(activeProject, serverConfigs)) ||
-    (isServerThread &&
-      providerStatuses.find(
-        (candidate) => candidate.instanceId === activeRuntime?.providerInstanceId,
-      )?.driver === HERMES_DRIVER_KIND)
-      ? "only"
-      : "hidden";
   const phase = derivePhase(activeRuntime);
   const canInterruptRunningThread = deriveCanInterruptRunningThread(
     activeThread !== undefined,
@@ -3061,18 +3023,6 @@ function ChatViewContent(props: ChatViewProps) {
     attachmentPreviewHandoffByMessageIdRef.current = {};
     setAttachmentPreviewHandoffByMessageId({});
   }, []);
-  // Drop every optimistic user bubble and release the blob preview URLs it
-  // owns. Used whenever the visible timeline is wiped (e.g. Hermes `/clear`),
-  // so cleared threads neither leak object URLs nor re-show stale messages.
-  const discardOptimisticUserMessages = useCallback(() => {
-    clearAttachmentPreviewHandoffs();
-    setOptimisticUserMessages((existing) => {
-      for (const message of existing) {
-        revokeUserMessagePreviewUrls(message);
-      }
-      return existing.length === 0 ? existing : [];
-    });
-  }, [clearAttachmentPreviewHandoffs]);
   useEffect(() => {
     return () => {
       clearAttachmentPreviewHandoffs();
@@ -3250,13 +3200,6 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return urls;
   }, [attachmentPreviewHandoffByMessageId, serverAttachmentUrlById, serverVisibleTurnItems]);
-  const displayedServerTurnItems = useMemo(
-    () =>
-      isHermesConversation
-        ? serverVisibleTurnItems.filter((row) => !isWorkspacePreparationTurnItem(row.item))
-        : serverVisibleTurnItems,
-    [isHermesConversation, serverVisibleTurnItems],
-  );
   const timelineOptimisticMessages = useMemo(
     () =>
       feedbackMessages.length === 0
@@ -3267,9 +3210,7 @@ function ChatViewContent(props: ChatViewProps) {
   const serverTimelineEntries = useMemo(
     () =>
       deriveTimelineEntriesFromVisibleTurnItems({
-        visibleTurnItems: displayedServerTurnItems,
-        projectionMessages:
-          isHermesConversation && serverProjection !== null ? serverProjection.messages : [],
+        visibleTurnItems: serverVisibleTurnItems,
         optimisticMessages: timelineOptimisticMessages,
         attachmentUrlById: timelineAttachmentUrlById,
         ...(serverProjection === null
@@ -3281,8 +3222,7 @@ function ChatViewContent(props: ChatViewProps) {
             }),
       }),
     [
-      displayedServerTurnItems,
-      isHermesConversation,
+      serverVisibleTurnItems,
       serverProjection,
       timelineAttachmentUrlById,
       timelineOptimisticMessages,
@@ -3319,37 +3259,30 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const captureDraftHeroComposerRect = draftHeroTransition.captureComposerRect;
   const { turnDiffSummaries } = useTurnDiffSummaries(serverProjection);
-  const exposeWorkspaceArtifacts = shouldExposeWorkspaceArtifacts({
-    isProjectlessConversation: isHermesConversation,
-  });
-  const visibleTurnDiffSummaries = exposeWorkspaceArtifacts
-    ? turnDiffSummaries
-    : EMPTY_TURN_DIFF_SUMMARIES;
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
-    for (const summary of visibleTurnDiffSummaries) {
+    for (const summary of turnDiffSummaries) {
       if (!summary.assistantMessageId) continue;
       byMessageId.set(summary.assistantMessageId, summary);
     }
     return byMessageId;
-  }, [visibleTurnDiffSummaries]);
+  }, [turnDiffSummaries]);
   const revertTurnCountByUserMessageId = useMemo(
     () =>
       deriveRevertTurnCountByUserMessageId({
         timelineEntries,
-        checkpoints: visibleTurnDiffSummaries,
+        checkpoints: turnDiffSummaries,
       }),
-    [timelineEntries, visibleTurnDiffSummaries],
+    [timelineEntries, turnDiffSummaries],
   );
 
-  const gitCwd =
-    exposeWorkspaceArtifacts && activeProject
-      ? projectScriptCwd({
-          project: { cwd: activeProject.workspaceRoot },
-          worktreePath: activeThread?.worktreePath ?? null,
-        })
-      : null;
-  const gitStatusCwd = exposeWorkspaceArtifacts ? (activeThread?.worktreePath ?? gitCwd) : null;
+  const gitCwd = activeProject
+    ? projectScriptCwd({
+        project: { cwd: activeProject.workspaceRoot },
+        worktreePath: activeThread?.worktreePath ?? null,
+      })
+    : null;
+  const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
       ? null
@@ -3506,9 +3439,7 @@ function ChatViewContent(props: ChatViewProps) {
   const hasTimelineTopBanner = Boolean(timelineThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
-  const activeWorkspaceRoot = exposeWorkspaceArtifacts
-    ? (activeThreadWorktreePath ?? activeProjectCwd ?? undefined)
-    : undefined;
+  const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   const reportedIsRepo = gitStatusQuery.data?.isRepo;
@@ -3562,7 +3493,6 @@ function ChatViewContent(props: ChatViewProps) {
     isDraftHeroState,
     isGitRepo,
     hasActiveProject: activeProject !== null && !showProviderSubagentBar,
-    isProjectlessConversation: isHermesConversation,
     persistInActiveThreads: settings.persistComposerContextStrip,
   });
   const terminalShortcutLabelOptions = useMemo(
@@ -4774,17 +4704,14 @@ function ChatViewContent(props: ChatViewProps) {
     })
       ? settledRunId
       : null;
-    const enabled =
-      settings.proactivePanelsEnabled && !shouldUsePlanSidebarSheet && exposeWorkspaceArtifacts;
+    const enabled = settings.proactivePanelsEnabled && !shouldUsePlanSidebarSheet;
     // A linked pull request owns the proactive panel; the run diff stays a click away.
     const linkedPullRequestTakesPanel =
       linkedThreadPullRequestKey !== null && (!pullRequestsCapabilityKnown || supportsPullRequests);
     const diffAction =
       enabled && completedRunId !== null && !linkedPullRequestTakesPanel
         ? resolveProactiveRunDiffAction({
-            checkpoint: visibleTurnDiffSummaries.find(
-              (checkpoint) => checkpoint.runId === completedRunId,
-            ),
+            checkpoint: turnDiffSummaries.find((checkpoint) => checkpoint.runId === completedRunId),
             isGitRepo: gitStatusQuery.data?.isRepo,
             activeSurfaceKind:
               selectActiveRightPanelSurface(panels.byThreadKey, activeThreadRef)?.kind ?? null,
@@ -4833,8 +4760,7 @@ function ChatViewContent(props: ChatViewProps) {
     clientSettingsHydrated,
     settings.proactivePanelsEnabled,
     shouldUsePlanSidebarSheet,
-    exposeWorkspaceArtifacts,
-    visibleTurnDiffSummaries,
+    turnDiffSummaries,
     gitStatusQuery.data?.isRepo,
     supportsPullRequests,
     pullRequestsCapabilityKnown,
@@ -6029,7 +5955,6 @@ function ChatViewContent(props: ChatViewProps) {
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
-    isProjectlessConversation: isHermesConversation,
   });
   const localCheckoutBranchMismatch = useMemo(
     () =>
@@ -7139,7 +7064,7 @@ function ChatViewContent(props: ChatViewProps) {
         newerRestorePoints:
           summary.scopeId === undefined
             ? undefined
-            : visibleTurnDiffSummaries.filter(
+            : turnDiffSummaries.filter(
                 (candidate) =>
                   candidate.scopeId === summary.scopeId &&
                   candidate.status === "ready" &&
@@ -7147,13 +7072,13 @@ function ChatViewContent(props: ChatViewProps) {
               ).length,
       };
     },
-    [timelineEntries, visibleTurnDiffSummaries],
+    [timelineEntries, turnDiffSummaries],
   );
 
   const onRevertToTurnCount = useCallback(
     (turnCount: number) => {
       if (!guardCheckpointRestore()) return;
-      const summary = visibleTurnDiffSummaries.find(
+      const summary = turnDiffSummaries.find(
         (candidate) => candidate.checkpointTurnCount === turnCount,
       );
       setPendingCheckpointRestore({
@@ -7162,13 +7087,13 @@ function ChatViewContent(props: ChatViewProps) {
         facts: buildCheckpointRestoreFacts(summary),
       });
     },
-    [buildCheckpointRestoreFacts, guardCheckpointRestore, visibleTurnDiffSummaries],
+    [buildCheckpointRestoreFacts, guardCheckpointRestore, turnDiffSummaries],
   );
 
   const onRollbackCheckpoint = useCallback(
     (input: { readonly checkpointId: string; readonly scopeId: string }) => {
       if (!guardCheckpointRestore()) return;
-      const summary = visibleTurnDiffSummaries.find(
+      const summary = turnDiffSummaries.find(
         (candidate) => candidate.checkpointId === input.checkpointId,
       );
       setPendingCheckpointRestore({
@@ -7178,7 +7103,7 @@ function ChatViewContent(props: ChatViewProps) {
         facts: buildCheckpointRestoreFacts(summary),
       });
     },
-    [buildCheckpointRestoreFacts, guardCheckpointRestore, visibleTurnDiffSummaries],
+    [buildCheckpointRestoreFacts, guardCheckpointRestore, turnDiffSummaries],
   );
 
   const onConfirmCheckpointRestore = useCallback(async () => {
@@ -7289,83 +7214,9 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const openFreshHermesConversation = useCallback(
-    async (modelSelection: ModelSelection) => {
-      if (!activeProject) return;
-      const opened = await openHermesConversation({
-        environmentId: activeProject.environmentId,
-        input: {
-          providerInstanceId: modelSelection.instanceId,
-          profile: "default",
-          command: {
-            type: "conversation.open",
-            ...(activeThread ? { sourceThreadId: activeThread.id } : {}),
-            surface: readSidebarWorkspace() === "chat" ? "chat" : "work",
-          },
-        },
-      });
-      if (opened._tag === "Success" && opened.value.threadId) {
-        await navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(
-            scopeThreadRef(activeProject.environmentId, ThreadId.make(opened.value.threadId)),
-          ),
-        });
-      }
-    },
-    [activeProject, activeThread, navigate, openHermesConversation],
-  );
   const handleNewThreadInActiveProject = useCallback(() => {
-    if (isHermesConversation) {
-      const selection = composerRef.current?.getSendContext()?.selectedModelSelection;
-      if (selection) void openFreshHermesConversation(selection);
-      return;
-    }
     startNewThreadForProject(activeProjectRef, handleNewThread);
-  }, [activeProjectRef, handleNewThread, isHermesConversation, openFreshHermesConversation]);
-
-  const clearCurrentHermesTimeline = useCallback(async () => {
-    if (!activeThread || !isHermesConversation) {
-      return false;
-    }
-    if (!isServerThread) {
-      discardOptimisticUserMessages();
-      scheduleComposerFocus();
-      return true;
-    }
-    const result = await updateThreadMetadata({
-      environmentId,
-      input: {
-        threadId: activeThread.id,
-        clearTimeline: true,
-      },
-    });
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to clear chat",
-            description: chatActionErrorMessage(squashAtomCommandFailure(result)),
-          }),
-        );
-      }
-      return false;
-    }
-    discardOptimisticUserMessages();
-    scrollToEnd();
-    scheduleComposerFocus();
-    return true;
-  }, [
-    activeThread,
-    discardOptimisticUserMessages,
-    environmentId,
-    isHermesConversation,
-    isServerThread,
-    scheduleComposerFocus,
-    scrollToEnd,
-    updateThreadMetadata,
-  ]);
+  }, [activeProjectRef, handleNewThread]);
 
   const onSend = async (
     e?: { preventDefault: () => void },
@@ -7609,41 +7460,6 @@ function ChatViewContent(props: ChatViewProps) {
       composerReviewComments.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
-    const isStandaloneHermesCommand =
-      composerImages.length === 0 &&
-      sendableComposerTerminalContexts.length === 0 &&
-      composerElementContexts.length === 0 &&
-      composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0;
-    if (
-      isStandaloneHermesCommand &&
-      isHermesClearChatCommand({
-        text: trimmed,
-        isHermesConversation,
-      })
-    ) {
-      const cleared = await clearCurrentHermesTimeline();
-      if (cleared) {
-        promptRef.current = "";
-        clearComposerDraftContent(composerDraftTarget);
-        composerRef.current?.resetCursorState();
-      }
-      return;
-    }
-    if (
-      isStandaloneHermesCommand &&
-      isHermesFreshChatCommand({
-        text: trimmed,
-        isHermesConversation,
-      }) &&
-      activeProject
-    ) {
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
-      await openFreshHermesConversation(ctxSelectedModelSelection);
-      return;
-    }
     if (standaloneSlashCommand) {
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
@@ -8013,7 +7829,7 @@ function ChatViewContent(props: ChatViewProps) {
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
-        isLocalDraftThread || (baseBranchForWorktree && !isHermesConversation)
+        isLocalDraftThread || baseBranchForWorktree
           ? {
               ...(isLocalDraftThread
                 ? {
@@ -8023,14 +7839,13 @@ function ChatViewContent(props: ChatViewProps) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
-                      branch: isHermesConversation ? null : activeThreadBranch,
-                      worktreePath: isHermesConversation ? null : activeThread.worktreePath,
+                      branch: activeThreadBranch,
+                      worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
                     },
-                    ...(isHermesConversation ? { prepareWorkspace: false } : {}),
                   }
                 : {}),
-              ...(baseBranchForWorktree && !isHermesConversation
+              ...(baseBranchForWorktree
                 ? {
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
@@ -8078,19 +7893,6 @@ function ChatViewContent(props: ChatViewProps) {
         setKeepFullHistory(routeThreadKey, false);
         if (supportsAttachmentUploads) {
           releaseAttachmentUploads(uploadableImagesSnapshot);
-        }
-        // A Hermes draft submitted from the Chat workspace is a Chat
-        // conversation: stamp the role so the sidebar's workspace split can
-        // tell it apart from Work. Best-effort — an older server rejects the
-        // value and the thread simply lives in Work.
-        if (isLocalDraftThread && isHermesConversation && readSidebarWorkspace() === "chat") {
-          void updateThreadMetadata({
-            environmentId,
-            input: {
-              threadId: threadIdForSend,
-              workInboxRole: "chat",
-            },
-          });
         }
         if (
           submissionIntent === "background" &&
@@ -9055,7 +8857,6 @@ function ChatViewContent(props: ChatViewProps) {
     threadId: activeThread.id,
     ...(draftId ? { draftId } : {}),
     isServerThread,
-    isProjectlessConversation: isHermesConversation,
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject?.scripts,
     preferredScriptId: activeProject
@@ -9101,7 +8902,7 @@ function ChatViewContent(props: ChatViewProps) {
     openPreview,
   };
   const panelToggleControlProps = {
-    terminalAvailable: activeProject !== null && !isHermesConversation,
+    terminalAvailable: activeProject !== null,
     terminalOpen: terminalUiState.terminalOpen,
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
     threadPanelOpen,
@@ -9109,7 +8910,7 @@ function ChatViewContent(props: ChatViewProps) {
     threadPanelPopoverHandle,
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
     threadPanelHasAttention: activeEnvironmentUnavailableState !== null,
-    rightPanelAvailable: activeProject !== null && !isHermesConversation,
+    rightPanelAvailable: activeProject !== null,
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),
     onToggleTerminal: toggleTerminalVisibility,
@@ -9120,8 +8921,6 @@ function ChatViewContent(props: ChatViewProps) {
     <PanelLayoutControls
       {...panelToggleControlProps}
       showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
-      showTerminalControl={!isHermesConversation}
-      showRightPanelControl={!isHermesConversation}
     />
   );
   const threadPanelHeaderControl = (
@@ -9198,11 +8997,11 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             activeThreadTitle={activeThread.title}
             isServerThread={isServerThread}
-            activeProject={isHermesConversation ? null : (activeProject ?? null)}
+            activeProject={activeProject ?? null}
             {...(draftId ? { draftId } : {})}
             openInCwd={gitCwd}
             gitCwd={gitCwd}
-            activeProjectScripts={isHermesConversation ? undefined : activeProject?.scripts}
+            activeProjectScripts={activeProject?.scripts}
             preferredScriptId={threadDetailsPanelProps.preferredScriptId}
             keybindings={keybindings}
             availableEditors={availableEditors}
@@ -9315,16 +9114,10 @@ function ChatViewContent(props: ChatViewProps) {
                 key={activeThread.id}
                 isWorking={isWorking}
                 runlessWorkActive={runlessWorkStartedAt !== null}
-                workingActivityText={
-                  isHermesConversation ? (activeProviderSession?.activityText ?? null) : null
-                }
                 activeTurnInProgress={isWorking || !latestRunSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
-                timelineClearedAt={
-                  isHermesConversation ? (activeThread.timelineClearedAt ?? null) : null
-                }
                 latestRun={activeActivityRun}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 activeThreadEnvironmentId={activeThread.environmentId}
@@ -9426,7 +9219,6 @@ function ChatViewContent(props: ChatViewProps) {
                         <DraftHeroHeadline
                           activeProjectRef={activeProjectRef}
                           activeProjectTitle={activeProject?.title ?? null}
-                          isProjectlessConversation={isHermesConversation}
                         />
                       </div>
                     </div>
@@ -9509,8 +9301,6 @@ function ChatViewContent(props: ChatViewProps) {
                               activeThread={activeThread}
                               isServerThread={isServerThread}
                               isLocalDraftThread={isLocalDraftThread}
-                              isProjectlessConversation={isHermesConversation}
-                              hermesProviderScope={hermesProviderScope}
                               forceExpandedOnMobile={
                                 forceExpandedMobileComposer && isDraftHeroState
                               }
@@ -9579,25 +9369,6 @@ function ChatViewContent(props: ChatViewProps) {
                               shouldAutoScrollRef={composerShouldStickToEndRef}
                               scheduleStickToBottom={scrollToEnd}
                               onSend={onSend}
-                              onStartFreshChat={() => {
-                                const sendContext = composerRef.current?.getSendContext();
-                                if (!activeProject || !sendContext) return;
-                                promptRef.current = "";
-                                clearComposerDraftContent(composerDraftTarget);
-                                composerRef.current?.resetCursorState();
-                                void openFreshHermesConversation(
-                                  sendContext.selectedModelSelection,
-                                );
-                              }}
-                              onClearChat={() => {
-                                void (async () => {
-                                  const cleared = await clearCurrentHermesTimeline();
-                                  if (!cleared) return;
-                                  promptRef.current = "";
-                                  clearComposerDraftContent(composerDraftTarget);
-                                  composerRef.current?.resetCursorState();
-                                })();
-                              }}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}

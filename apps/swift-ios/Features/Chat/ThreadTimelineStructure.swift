@@ -1,24 +1,18 @@
 import SwiftUI
 
 /// Rows the feed derives from the transcript's shape rather than from a single
-/// turn item: where a chat was cleared, a run of agent updates, a superseded
+/// turn item: a run of agent updates, a superseded
 /// attempt folded away, and a turn's changed files under its reply.
 ///
 /// One `ThreadTimelineEntry` case carries all of them, so a new structural row
 /// adds a case here instead of touching every switch over the entry.
 enum ThreadTimelineStructuralRow: Equatable {
-    case chatCleared(id: String, date: Date)
     case agentUpdates(ThreadAgentUpdates)
     case attemptFold(ThreadAttemptFold)
     case changedFiles(ThreadChangedFiles)
 
-    static func chatCleared(at date: Date) -> ThreadTimelineStructuralRow {
-        .chatCleared(id: "chat-cleared:\(date.timeIntervalSince1970)", date: date)
-    }
-
     var id: String {
         switch self {
-        case let .chatCleared(id, _): id
         case let .agentUpdates(updates): updates.id
         case let .attemptFold(fold): fold.id
         case let .changedFiles(files): files.id
@@ -27,7 +21,6 @@ enum ThreadTimelineStructuralRow: Equatable {
 
     var date: Date? {
         switch self {
-        case let .chatCleared(_, date): date
         case let .agentUpdates(updates): updates.date
         case let .attemptFold(fold): fold.date
         case let .changedFiles(files): files.date
@@ -39,8 +32,6 @@ enum ThreadTimelineStructuralRow: Equatable {
     /// others belong to no run.
     func turnFoldItem(entryID: String, date: Date?) -> ThreadTurnFoldItem {
         switch self {
-        case .chatCleared:
-            ThreadTurnFoldItem(id: entryID, runID: nil, kind: .persistent, date: date)
         case .agentUpdates:
             ThreadTurnFoldItem(id: entryID, runID: nil, kind: .user, date: date)
         case let .attemptFold(fold):
@@ -64,8 +55,6 @@ struct ThreadTimelineStructuralRowView: View {
 
     var body: some View {
         switch row {
-        case .chatCleared:
-            TimelineSystemDivider(label: "Chat cleared", symbol: "eraser")
         case let .agentUpdates(updates):
             ThreadAgentUpdatesGroup(
                 updates: updates,

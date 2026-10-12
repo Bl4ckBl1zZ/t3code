@@ -16,7 +16,7 @@ extension FeatureInputAnswer {
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
-    FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
+    FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureUsageReading, FeatureUsageLimitsReading,
     FeatureMcpAppHosting, FeatureThreadFinding, FeatureSubagentStopping, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
@@ -1767,12 +1767,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
-    /// One entry per environment whose server config this client has seen.
-    ///
-    /// Ordered by the saved-environment list rather than by dictionary hashing:
-    /// `resolveHermesConversationTarget` takes the first environment that can
-    /// host the conversation, so an unstable order would make a Work launch
-    /// land on a different server between runs.
+    /// One entry per environment whose server config this client has seen,
+    /// ordered by the saved-environment list rather than by dictionary hashing
+    /// so anything that picks "the first environment" is stable between runs.
     func workspaceServerConfigs() -> [MobileWorkspaceEnvironmentConfig] {
         var ordered = latestSnapshot?.environments.map(\.id) ?? []
         if ordered.isEmpty, let activeID = activeEnvironment?.id {
@@ -1788,7 +1785,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             guard let config = serverConfigsByEnvironmentID[environmentID] else { return nil }
             var mapped = MobileWorkspaceEnvironmentConfig(
                 environmentID: environmentID,
-                t3WorkDirectory: config.t3WorkDirectory,
                 providers: config.providers
             )
             mapped.scratchWorkspaceRoot = config.scratchWorkspaceRoot
@@ -2005,12 +2001,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             number: detail.number,
             url: detail.url
         )
-    }
-
-    func setWorkInboxRole(threadID: String, role: String?) async throws {
-        let route = try threadRoute(for: threadID)
-        _ = try await route.client.setWorkInboxRole(threadID: route.wireID, role: role)
-        try? await refreshUnlessStreamed(client: route.client)
     }
 
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {
@@ -4420,10 +4410,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
                     // A delta event reports one slice of the config. Every field
-                    // it does not carry is copied from the last full snapshot —
-                    // `t3WorkDirectory` in particular, because dropping it would
-                    // silently disable T3 Work the first time a provider changed
-                    // status.
+                    // it does not carry is copied from the last full snapshot.
                     case let .providerStatuses(providers):
                         let previous = self.serverConfigsByEnvironmentID[
                             activeClient.environment.id
@@ -4431,7 +4418,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         var config = ServerConfigSnapshot(
                             providers: providers,
                             settings: previous?.settings,
-                            t3WorkDirectory: previous?.t3WorkDirectory,
                             threadSnapshotWindow: previous?.threadSnapshotWindow,
                             threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
                             shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
@@ -6032,12 +6018,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         // `preview` — leaving them lossy here made the open thread alternate
         // between two shapes (and sometimes two shelves) as the shell and
         // detail streams took turns publishing.
-        let clearedAt = mappedThread.timelineClearedAt
-        if let latestVisible = messages.last(where: { !ThreadTimelineClear.hides($0.createdAt, clearedAt: clearedAt) }) {
+        if let latestVisible = messages.last {
             mappedThread.preview = previewText(latestVisible.role == .user ? UserMessageContent.previewText(latestVisible.text) : latestVisible.text)
             mappedThread.previewIsFromUser = latestVisible.role == .user
-        } else if clearedAt != nil {
-            mappedThread.preview = nil
         }
         // The projection's thread carries no plan state; the shell's verdict
         // keeps the plan banner from flickering as the two streams alternate.
@@ -6476,7 +6459,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             autoSettleDisabledAt: thread.autoSettleDisabledAt.map(parseDate),
             supportsAutoSettleOptOut: environment.descriptor?.capabilities.threadAutoSettleOptOut,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
-            workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
             parentThreadID: thread.lineage.parentThreadId.map {
                 FeatureScopedID.thread(environmentID: environment.id, wireID: $0)
@@ -6507,7 +6489,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
         )
-        mapped.timelineClearedAt = thread.timelineClearedAt.flatMap(parseValidDate)
         mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
         mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
         mapped.supportsPinReorder = environment.descriptor?.capabilities.threadPinReorder
@@ -6609,7 +6590,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationV2ThreadShell,
         environment: Environment
     ) -> FeatureThread {
-        let clearedAt = thread.timelineClearedAt.flatMap(parseValidDate)
         var mapped = FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
@@ -6620,11 +6600,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environmentID: environment.id,
             environmentName: environment.label,
             title: thread.title,
-            // A message from before a clear is not what the chat says now.
-            preview: ThreadTimelineClear.hides(
-                thread.latestVisibleMessage.flatMap { parseValidDate($0.updatedAt) },
-                clearedAt: clearedAt
-            ) ? nil : previewText(thread.latestVisibleMessage.map { $0.role == "user" ? UserMessageContent.previewText($0.text) : $0.text }),
+            preview: previewText(thread.latestVisibleMessage.map { $0.role == "user" ? UserMessageContent.previewText($0.text) : $0.text }),
             previewIsFromUser: thread.latestVisibleMessage?.role == "user",
             branch: thread.branch,
             worktreePath: thread.worktreePath,
@@ -6668,11 +6644,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             autoSettleDisabledAt: thread.autoSettleDisabledAt.map(parseDate),
             supportsAutoSettleOptOut: environment.descriptor?.capabilities.threadAutoSettleOptOut,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
-            // The two fields the workspaces sort on: `workInboxRole` is what
-            // gives the T3 Work inbox a Main section at all, and
             // `relationshipToParent` is what keeps a subagent's thread out of
-            // both lists rather than showing it beside the work that spawned it.
-            workInboxRole: thread.workInboxRole,
+            // the list rather than showing it beside the work that spawned it.
             relationshipToParent: thread.lineage.relationshipToParent,
             parentThreadID: thread.lineage.parentThreadId.map {
                 FeatureScopedID.thread(environmentID: environment.id, wireID: $0)
@@ -6713,7 +6686,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             interactionMode: mapInteractionMode(thread.interactionMode),
             archiveBlockedByLiveRun: !ThreadArchive.canArchive(shell: thread)
         )
-        mapped.timelineClearedAt = clearedAt
         mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
         mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
         mapped.lastErrorClass = thread.lastErrorClass
@@ -6844,9 +6816,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     /// The cached config for an environment with only its settings replaced.
     ///
-    /// Every other field is copied from the last full snapshot —
-    /// `t3WorkDirectory` in particular, because dropping it would silently
-    /// disable T3 Work the first time settings changed.
+    /// Every other field is copied from the last full snapshot.
     private func mergingSettings(
         _ settings: ServerSettingsSnapshot?,
         environmentID: String
@@ -8778,63 +8748,6 @@ private enum ServerSettingsSaveFailure: LocalizedError {
 private struct SharedSettingsWriteFailure: LocalizedError {
     let machines: [String]
     var errorDescription: String? { "Saved on the selected machine, but could not update shared preferences on " + machines.joined(separator: ", ") + ". Reload and apply to all to retry." }
-}
-
-// Every Work action uses its explicitly selected environment.
-extension NativeFeatureClient: FeatureWorkManaging {
-    func workChanges(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<HermesWorkChange, Error> {
-        let client = try await environmentClient(id: environmentID)
-        return await client.workChanges(instanceID: instanceID)
-    }
-    func workModelStatus(environmentID: String, input: JSONValue) async throws -> HermesWorkModelStatus {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workModelStatus(input)
-    }
-    func workModelAuthStart(environmentID: String, input: JSONValue) async throws -> HermesWorkModelAuthStart {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workModelAuthStart(input)
-    }
-    func workModelAuthPoll(environmentID: String, input: JSONValue) async throws -> HermesWorkModelAuthPoll {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workModelAuthPoll(input)
-    }
-    func workModelAuthCancel(environmentID: String, input: JSONValue) async throws -> HermesWorkModelAuthCancel {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workModelAuthCancel(input)
-    }
-    func workModelSet(environmentID: String, input: JSONValue) async throws -> HermesWorkModelSet {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workModelSet(input)
-    }
-
-    func workSetupStart(environmentID: String, instanceID: String) async throws -> HermesWorkSetupState {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workSetupStart(instanceID: instanceID)
-    }
-    func workSetupStatus(environmentID: String, instanceID: String) async throws -> HermesWorkSetupState {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workSetupStatus(instanceID: instanceID)
-    }
-    func workGroupsQuery(environmentID: String, input: JSONValue) async throws -> HermesWorkGroupsResult {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workGroupsQuery(input)
-    }
-    func workGroupsMutate(environmentID: String, input: JSONValue) async throws -> HermesWorkMutationResult {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workGroupsMutate(input)
-    }
-    func workConnections(environmentID: String) async throws -> HermesWorkConnections {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workConnections()
-    }
-    func workQuery(environmentID: String, input: JSONValue) async throws -> HermesWorkQueryResult {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workQuery(input)
-    }
-    func workMutate(environmentID: String, input: JSONValue) async throws -> HermesWorkMutationResult {
-        let client = try await environmentClient(id: environmentID)
-        return try await client.workMutate(input)
-    }
 }
 
 extension NativeFeatureClient: FeatureThreadContentSearching {

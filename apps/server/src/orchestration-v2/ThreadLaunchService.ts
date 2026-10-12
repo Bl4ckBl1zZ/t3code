@@ -77,7 +77,6 @@ export interface ThreadLaunchInput {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
-  readonly prepareWorkspace?: boolean;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
@@ -628,12 +627,6 @@ export const make = Effect.gen(function* () {
           "update-thread",
         )("Reusing an existing thread requires a thread id.");
       }
-      if (input.prepareWorkspace === false && input.workspaceStrategy.type === "worktree") {
-        return yield* mapError(
-          input,
-          "provision-worktree",
-        )("Skipping workspace preparation is incompatible with a worktree workspace strategy.");
-      }
 
       const launchReceipt = yield* readReceipt(input, input.commandId);
       return yield* Effect.gen(function* () {
@@ -715,10 +708,7 @@ export const make = Effect.gen(function* () {
                 ? {}
                 : { senderThreadId: input.initialMessage.senderThreadId }),
               modelSelection: input.modelSelection,
-              dispatchMode:
-                input.prepareWorkspace === false
-                  ? { type: "start_immediately" }
-                  : { type: "defer_start", workspaceStrategy: input.workspaceStrategy },
+              dispatchMode: { type: "defer_start", workspaceStrategy: input.workspaceStrategy },
               createdBy: input.createdBy,
               creationSource: input.creationSource,
             })
@@ -742,16 +732,7 @@ export const make = Effect.gen(function* () {
         const runIsPreparing =
           runId !== null &&
           projection.runs.some((run) => run.id === runId && run.status === "preparing");
-        const shouldSchedule =
-          input.prepareWorkspace !== false &&
-          (runId === null ? Option.isNone(launchReceipt) : runIsPreparing);
-        if (
-          input.prepareWorkspace === false &&
-          Option.isNone(launchReceipt) &&
-          !messageWasAlreadyAccepted
-        ) {
-          yield* scheduleTitleGeneration(input, threadId, project.workspaceRoot);
-        }
+        const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
         if (shouldSchedule) {
           const ownsPreparation = yield* reservePreparation(input.commandId);
           if (ownsPreparation) {

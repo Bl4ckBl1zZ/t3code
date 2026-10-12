@@ -50,8 +50,8 @@ export function needsProjectFileBackfill(project: Project, fileExists: boolean):
 
 /**
  * The settings patch recording that the backfill ran, or `null` when it
- * already has. Mirrors the Hermes proactive-default migration: the caller
- * reads settings, runs the work, then persists the marker.
+ * already has. The caller reads settings, runs the work, then persists the
+ * marker.
  */
 export function projectFileBackfillPatch(settings: ServerSettings): ServerSettingsPatch | null {
   return settings.projectFileBackfillApplied ? null : { projectFileBackfillApplied: true };

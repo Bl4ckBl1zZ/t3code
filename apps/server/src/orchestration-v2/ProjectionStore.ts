@@ -164,7 +164,7 @@ export type ProjectionThreadQuery =
       readonly threadIds?: ReadonlyArray<ThreadId> | undefined;
       readonly projectIds?: ReadonlyArray<ProjectId> | undefined;
     }
-  /** Not settled, not opted out of automatic settlement, and not the work inbox. */
+  /** Not settled and not opted out of automatic settlement. */
   | { readonly kind: "auto-settle-candidates"; readonly threadIds?: ReadonlyArray<ThreadId> }
   /** Settled, unpinned, and in Settled since `settledBefore` or earlier. */
   | {
@@ -203,11 +203,7 @@ export function threadMatchesQuery(
     case "active":
       return query.projectIds === undefined || query.projectIds.includes(thread.projectId);
     case "auto-settle-candidates":
-      return (
-        thread.settledOverride === null &&
-        thread.autoSettleDisabledAt == null &&
-        thread.workInboxRole !== "main"
-      );
+      return thread.settledOverride === null && thread.autoSettleDisabledAt == null;
     case "auto-delete-candidates": {
       if (thread.settledOverride !== "settled" || thread.pinnedAt != null) return false;
       const since = thread.settledRecordedAt ?? thread.settledAt;
@@ -1609,8 +1605,6 @@ export function threadShellFromProjection(
     pinnedAt: projection.thread.pinnedAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     activeOrderKey: projection.thread.activeOrderKey ?? null,
-    workInboxRole: projection.thread.workInboxRole ?? null,
-    timelineClearedAt: projection.thread.timelineClearedAt ?? null,
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
     snoozedUntil: projection.thread.snoozedUntil ?? null,
     snoozedAt: projection.thread.snoozedAt ?? null,
@@ -1871,8 +1865,6 @@ function shellFromState(input: {
     pinnedAt: input.state.thread.pinnedAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     activeOrderKey: input.state.thread.activeOrderKey ?? null,
-    workInboxRole: input.state.thread.workInboxRole ?? null,
-    timelineClearedAt: input.state.thread.timelineClearedAt ?? null,
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
     snoozedUntil: input.state.thread.snoozedUntil ?? null,
     snoozedAt: input.state.thread.snoozedAt ?? null,
@@ -4294,8 +4286,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         case "auto-settle-candidates":
           return sql`${active}
             AND json_extract(t.payload_json, '$.settledOverride') IS NULL
-            AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
-            AND json_extract(t.payload_json, '$.workInboxRole') IS NOT 'main'`;
+            AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL`;
         case "auto-delete-candidates":
           return sql`${active}
             AND json_extract(t.payload_json, '$.settledOverride') = 'settled'

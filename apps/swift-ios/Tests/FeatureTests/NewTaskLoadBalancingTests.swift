@@ -17,7 +17,7 @@ struct NewTaskLoadBalancingTests {
         let matching = FeatureProject(id: "three", environmentID: "c", name: "Different label", path: "/elsewhere", repositoryCanonicalKey: anchor.repositoryCanonicalKey)
         let environments = ["a", "b", "c"].map { FeatureEnvironment(id: $0, name: $0, endpoint: "", connectionState: .connected) }
         let ready = try provider()
-        let configs = environments.map { MobileWorkspaceEnvironmentConfig(environmentID: $0.id, t3WorkDirectory: nil, providers: [ready]) }
+        let configs = environments.map { MobileWorkspaceEnvironmentConfig(environmentID: $0.id, providers: [ready]) }
         let selection = FeatureSelection(providerID: "personal", modelID: "gpt-5")
         let candidates = NewTaskLoadBalancing.candidates(anchor: anchor, projects: [anchor, other, matching], environments: environments,
             activeConnection: .connected, configs: configs, selection: selection, driver: "codex", weights: [:])
@@ -35,14 +35,14 @@ struct NewTaskLoadBalancingTests {
         let connected = FeatureEnvironment(id: "a", name: "A", endpoint: "", connectionState: .connected)
         for candidate in [try provider(driver: "claudeAgent"), try provider(model: "other"), try provider(authenticated: false)] {
             #expect(NewTaskLoadBalancing.candidates(anchor: anchor, projects: [anchor], environments: [connected], activeConnection: .connected,
-                configs: [.init(environmentID: "a", t3WorkDirectory: nil, providers: [candidate])], selection: selection, driver: "codex", weights: [:]).isEmpty)
+                configs: [.init(environmentID: "a", providers: [candidate])], selection: selection, driver: "codex", weights: [:]).isEmpty)
         }
         #expect(NewTaskLoadBalancing.candidates(anchor: anchor, projects: [anchor], environments: [connected], activeConnection: .connected,
-            configs: [.init(environmentID: "a", t3WorkDirectory: nil, providers: [ready])], selection: selection, driver: "codex", weights: ["a": 0]).isEmpty)
+            configs: [.init(environmentID: "a", providers: [ready])], selection: selection, driver: "codex", weights: ["a": 0]).isEmpty)
         var offline = connected
         offline.connectionState = .disconnected
         #expect(NewTaskLoadBalancing.candidates(anchor: anchor, projects: [anchor], environments: [offline], activeConnection: .connected,
-            configs: [.init(environmentID: "a", t3WorkDirectory: nil, providers: [ready])], selection: selection, driver: "codex", weights: [:]).isEmpty)
+            configs: [.init(environmentID: "a", providers: [ready])], selection: selection, driver: "codex", weights: [:]).isEmpty)
     }
 
     @Test func preferenceDecodingRetainsManualOnlyAndRejectsInvalidValues() {

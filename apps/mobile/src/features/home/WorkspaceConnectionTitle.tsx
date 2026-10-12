@@ -7,11 +7,7 @@ import { ActivityIndicator, Animated, Platform, Pressable, View } from "react-na
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
-import {
-  brandTitleOffset,
-  CompactBrandTitle,
-  type CompactBrandWorkspaceMenu,
-} from "../../components/CompactBrandTitle";
+import { brandTitleOffset, CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useWorkspaceState } from "../../state/workspace";
@@ -162,9 +158,6 @@ export function WorkspaceConnectionTitle(props: {
 export function getConnectionAwareBrandHeaderOptions(opts: {
   readonly onOpenEnvironments: () => void;
   readonly fallbackTitleStyle?: NativeStackNavigationOptions["headerTitleStyle"];
-  /** Keeps the lockup a workspace-switcher trigger while connected; the status
-      swap replaces it (and the menu) only while an environment is unavailable. */
-  readonly workspaceMenu?: CompactBrandWorkspaceMenu;
 }): NativeStackNavigationOptions {
   if (Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED) {
     return {
@@ -175,7 +168,7 @@ export function getConnectionAwareBrandHeaderOptions(opts: {
         {
           element: (
             <WorkspaceConnectionTitle
-              brand={<CompactBrandTitle nativeLeadingItem workspaceMenu={opts.workspaceMenu} />}
+              brand={<CompactBrandTitle nativeLeadingItem />}
               onPress={opts.onOpenEnvironments}
               statusOffset={brandTitleOffset(true)}
             />
@@ -190,7 +183,7 @@ export function getConnectionAwareBrandHeaderOptions(opts: {
   return {
     headerTitle: () => (
       <WorkspaceConnectionTitle
-        brand={<CompactBrandTitle workspaceMenu={opts.workspaceMenu} />}
+        brand={<CompactBrandTitle />}
         onPress={opts.onOpenEnvironments}
         statusOffset={brandTitleOffset(false)}
       />

@@ -37,8 +37,8 @@ const taskInput = (input: {
   threadId: input.threadId,
   workspaceStrategy: { type: "root" },
   modelSelection: {
-    instanceId: ProviderInstanceId.make("hermes"),
-    model: "hermes-1",
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5",
   },
   runtimeMode: "approval-required",
   interactionMode: "default",

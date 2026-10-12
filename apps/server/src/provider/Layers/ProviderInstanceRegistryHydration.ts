@@ -50,13 +50,8 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
-import {
-  HermesSessionBindingRepository,
-  HermesSessionBindingRepositoryError,
-} from "../../hermes/HermesSessionBindingRepository.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
@@ -67,83 +62,12 @@ import {
   ProviderOrchestrationAdapterInfrastructureLive,
 } from "./ProviderOrchestrationAdapterInfrastructure.ts";
 
-// Hermes persistence is late-bound by the production server wrapper. Keeping
-// it out of this base layer's public environment lets non-Hermes test/build
-// compositions hydrate the other built-in drivers without constructing a
-// database-backed Hermes repository.
 type ProviderInstanceRegistryHydrationEnv =
   | Exclude<
       BuiltInDriversEnv,
-      | ProviderOrchestrationAdapterInfrastructure
-      | HermesSessionBindingRepository
-      | ResetCreditCoordinator.ResetCreditCoordinator
+      ProviderOrchestrationAdapterInfrastructure | ResetCreditCoordinator.ResetCreditCoordinator
     >
   | ServerSettingsService;
-
-const unavailableHermesRepositoryOperation = <A>(
-  operation: string,
-): Effect.Effect<A, HermesSessionBindingRepositoryError> =>
-  Effect.fail(
-    new HermesSessionBindingRepositoryError({
-      operation,
-      detail: "Hermes persistence was not supplied to this runtime composition.",
-    }),
-  );
-
-const UnavailableHermesSessionBindingRepository = HermesSessionBindingRepository.of({
-  createBinding: () => unavailableHermesRepositoryOperation("createBinding"),
-  getByThreadId: () => unavailableHermesRepositoryOperation("getByThreadId"),
-  getByStoredIdentity: () => unavailableHermesRepositoryOperation("getByStoredIdentity"),
-  deleteBinding: () => unavailableHermesRepositoryOperation("deleteBinding"),
-  listProfileBindings: () => unavailableHermesRepositoryOperation("listProfileBindings"),
-  updateNegotiation: () => unavailableHermesRepositoryOperation("updateNegotiation"),
-  updateReconciliation: () => unavailableHermesRepositoryOperation("updateReconciliation"),
-  updateTitleState: () => unavailableHermesRepositoryOperation("updateTitleState"),
-  acquireOwnerLease: () => unavailableHermesRepositoryOperation("acquireOwnerLease"),
-  renewOwnerLease: () => unavailableHermesRepositoryOperation("renewOwnerLease"),
-  releaseOwnerLease: () => unavailableHermesRepositoryOperation("releaseOwnerLease"),
-  prepareMutationIntent: () => unavailableHermesRepositoryOperation("prepareMutationIntent"),
-  setSessionImportInheritedCount: () =>
-    unavailableHermesRepositoryOperation("setSessionImportInheritedCount"),
-  prepareSessionCreateIntent: () =>
-    unavailableHermesRepositoryOperation("prepareSessionCreateIntent"),
-  transitionSessionCreateIntent: () =>
-    unavailableHermesRepositoryOperation("transitionSessionCreateIntent"),
-  transitionMutationIntent: () => unavailableHermesRepositoryOperation("transitionMutationIntent"),
-  getMutationIntent: () => unavailableHermesRepositoryOperation("getMutationIntent"),
-  listUnsettledMutationIntents: () =>
-    unavailableHermesRepositoryOperation("listUnsettledMutationIntents"),
-  prepareSessionImport: () => unavailableHermesRepositoryOperation("prepareSessionImport"),
-  getSessionImportByStoredIdentity: () =>
-    unavailableHermesRepositoryOperation("getSessionImportByStoredIdentity"),
-  listSessionImports: () => unavailableHermesRepositoryOperation("listSessionImports"),
-  getMainSessionImport: () => unavailableHermesRepositoryOperation("getMainSessionImport"),
-  transitionSessionImport: () => unavailableHermesRepositoryOperation("transitionSessionImport"),
-  listHistoryThreadIds: () => unavailableHermesRepositoryOperation("listHistoryThreadIds"),
-  clearHistoryRecords: () => unavailableHermesRepositoryOperation("clearHistoryRecords"),
-});
-
-const isLoopbackHostname = (hostname: string): boolean => {
-  const host =
-    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-  if (host === "localhost" || host === "::1" || host === "::ffff:127.0.0.1") return true;
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
-};
-
-const remoteHermesEnabled = (settings: ServerSettings, config: unknown): boolean => {
-  if (typeof config !== "object" || config === null) return true;
-  const endpoint = Reflect.get(config, "endpoint");
-  if (typeof endpoint !== "string" || endpoint.trim() === "") return true;
-  let remote = true;
-  try {
-    remote = !isLoopbackHostname(new URL(endpoint).hostname);
-  } catch {
-    // Invalid endpoints remain visible to the provider's configuration diagnostics.
-    return true;
-  }
-  if (!remote) return true;
-  return settings.enableRemoteHermes && Reflect.get(config, "remoteAccessEnabled") === true;
-};
 
 /**
  * Synthesize a `ProviderInstanceConfigMap` from a `ServerSettings` snapshot.
@@ -162,20 +86,6 @@ export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
 ): ProviderInstanceConfigMap => {
   const merged: Record<string, ProviderInstanceConfig> = { ...settings.providerInstances };
-
-  for (const [instanceId, entry] of Object.entries(merged)) {
-    if (entry.driver !== "hermes") continue;
-    // Hermes is intentionally gated twice: the global rollout flag must be
-    // enabled and the explicit instance must opt in. Missing `enabled` is
-    // therefore false for Hermes even though other providers default it true.
-    merged[instanceId] = {
-      ...entry,
-      enabled:
-        settings.enableHermes &&
-        entry.enabled === true &&
-        remoteHermesEnabled(settings, entry.config),
-    };
-  }
 
   for (const driver of BUILT_IN_DRIVERS) {
     const instanceId = defaultInstanceIdForDriver(driver.driverKind);
@@ -198,14 +108,6 @@ export const deriveProviderInstanceConfigMap = (
 
     merged[instanceId] = {
       driver: driver.driverKind,
-      ...(driver.driverKind === "hermes"
-        ? {
-            enabled:
-              settings.enableHermes &&
-              legacyConfig.enabled === true &&
-              remoteHermesEnabled(settings, legacyConfig),
-          }
-        : {}),
       config: legacyConfig,
     };
   }
@@ -266,7 +168,6 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
 > = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
-    const hermesRepository = yield* Effect.serviceOption(HermesSessionBindingRepository);
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -283,10 +184,6 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
         Layer.mergeAll(
           ProviderOrchestrationAdapterInfrastructureLive,
           ResetCreditCoordinator.layer,
-          Layer.succeed(
-            HermesSessionBindingRepository,
-            Option.getOrElse(hermesRepository, () => UnavailableHermesSessionBindingRepository),
-          ),
         ),
       ),
     );

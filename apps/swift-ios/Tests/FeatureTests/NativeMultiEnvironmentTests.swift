@@ -830,8 +830,6 @@ private func multiEnvironmentDetail(
                 settledAt: nil,
                 unsettledAt: nil,
                 pinnedAt: nil,
-                workInboxRole: nil,
-                timelineClearedAt: nil,
                 snoozedUntil: nil,
                 snoozedAt: nil,
                 lastVisitedAt: nil,

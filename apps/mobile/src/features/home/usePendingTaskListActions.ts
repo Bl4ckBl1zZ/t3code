@@ -20,7 +20,6 @@ export function usePendingTaskListActions(): {
           environmentId: String(pendingTask.message.environmentId),
           projectId: String(pendingTask.creation.projectId),
           pendingTaskId: String(pendingTask.message.messageId),
-          workspace: pendingTask.creation.prepareWorkspace === false ? "work" : "code",
         },
       });
     },

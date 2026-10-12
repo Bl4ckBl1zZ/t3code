@@ -10,13 +10,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import type { AsyncResult } from "effect/unstable/reactivity";
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-import type {
-  ContextMenuItem,
-  EnvironmentId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   activeThreadAnchorTimestampMs,
@@ -193,27 +187,6 @@ export function isSidebarLifecycleThread(
   return thread.archivedAt === null && !isSidebarSubagentThread(thread);
 }
 
-export type SidebarWorkspace = "work" | "code" | "chat";
-
-export function sidebarProviderInstanceKey(
-  environmentId: EnvironmentId,
-  providerInstanceId: ProviderInstanceId,
-): string {
-  return `${environmentId}\u0000${providerInstanceId}`;
-}
-
-export function isHermesSidebarThread(
-  thread: Pick<SidebarThreadSummary, "environmentId" | "providerInstanceId">,
-  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
-): boolean {
-  const driverKind = providerDriverKindByInstance.get(
-    sidebarProviderInstanceKey(thread.environmentId, thread.providerInstanceId),
-  );
-  return (
-    driverKind === "hermes" || (driverKind === undefined && thread.providerInstanceId === "hermes")
-  );
-}
-
 export function sidebarProjectKey(
   environmentId: EnvironmentId,
   projectId: SidebarThreadSummary["projectId"],
@@ -221,134 +194,16 @@ export function sidebarProjectKey(
   return `${environmentId}:${projectId}`;
 }
 
-/**
- * Applies the selected workspace to the sidebar lifecycle lists.
- *
- * The work and code workspaces partition lifecycle threads on Hermes
- * membership: Hermes conversations belong to work, everything else to code.
- * Provider instance ids are user-configurable, so Hermes membership comes
- * from the environment's provider metadata. The literal `hermes` fallback is
- * only for cached historical shells whose server config has not loaded yet.
- *
- * Membership is provider-driven only: every Hermes conversation belongs to
- * work, including one running on a regular Code project (Hermes as a coding
- * provider). Hermes threads are never shown in the code workspace.
- */
-export function isThreadVisibleInSidebarWorkspace(
-  thread: Pick<
-    SidebarThreadSummary,
-    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId" | "workInboxRole"
-  >,
-  workspace: SidebarWorkspace,
-  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
-): boolean {
-  if (!isSidebarLifecycleThread(thread)) return false;
-  const isHermes = isHermesSidebarThread(thread, providerDriverKindByInstance);
-  switch (workspace) {
-    case "code":
-      return !isHermes;
-    case "work":
-      // Work keeps its whole inbox — including Main — minus conversations
-      // born on the Chat surface.
-      return isHermes && thread.workInboxRole !== "chat";
-    case "chat":
-      return isHermes && thread.workInboxRole === "chat";
-  }
-}
-
-export type WorkspaceLandingKind = "code-composer" | "work-composer" | "chat-composer";
-
-/** Every workspace opens a composer when there is no thread to restore. */
-export function workspaceLandingKind(workspace: SidebarWorkspace): WorkspaceLandingKind {
-  switch (workspace) {
-    case "code":
-      return "code-composer";
-    case "work":
-      return "work-composer";
-    case "chat":
-      return "chat-composer";
-  }
-}
-
-/**
- * Where the sidebar should route after a workspace switch.
- *
- * The remembered thread for the target workspace wins when it is still
- * visible there. Otherwise, leaving a thread that belongs to the other
- * workspace open would strand the user on stale content, so the switch
- * falls back to the target workspace's new-chat composer. Routes that are
- * already workspace-neutral (the index composer) stay put, but a draft
- * composer pinned to the other workspace's project (e.g. a Hermes Work
- * draft) is not neutral and also routes to the target composer.
- */
-export type WorkspaceSwitchNavigation =
-  | { kind: "remembered-thread"; threadKey: string }
-  | { kind: "new-chat" }
-  | { kind: "stay" };
-
-export function resolveWorkspaceSwitchNavigation(input: {
-  nextWorkspace: SidebarWorkspace;
-  rememberedThreadKey: string | undefined;
-  routeThreadKey: string | null;
-  routeDraftWorkspace?: SidebarWorkspace | null;
-  threads: readonly (Pick<
-    SidebarThreadSummary,
-    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId" | "workInboxRole"
-  > & { readonly threadKey: string })[];
-  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>;
-}): WorkspaceSwitchNavigation {
-  const isVisible = (threadKey: string | null): boolean => {
-    if (threadKey === null) return false;
-    const thread = input.threads.find((candidate) => candidate.threadKey === threadKey);
-    return (
-      thread !== undefined &&
-      isThreadVisibleInSidebarWorkspace(
-        thread,
-        input.nextWorkspace,
-        input.providerDriverKindByInstance,
-      )
-    );
-  };
-  if (input.rememberedThreadKey !== undefined && isVisible(input.rememberedThreadKey)) {
-    return { kind: "remembered-thread", threadKey: input.rememberedThreadKey };
-  }
-  if (input.routeThreadKey === null) {
-    return input.routeDraftWorkspace != null && input.routeDraftWorkspace !== input.nextWorkspace
-      ? { kind: "new-chat" }
-      : { kind: "stay" };
-  }
-  if (isVisible(input.routeThreadKey)) {
-    return { kind: "stay" };
-  }
-  return { kind: "new-chat" };
-}
-
-export type WorkInboxActiveSection = "main" | "needs-you" | "active";
-
-export function workInboxActiveSection(
-  thread: Pick<
-    SidebarThreadSummary,
-    "hasPendingApprovals" | "hasPendingUserInput" | "workInboxRole"
-  >,
-): WorkInboxActiveSection {
-  if (thread.workInboxRole === "main") return "main";
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "needs-you";
-  return "active";
-}
-
-export function canPinWorkInboxThread(input: {
-  thread: Pick<
-    SidebarThreadSummary,
-    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId" | "workInboxRole"
-  >;
-  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>;
+/** Pinning is offered on live inbox rows of environments that support it. */
+export function canPinSidebarThread(input: {
+  thread: Pick<SidebarThreadSummary, "archivedAt" | "lineage">;
+  supportsPinning: boolean;
   isSnoozed: boolean;
   isSettled: boolean;
 }): boolean {
   return (
-    input.thread.workInboxRole !== "main" &&
+    input.supportsPinning &&
     isSidebarLifecycleThread(input.thread) &&
-    isHermesSidebarThread(input.thread, input.providerDriverKindByInstance) &&
     !input.isSnoozed &&
     !input.isSettled
   );
@@ -878,43 +733,6 @@ export function isSidebarThreadWorking(thread: ThreadStatusInput): boolean {
   if (status !== "working" && status !== "background") return false;
   // A plan prompt outranks lingering background work, as in the status pill.
   return resolveThreadStatusPill({ thread })?.label !== "Plan Ready";
-}
-
-/**
- * The lozenge a T3 Work row leads with, in place of the project name a Code
- * card carries there.
- *
- * Work is an inbox: every row is the same assistant on the same backing
- * checkout, so naming that is a constant and what differs between rows is
- * state. Approval and input collapse into one "Needs you" because the useful
- * distinction is that it is blocked on you at all — what it wants is the line
- * underneath. `null` for a resting thread, which leaves the row as title + age
- * rather than badging "Ready" on everything idle.
- *
- * Mirrors the mobile clients' `resolveWorkInboxBadge` / `workInboxBadge`, so a
- * Work row reads the same on every surface.
- */
-export type WorkInboxBadge = "needs-you" | "working" | "failed" | "limited" | "done";
-
-export function resolveWorkInboxBadge(input: {
-  readonly status: SidebarThreadStatus;
-  readonly hasUnseenCompletion: boolean;
-}): WorkInboxBadge | null {
-  switch (input.status) {
-    case "approval":
-    case "input":
-      return "needs-you";
-    case "working":
-    // Background work reads as working in the inbox: the row is not yours yet.
-    case "background":
-      return "working";
-    case "failed":
-      return "failed";
-    case "limited":
-      return "limited";
-    case "ready":
-      return input.hasUnseenCompletion ? "done" : null;
-  }
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not

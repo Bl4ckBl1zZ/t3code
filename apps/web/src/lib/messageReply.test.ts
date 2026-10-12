@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { extractLeadingMessageReply } from "./messageReply";
 
 describe("extractLeadingMessageReply", () => {
-  it("separates a multiline Hermes reply envelope from the reply body", () => {
+  it("separates a multiline reply envelope from the reply body", () => {
     expect(
       extractLeadingMessageReply(
         [
@@ -18,7 +18,7 @@ describe("extractLeadingMessageReply", () => {
     });
   });
 
-  it("supports replies to Hermes's previous message", () => {
+  it("supports replies to the previous message", () => {
     expect(
       extractLeadingMessageReply(
         '[Replying to your previous message: "Use the direct train."]\n\nthis one',

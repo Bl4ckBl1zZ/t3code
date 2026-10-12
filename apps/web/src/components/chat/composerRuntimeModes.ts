@@ -1,8 +1,5 @@
-import type { ProviderDriverKind, RuntimeMode } from "@t3tools/contracts";
-import { HERMES_RUNTIME_MODE_CHOICES, hermesRuntimeModeChoice } from "@t3tools/shared/runtimeModes";
+import type { RuntimeMode } from "@t3tools/contracts";
 import { type LucideIcon, LockIcon, LockOpenIcon, PenLineIcon, SparklesIcon } from "lucide-react";
-
-import { HERMES_DRIVER_KIND } from "../../t3WorkProject";
 
 export const runtimeModeConfig: Record<
   RuntimeMode,
@@ -43,31 +40,16 @@ const defaultRuntimeModeOptions: ReadonlyArray<RuntimeModeOption> = runtimeModeO
   (mode) => ({ mode, ...runtimeModeConfig[mode] }),
 );
 
-const hermesRuntimeModeOptions: ReadonlyArray<RuntimeModeOption> = HERMES_RUNTIME_MODE_CHOICES.map(
-  (choice) => ({ ...choice, icon: runtimeModeConfig[choice.mode].icon }),
-);
-
 /**
- * The access picker a thread gets. Hermes is given the modes it actually
- * distinguishes, with copy that names what its own gate does; a mode it does
- * not offer still has to render, since a thread can carry one in from wherever
- * it was created. Other providers offer the modes their snapshot lists as
- * supported (all of them when it lists none); a carried-in mode outside that
- * set shows as the first supported one, which is the mode the server runs it
- * in.
+ * The access picker a thread gets. Providers offer the modes their snapshot
+ * lists as supported (all of them when it lists none); a carried-in mode
+ * outside that set shows as the first supported one, which is the mode the
+ * server runs it in.
  */
 export function resolveRuntimeModePicker(
-  driverKind: ProviderDriverKind,
   runtimeMode: RuntimeMode,
   supportedRuntimeModes?: ReadonlyArray<RuntimeMode>,
 ): { options: ReadonlyArray<RuntimeModeOption>; selected: RuntimeModeOption } {
-  if (driverKind === HERMES_DRIVER_KIND) {
-    const selectedMode = hermesRuntimeModeChoice(runtimeMode).mode;
-    return {
-      options: hermesRuntimeModeOptions,
-      selected: hermesRuntimeModeOptions.find((option) => option.mode === selectedMode)!,
-    };
-  }
   if (supportedRuntimeModes !== undefined && supportedRuntimeModes.length > 0) {
     const options = defaultRuntimeModeOptions.filter((option) =>
       supportedRuntimeModes.includes(option.mode),

@@ -9,7 +9,7 @@
  *
  * @module AttachmentMaterialization
  */
-import { ProviderDriverKind, type ChatAttachment, type ThreadId } from "@t3tools/contracts";
+import type { ChatAttachment, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -34,26 +34,6 @@ import {
 export type AttachmentDelivery = "workspace" | "inline" | "both";
 
 /**
- * Hermes Serve is the one provider whose gateway may run on another host — see
- * `HermesConnectionSecurity.ts`, which classifies endpoints as loopback or
- * remote. A file written into the server's worktree is invisible to a remote
- * agent, and Hermes already accepts every file type inline, so it loses nothing.
- * Every other built-in driver spawns its agent as a local child process and can
- * therefore open the file itself.
- *
- * Stated as an exclusion rather than an allowlist on purpose: these are branded
- * `ProviderDriverKind` slugs (`"claudeAgent"`, not `"claude"`), and an allowlist
- * that misspells one fails silently — the upload is simply never written and no
- * warning is raised. Listing only the exception keeps a new local driver working
- * by default, and leaves exactly one name to keep in sync — pinned against
- * `HERMES_PROVIDER` by `AttachmentMaterializationDrivers.test.ts`.
- */
-const HERMES_SERVE_DRIVER_KIND = ProviderDriverKind.make("hermes");
-const DRIVERS_WITHOUT_LOCAL_FILESYSTEM_ACCESS: ReadonlySet<ProviderDriverKind> = new Set([
-  HERMES_SERVE_DRIVER_KIND,
-]);
-
-/**
  * The single place any of this is decided.
  *
  * Images resolve to `"both"`: the agent sees the screenshot immediately, and it
@@ -62,16 +42,14 @@ const DRIVERS_WITHOUT_LOCAL_FILESYSTEM_ACCESS: ReadonlySet<ProviderDriverKind> =
  * was already inline. The savings come from the non-image files, which are the
  * ones that did not work at all.
  *
- * This is driver-level policy, deliberately not the same thing as an adapter's
- * runtime image capability: ACP negotiates image support per session, so an ACP
- * agent that did not negotiate images still gets `"both"` here, skips the inline
- * block inside the adapter, and falls back to the path in the prompt.
+ * Every built-in driver spawns its agent as a local child process, so each can
+ * open a file written into its workspace. This is deliberately not the same
+ * thing as an adapter's runtime image capability: ACP negotiates image support
+ * per session, so an ACP agent that did not negotiate images still gets `"both"`
+ * here, skips the inline block inside the adapter, and falls back to the path in
+ * the prompt.
  */
-export function resolveAttachmentDelivery(
-  driver: ProviderDriverKind,
-  attachment: ChatAttachment,
-): AttachmentDelivery {
-  if (DRIVERS_WITHOUT_LOCAL_FILESYSTEM_ACCESS.has(driver)) return "inline";
+export function resolveAttachmentDelivery(attachment: ChatAttachment): AttachmentDelivery {
   // Preview annotation screenshots are UI plumbing. They belong in the model's
   // context, not in the user's project.
   if (attachment.role === "preview-annotation") return "inline";
@@ -131,8 +109,8 @@ export interface AttachmentMaterializationResult {
   /** What the adapter still sends inline: `"both"` images plus anything that degraded. */
   readonly inlineAttachments: ReadonlyArray<ChatAttachment>;
   /**
-   * `"skipped"` means there was nothing to write (no workspace, or an
-   * inline-only provider) and is the expected, silent path. `"failed"` means a
+   * `"skipped"` means there was nothing to write (no workspace, or only
+   * inline attachments) and is the expected, silent path. `"failed"` means a
    * workspace existed and the write lost, and is worth showing the user.
    */
   readonly outcome: "written" | "skipped" | "failed";
@@ -140,7 +118,6 @@ export interface AttachmentMaterializationResult {
 
 export interface AttachmentMaterializationInput {
   readonly threadId: ThreadId;
-  readonly driver: ProviderDriverKind;
   readonly cwd: string | null;
   readonly attachments: ReadonlyArray<ChatAttachment>;
 }
@@ -256,7 +233,7 @@ export const make = Effect.gen(function* () {
     const diskBound: Array<ChatAttachment> = [];
     const alsoInline = new Set<string>();
     for (const attachment of input.attachments) {
-      const delivery = resolveAttachmentDelivery(input.driver, attachment);
+      const delivery = resolveAttachmentDelivery(attachment);
       if (delivery === "inline") {
         inline.push(attachment);
         continue;

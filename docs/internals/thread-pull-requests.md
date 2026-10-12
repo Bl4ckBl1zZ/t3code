@@ -57,7 +57,7 @@ re-read membership/revisions/permissions, and invalidate reads even after partia
 `ThreadSettlementReactor` starts after recovery and sweeps without client demand. Local inactivity
 and persisted linked-PR decisions finish before branch/host lookups, which share discovery caches.
 `ThreadSettlementPolicy` checks V2 run/request state, queued messages, background processes,
-delegated agents and snooze wake conditions. Explicit keep-active and Work main threads remain
+delegated agents and snooze wake conditions. Explicit keep-active threads remain
 active. All visible explicit links must have terminal snapshots; dismissed stack members do not
 participate. A PR only settles resumed work if its actual merge/close time follows the user anchor:
 the last message the user wrote (`createdBy: "user"`). Agent, server and delegated-completion wakes

@@ -294,7 +294,6 @@ export const layer: Layer.Layer<
       // policy, plus anything the workspace write could not take.
       const uploads = yield* attachmentMaterialization.materialize({
         threadId: projection.thread.id,
-        driver: session.driver,
         cwd: resolvedRuntimePolicy.cwd,
         attachments: message.attachments,
       });

@@ -57,7 +57,7 @@ scans again. Entries are never written to the status cache and are dropped when 
 rebuilt.
 
 Codex, Claude, OpenCode and Antigravity implement `snapshotForCwd`; Antigravity also records the
-workspaces its sessions report. Cursor, Grok, Pi, ACP Registry, Hermes and OpenClaw show their
+workspaces its sessions report. Cursor, Grok, Pi, ACP Registry and OpenClaw show their
 machine lists in every workspace.
 
 ## OpenCode server ownership and catalog
@@ -222,8 +222,7 @@ start no Codex turn settle on a provider turn without a native ref, which native
 not count. Claude's SDK mode emits no goal events; its [adapter][claudeadapter] reads goal state
 from the synthetic command output and Stop hook feedback in the transcript. The command menu shows
 `/goal` only where the provider lists it: the Codex provider adds it, and Claude reports it itself.
-No other adapter mirrors a goal. Hermes lists its own `/goal`, which runs as an ordinary Hermes
-command with no goal row.
+No other adapter mirrors a goal.
 
 ## Commands that outlive their turn
 

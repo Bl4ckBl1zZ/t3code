@@ -140,7 +140,6 @@ describe("V2 automatic settlement policy", () => {
       { archivedAt: before },
       { deletedAt: before },
       { settledOverride: "active" as const },
-      { workInboxRole: "main" as const },
       { activeRunId: RunId.make("run") },
       { status: "queued" as const },
       { backgroundProcessCount: 1 },

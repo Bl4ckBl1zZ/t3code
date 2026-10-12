@@ -162,8 +162,6 @@ export interface EnvironmentThreadShell {
       pinned before reordering existed (they sort below arranged ones). */
   readonly pinOrderKey: string | null;
   readonly activeOrderKey?: string | null;
-  readonly workInboxRole: "main" | "chat" | null;
-  readonly timelineClearedAt?: string | null;
   /** Set while the user has turned automatic settlement off for this thread. */
   readonly autoSettleDisabledAt?: string | null;
   readonly snoozedUntil: string | null;
@@ -335,8 +333,6 @@ export function presentThreadShell(
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,
     activeOrderKey: thread.activeOrderKey ?? null,
-    workInboxRole: thread.workInboxRole ?? null,
-    timelineClearedAt: nullableIso(thread.timelineClearedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),

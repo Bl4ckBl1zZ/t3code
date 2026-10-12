@@ -327,7 +327,6 @@ export const layer: Layer.Layer<
           });
           const uploads = yield* attachmentMaterialization.materialize({
             threadId: input.threadId,
-            driver: loaded.providerThread.driver,
             cwd: policy.cwd,
             attachments: message.attachments,
           });

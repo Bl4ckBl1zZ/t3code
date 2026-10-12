@@ -30,7 +30,6 @@ import { EmptyState } from "../../components/EmptyState";
 import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey } from "../../lib/scopedEntities";
-import type { MobileWorkspace } from "../../lib/mobileWorkspace";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
@@ -93,7 +92,6 @@ interface HomeScreenProps {
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
-  readonly workspace: MobileWorkspace;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
@@ -1080,10 +1078,6 @@ export function HomeScreen(props: HomeScreenProps) {
     projectCount: props.projects.length,
   });
 
-  const catalogNotReady =
-    props.catalogState.isLoadingConnections ||
-    !props.catalogState.hasConnections ||
-    !props.catalogState.hasLoadedShellSnapshot;
   if (!hasAnyThreads) {
     return (
       <View
@@ -1095,14 +1089,8 @@ export function HomeScreen(props: HomeScreenProps) {
       >
         <View className="w-full max-w-[430px]">
           <EmptyState
-            title={
-              props.workspace === "work" && !catalogNotReady ? "No threads yet" : emptyState.title
-            }
-            detail={
-              props.workspace === "work" && !catalogNotReady
-                ? "Create a thread to start a new Hermes conversation."
-                : emptyState.detail
-            }
+            title={emptyState.title}
+            detail={emptyState.detail}
             actionLabel={!props.catalogState.hasReadyEnvironment ? "Add environment" : undefined}
             onAction={!props.catalogState.hasReadyEnvironment ? props.onAddConnection : undefined}
             variant="plain"
@@ -1137,14 +1125,7 @@ export function HomeScreen(props: HomeScreenProps) {
         detail="Choose another environment or create a new task."
       />
     ) : (
-      <EmptyState
-        title="No threads yet"
-        detail={
-          props.workspace === "work"
-            ? "Create a thread to start a new Hermes conversation."
-            : "Create a task to start a new coding runtime."
-        }
-      />
+      <EmptyState title="No threads yet" detail="Create a task to start a new coding runtime." />
     )
   ) : null;
   // Self-contained: v1's listEmpty keys off projectGroups, which ignores the

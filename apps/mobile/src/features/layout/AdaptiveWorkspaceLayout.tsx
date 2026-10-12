@@ -36,8 +36,7 @@ import {
 } from "../../lib/layout";
 import { resolveThreadSelectionNavigationAction } from "../../lib/adaptive-navigation";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { useStartHermesConversation } from "../threads/use-start-hermes-conversation";
-import { mobilePreferencesAtom, useMobileWorkspace } from "../../state/preferences";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import {
   DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS,
   resolveMobileProjectGroupingSettings,
@@ -219,8 +218,6 @@ function AdaptiveWorkspaceLayoutContent(
     readonly projectGroupingMode: SidebarProjectGroupingMode;
   },
 ) {
-  const [workspace] = useMobileWorkspace();
-  const startHermesConversation = useStartHermesConversation();
   const projectGroupingMode = props.projectGroupingMode;
   const { width, height } = useWindowDimensions();
   const pathname = props.pathname;
@@ -440,12 +437,8 @@ function AdaptiveWorkspaceLayoutContent(
   }, [navigation]);
 
   const handleStartNewTask = useCallback(() => {
-    if (workspace === "work") {
-      startHermesConversation();
-      return;
-    }
     navigation.navigate("NewTaskSheet", { screen: "NewTask" });
-  }, [navigation, startHermesConversation, workspace]);
+  }, [navigation]);
 
   // Minted here (root stack navigation) so the sidebar pane stays free of
   // navigation hooks — on iOS it renders inside an independent nav tree.

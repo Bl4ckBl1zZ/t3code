@@ -5,14 +5,8 @@ sheets use the system glass material.
 
 ## Home
 
-- **Tabs.** Home has three tabs: **Code**, **Work** and **Chat**.
-- **New.** The **+** at the bottom right starts something new:
-  - a **New Task** from Code;
-  - a **New Conversation** from Work or Chat;
-  - **Add Project** if you don't have a project yet.
-
-  On iOS 27 the **+** sits in its own circle beside the tabs. On iPad, use the compose button in
-  the toolbar or `Cmd+N`.
+- **New.** The **+** at the bottom right starts a **New Task**, or **Add Project** if you don't
+  have a project yet. On iPad, use the compose button in the toolbar or `Cmd+N`.
 
 - **No project.** In a new task, the project menu lists **No Project** right after the current
   project, or first when none is chosen, once for each connected machine that keeps a folder for
@@ -28,16 +22,16 @@ sheets use the system glass material.
   - **Select Threads** and **Arrange Threads**;
   - **Pull Requests** and **Drafts**;
   - **Add Project…**.
-- **Connection problems** appear as a banner at the top of the list, with **Reconnect**. The tabs
-  stay available, and threads from reachable environments keep working. Pull down on the list to
+- **Connection problems** appear as a banner at the top of the list, with **Reconnect**. Threads
+  from reachable environments keep working. Pull down on the list to
   refresh.
 - **Opening the app.** Home appears right away with the threads from your last visit, marked as
   connecting until your environments respond. The first time, it shows placeholder rows instead.
 
 ## Threads
 
-- **Header.** The thread's status, branch and environment appear under its title. Chats show
-  **Chat** and the environment. On versions before iOS 26 this line sits below the title.
+- **Header.** The thread's status, branch and environment appear under its title. On versions
+  before iOS 26 this line sits below the title.
 - **Toolbar.**
   - The **(i)** button opens the thread's details.
   - **⋯** holds pin, Files, Review, Source Control, Terminal, the linked pull request, unsnooze,
@@ -122,8 +116,7 @@ sheets use the system glass material.
 - **Notifications.** **Settings → Notifications** chooses which events alert you: a task that needs
   your input, finishes, or fails. Tapping a notification opens its thread, waiting for it to load if
   it was started elsewhere.
-- **Automations and Work.** **Automations**, and **Work Settings** on the Work tab, are in Home's
-  **More** menu.
+- **Automations.** **Automations** is in Home's **More** menu.
 
 ## Feedback
 

@@ -419,12 +419,6 @@ final class ThreadWorkLogTests: XCTestCase {
         )
         XCTAssertEqual(
             ProviderErrorPresentation.present(
-                "hermes provider protocol error: Attachments are disabled for this Hermes instance"
-            ),
-            "Hermes attachments are turned off. Enable Attachments in Settings → Providers, then try again."
-        )
-        XCTAssertEqual(
-            ProviderErrorPresentation.present(
                 "Failed to start run run-1 on claude provider thread pt-1."
             ),
             "Claude couldn't start this message. Check the provider connection in Settings → Providers, then try again."

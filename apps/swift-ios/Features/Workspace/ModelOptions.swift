@@ -45,16 +45,6 @@ public struct ModelProviderGroup: Identifiable, Equatable, Sendable {
     public let models: [ModelOption]
 }
 
-/// Which providers a picker may offer. Hermes is the T3 Work assistant and the
-/// only thing T3 Work runs on, and it is not a coding provider — so a T3 Work
-/// picker lists Hermes and nothing else, and a Code picker lists everything
-/// else. `all` is for surfaces that are neither, such as automations.
-public enum ModelOptionProviderScope: Equatable, Sendable {
-    case all
-    case hermesOnly
-    case excludeHermes
-}
-
 /// One entry in the model menu. The top level is a provider (or its legacy
 /// shelf) and `subactions` are its models; nothing nests deeper than that.
 public struct ModelMenuAction: Identifiable, Equatable, Sendable {
@@ -69,8 +59,6 @@ public struct ModelMenuAction: Identifiable, Equatable, Sendable {
 }
 
 public enum ModelOptions {
-    private static let hermesDriver = "hermes"
-
     /// A stored model selection is only usable when its provider instance is
     /// currently enabled, installed, and authenticated on the server. Returns
     /// the selection unchanged when usable, otherwise `nil` so callers fall
@@ -90,8 +78,7 @@ public enum ModelOptions {
 
     public static func build(
         config: ServerConfigSnapshot?,
-        fallbackSelection: ModelSelection?,
-        scope: ModelOptionProviderScope = .all
+        fallbackSelection: ModelSelection?
     ) -> [ModelOption] {
         // Insertion-ordered by key: a fallback selection that names a model the
         // catalog already lists refreshes it in place rather than repeating it
@@ -103,7 +90,7 @@ public enum ModelOptions {
         }
 
         for provider in config?.providers ?? [] {
-            guard isUsable(provider), matches(provider.driver, scope) else { continue }
+            guard isUsable(provider) else { continue }
             let providerLabel = displayLabel(provider)
             // This builder reads the raw config rather than the mapped
             // `FeatureProvider` catalog, so it has to apply model visibility
@@ -237,38 +224,6 @@ public enum ModelOptions {
         case "claudeAgent": return "Claude"
         default: return provider.instanceId
         }
-    }
-
-    private static func matches(_ driver: String, _ scope: ModelOptionProviderScope) -> Bool {
-        switch scope {
-        case .all: true
-        case .hermesOnly: driver == hermesDriver
-        case .excludeHermes: driver != hermesDriver
-        }
-    }
-
-    /// Narrow a feature-layer provider list to one side of the Hermes split.
-    ///
-    /// ``build(config:fallbackSelection:scope:)`` scopes the wire snapshot for
-    /// menu-shaped pickers; the daily-UX sheet reads `[FeatureProvider]`
-    /// instead, so it scopes the provider list itself and every derived view —
-    /// catalog, groups, favourites, recents, selection resolution — narrows
-    /// with it.
-    public static func scoped(
-        _ providers: [FeatureProvider],
-        to scope: ModelOptionProviderScope
-    ) -> [FeatureProvider] {
-        providers.filter { matches($0.driver, scope) }
-    }
-
-    /// Whether a provider instance is the Hermes assistant, resolved against a
-    /// feature-layer provider list.
-    public static func isHermesProvider(
-        _ providerID: String?,
-        in providers: [FeatureProvider]
-    ) -> Bool {
-        guard let providerID else { return false }
-        return providers.first { $0.id == providerID }?.driver == hermesDriver
     }
 
     // MARK: - Menu

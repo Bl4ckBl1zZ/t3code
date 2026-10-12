@@ -5,20 +5,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
-import {
-  buildProviderDriverMap,
-  isHermesProviderInstance,
-  isMobileWorkspaceThread,
-  resolveHermesConversationTarget,
-} from "../../lib/mobileWorkspace";
-import { useStartHermesConversation } from "../threads/use-start-hermes-conversation";
-import { useMobileWorkspace } from "../../state/preferences";
+import { useProjects, useThreadShells } from "../../state/entities";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import { HermesSetupCard } from "../hermes/HermesSetupCard";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
@@ -37,18 +28,18 @@ export function HomeRouteScreen() {
   const { layout } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
   const threads = useThreadShells();
-  const serverConfigs = useServerConfigs();
-  const [workspace, setWorkspace] = useMobileWorkspace();
-  const providerDrivers = useMemo(() => buildProviderDriverMap(serverConfigs), [serverConfigs]);
   const visibleThreads = useMemo(
-    () => threads.filter((thread) => isMobileWorkspaceThread(thread, workspace, providerDrivers)),
-    [providerDrivers, threads, workspace],
+    () =>
+      threads.filter(
+        (thread) =>
+          thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent",
+      ),
+    [threads],
   );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
-  const [setupEnvironmentInProgress, setSetupEnvironmentInProgress] = useState<string | null>(null);
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -67,22 +58,7 @@ export function HomeRouteScreen() {
     regenerateThreadTitle,
     unsettleThread,
   } = useThreadListActions();
-  const allPendingTasks = usePendingNewTasks();
-  const pendingTasks = useMemo(
-    () =>
-      workspace === "code"
-        ? allPendingTasks
-        : allPendingTasks.filter(
-            (task) =>
-              task.message.modelSelection !== undefined &&
-              isHermesProviderInstance(
-                task.message.environmentId,
-                task.message.modelSelection.instanceId,
-                providerDrivers,
-              ),
-          ),
-    [allPendingTasks, providerDrivers, workspace],
-  );
+  const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(() => {
     const connectionStateByEnvironmentId = new Map(
@@ -132,45 +108,9 @@ export function HomeRouteScreen() {
       setSelectedProjectKey(null);
     }
   }, [projectFilterOptions, selectedProjectKey]);
-  const startHermesConversation = useStartHermesConversation({
-    requiredEnvironmentId: selectedEnvironmentId,
-  });
   const startNewTask = () => {
-    if (workspace === "code") {
-      navigation.navigate("NewTaskSheet", { screen: "NewTask" });
-      return;
-    }
-    startHermesConversation();
+    navigation.navigate("NewTaskSheet", { screen: "NewTask" });
   };
-
-  const setupEnvironmentId = selectedEnvironmentId ?? serverConfigs.keys().next().value ?? null;
-  const needsHermesSetup =
-    workspace === "work" &&
-    setupEnvironmentId !== null &&
-    (setupEnvironmentInProgress === setupEnvironmentId ||
-      resolveHermesConversationTarget({
-        serverConfigs,
-        requiredEnvironmentId: setupEnvironmentId,
-      }) === null);
-  const setupProvider = setupEnvironmentId
-    ? serverConfigs
-        .get(setupEnvironmentId)
-        ?.providers.find((provider) => provider.driver === "hermes")
-    : undefined;
-  const setupCard =
-    needsHermesSetup && setupEnvironmentId ? (
-      <HermesSetupCard
-        key={`${setupEnvironmentId}:${setupProvider?.instanceId ?? "hermes"}`}
-        environmentId={setupEnvironmentId}
-        onStarted={() => setSetupEnvironmentInProgress(setupEnvironmentId)}
-        onConnected={() => setSetupEnvironmentInProgress(null)}
-        providerInstanceId={setupProvider?.instanceId ?? "hermes"}
-        environmentLabel={
-          environments.find((environment) => environment.environmentId === setupEnvironmentId)
-            ?.label
-        }
-      />
-    ) : null;
 
   // In split layouts the persistent sidebar IS the thread list — Home becomes
   // an empty detail pane so selecting a thread never transitions layouts.
@@ -193,7 +133,6 @@ export function HomeRouteScreen() {
             />
           }
         />
-        {setupCard}
         <WorkspaceEmptyDetail onStartNewTask={startNewTask} />
       </>
     );
@@ -205,30 +144,25 @@ export function HomeRouteScreen() {
         {/* Restore the compact title after the split branch blanks the detail
             header. The brand slot doubles as the connection status surface:
             while an environment reconnects, the lockup fades to a status label
-            in place (no layout shift in the list below); while connected it
-            stays the workspace-switcher trigger. */}
+            in place (no layout shift in the list below). */}
         <NativeStackScreenOptions
-          optionsVersion={workspace}
           options={getConnectionAwareBrandHeaderOptions({
             onOpenEnvironments: () =>
               navigation.navigate("SettingsSheet", {
                 screen: "SettingsContent",
                 params: { screen: "SettingsEnvironments" },
               }),
-            workspaceMenu: { workspace, onWorkspaceChange: setWorkspace },
           })}
         />
         <HomeHeader
           environments={environments}
-          workspace={workspace}
-          projects={workspace === "work" ? [] : projectFilterOptions}
+          projects={projectFilterOptions}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
-          selectedProjectKey={workspace === "work" ? null : selectedProjectKey}
+          selectedProjectKey={selectedProjectKey}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
           onEnvironmentChange={setSelectedEnvironmentId}
-          onWorkspaceChange={setWorkspace}
           onProjectChange={setSelectedProjectKey}
           onOpenEnvironments={() =>
             navigation.navigate("SettingsSheet", {
@@ -248,7 +182,6 @@ export function HomeRouteScreen() {
           onThreadSortOrderChange={setThreadSortOrder}
         />
 
-        {setupCard}
         <HomeScreen
           catalogState={catalogState}
           environments={environments}
@@ -307,9 +240,8 @@ export function HomeRouteScreen() {
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
-          selectedProjectKey={workspace === "work" ? null : selectedProjectKey}
+          selectedProjectKey={selectedProjectKey}
           threads={visibleThreads}
-          workspace={workspace}
           threadSortOrder={listOptions.threadSortOrder}
         />
       </>
