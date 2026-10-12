@@ -54,6 +54,7 @@ import {
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { isElectron } from "../../env";
 import {
+  mergeEnvironmentSettings,
   useClientSettings,
   useUpdateClientSettings,
   useEnvironmentSettings,
@@ -494,7 +495,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           const options =
             config &&
             getCustomModelOptionsByInstance(
-              { ...settings, ...config.settings },
+              mergeEnvironmentSettings(config.settings, settings),
               config.providers,
             ).get(selection.instanceId);
           if (
@@ -839,6 +840,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               resolvedSelection && activeEntry ? (
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
                   <ProviderModelPicker
+                    environmentId={representative.environmentId}
                     {...(allServerConfigs.get(representative.environmentId)?.environment
                       .capabilities.providerTerminalEnvironment === true
                       ? {

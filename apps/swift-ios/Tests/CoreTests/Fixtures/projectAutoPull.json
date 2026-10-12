@@ -135,6 +135,7 @@
     },
     "providerInstances": {},
     "providerModelPreferences": {},
+    "favorites": null,
     "providerModelPreferencesMigrated": false,
     "observability": {
       "otlpTracesUrl": "",

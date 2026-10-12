@@ -28,7 +28,10 @@ import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
-import { ProviderModelPreferencesMigration } from "../components/ProviderModelPreferencesMigration";
+import {
+  ModelFavoritesMigration,
+  ProviderModelPreferencesMigration,
+} from "../components/ProviderModelPreferencesMigration";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
@@ -229,6 +232,7 @@ function RootRouteView() {
           ) : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
           {primaryEnvironmentAuthenticated ? <ProviderModelPreferencesMigration /> : null}
+          <ModelFavoritesMigration />
           {appShell}
           {/* Above the router: a theme draft is judged by walking the app, so the
             editor has to survive navigation away from settings. */}

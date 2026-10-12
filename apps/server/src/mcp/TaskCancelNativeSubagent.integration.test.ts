@@ -35,6 +35,7 @@ import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts"
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
@@ -145,6 +146,7 @@ it.effect("task_cancel ends a delegated child's background native subagent", () 
             Layer.mock(ThreadLaunchService)({}),
             Layer.mock(GitVcsDriver)({}),
             Layer.mock(ProjectService.ProjectService)({}),
+            ServerSettings.layerTest(),
             Layer.mock(SecretRequests.SecretRequests)({}),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
             NodeServices.layer,

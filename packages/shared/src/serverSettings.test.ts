@@ -11,6 +11,8 @@ import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySet
 import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
+  modelPreferencesMigrationPatch,
+  resolveModelPreferences,
   resolveProjectAutoPull,
   resolveProjectPullRequestMergeMethod,
   resolveProjectRemoveAgentCreditsOnMerge,
@@ -744,5 +746,102 @@ describe("worktreesDirectory", () => {
     expect(reset.previousWorktreesDirectories).toEqual(["/a", "/b"]);
     const back = applyServerSettingsPatch(reset, { worktreesDirectory: "/a" });
     expect(back.previousWorktreesDirectories).toEqual(["/b"]);
+  });
+});
+
+describe("synchronized model preferences", () => {
+  const provider = ProviderInstanceId.make("codex_work");
+  const legacy = { favorites: [{ provider, model: "sol" }] };
+
+  it("keeps repeated adds and removes of the same favorite idempotent", () => {
+    const add = { setModelFavorites: [{ provider, model: "sol", favorite: true }] };
+    const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, add);
+    expect(applyServerSettingsPatch(first, add).favorites).toEqual([{ provider, model: "sol" }]);
+    const remove = { setModelFavorites: [{ provider, model: "sol", favorite: false }] };
+    const removed = applyServerSettingsPatch(first, remove);
+    expect(applyServerSettingsPatch(removed, remove).favorites).toEqual([]);
+  });
+
+  it("keeps the same model on different provider instances as separate favorites", () => {
+    const otherProvider = ProviderInstanceId.make("codex_personal");
+    const both = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      setModelFavorites: [
+        { provider, model: "sol", favorite: true },
+        { provider: otherProvider, model: "sol", favorite: true },
+      ],
+    });
+    expect(
+      applyServerSettingsPatch(both, {
+        setModelFavorites: [{ provider, model: "sol", favorite: false }],
+      }).favorites,
+    ).toEqual([{ provider: otherProvider, model: "sol" }]);
+  });
+
+  it("preserves unrelated models and providers during visibility and order edits", () => {
+    const otherProvider = ProviderInstanceId.make("claude_work");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      providerModelPreferences: {
+        [provider]: { hiddenModels: ["astra"], modelOrder: ["sol"] },
+        [otherProvider]: { hiddenModels: ["opus"], modelOrder: ["sonnet", "opus"] },
+      },
+    });
+    const mobile = applyServerSettingsPatch(initial, {
+      setModelsHidden: [{ provider, model: "luna", hidden: true }],
+    });
+    const web = applyServerSettingsPatch(mobile, {
+      setModelsHidden: [
+        { provider, model: "astra", hidden: false },
+        { provider, model: "sol", hidden: true },
+      ],
+      setProviderModelOrder: { provider, modelOrder: ["sol", "luna", "astra"] },
+    });
+    expect(web.providerModelPreferences[provider]).toEqual({
+      hiddenModels: ["luna", "sol"],
+      modelOrder: ["sol", "luna", "astra"],
+    });
+    expect(web.providerModelPreferences[otherProvider]).toEqual(
+      initial.providerModelPreferences[otherProvider],
+    );
+    expect(
+      applyServerSettingsPatch(web, {
+        setModelsHidden: [{ provider, model: "astra", hidden: false }],
+      }).providerModelPreferences,
+    ).toEqual(web.providerModelPreferences);
+  });
+
+  it("seeds legacy favorites only while the environment has none", () => {
+    expect(modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, {})).toBeNull();
+    expect(modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, { favorites: [] })).toBeNull();
+    const patch = modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, legacy)!;
+    const migrated = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, patch);
+    expect(resolveModelPreferences(migrated).favorites).toEqual(legacy.favorites);
+    expect(modelPreferencesMigrationPatch(migrated, legacy)).toBeNull();
+  });
+
+  it("keeps an explicit clear when a delayed seed arrives from another device", () => {
+    const staleSeed = modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, legacy)!;
+    const cleared = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { favorites: [] });
+    const afterSeed = applyServerSettingsPatch(cleared, staleSeed);
+    expect(resolveModelPreferences(afterSeed, legacy).favorites).toEqual([]);
+  });
+
+  it("applies a favorite edit on top of the seed it carries", () => {
+    const edited = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      ...modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, legacy),
+      setModelFavorites: [{ provider, model: "astra", favorite: true }],
+    });
+    expect(edited.favorites).toEqual([
+      { provider, model: "sol" },
+      { provider, model: "astra" },
+    ]);
+  });
+
+  it("reads the legacy list until the environment holds one", () => {
+    expect(resolveModelPreferences(DEFAULT_SERVER_SETTINGS, legacy).favorites).toEqual(
+      legacy.favorites,
+    );
+    expect(
+      resolveModelPreferences({ ...DEFAULT_SERVER_SETTINGS, favorites: [] }, legacy).favorites,
+    ).toEqual([]);
   });
 });

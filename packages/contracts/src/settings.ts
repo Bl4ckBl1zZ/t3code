@@ -256,6 +256,18 @@ export const ProviderModelPreferences = Schema.Record(
 export type ProviderModelPreferences = typeof ProviderModelPreferences.Type;
 
 /**
+ * A favorited model. The historical field name `provider` is retained; it
+ * holds a `ProviderInstanceId`, and default instance ids also decode older
+ * provider-kind favorites.
+ */
+export const ModelFavorite = Schema.Struct({
+  provider: ProviderInstanceId,
+  model: TrimmedNonEmptyString,
+});
+export const ModelFavorites = Schema.Array(ModelFavorite);
+export type ModelFavorites = typeof ModelFavorites.Type;
+
+/**
  * The environment's theme, set with `t3 theme set <id>`. Each client applies
  * it once per value — live when connected, on its next connect otherwise — so
  * setting it switches every client, while a theme a user picks in Settings
@@ -411,22 +423,12 @@ export const ClientSettingsSchema = Schema.Struct({
   persistComposerContextStrip: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  // Model favorites. Historically keyed by provider kind, now
-  // widened to `ProviderInstanceId` so users can favorite a specific model
-  // on a custom provider instance (e.g. "Codex Personal · gpt-5") without
-  // the UI collapsing it into the same bucket as the default Codex. The
-  // widening is backward-compatible by construction: prior provider-kind
-  // strings satisfy the `ProviderInstanceId` slug schema, so previously
-  // persisted favorites decode unchanged and continue to point at the
-  // default instance for their kind (because `defaultInstanceIdForDriver(kind)`
-  // uses the same slug). The field name is kept as `provider` for storage
-  // stability; new call sites should treat the value as an instance id.
-  favorites: Schema.Array(
-    Schema.Struct({
-      provider: ProviderInstanceId,
-      model: TrimmedNonEmptyString,
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /**
+   * @deprecated Migration shim only — the live value is
+   * `ServerSettings.favorites`. Read until the environment holds a list, and
+   * seeded to it once through `migrateModelPreferences`.
+   */
+  favorites: ModelFavorites.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /**
    * @deprecated Migration shim only — the live value is
    * `ServerSettings.providerModelPreferences`.
@@ -1567,6 +1569,11 @@ export const ServerSettings = Schema.Struct({
   providerModelPreferences: ProviderModelPreferences.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  // Model favorites shared by every client of this environment. Null means no
+  // client has seeded its device-local list yet; an empty list is
+  // authoritative, so a device that comes online later cannot resurrect
+  // favorites the user removed.
+  favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   // Set once the client has copied a pre-sync, device-local
   // `providerModelPreferences` up to the server. Without the marker every
   // client would re-upload its own stale copy on every boot and clobber the
@@ -1694,7 +1701,9 @@ export class ServerSettingsError extends Schema.TaggedErrorClass<ServerSettingsE
 
 // ── Unified type ─────────────────────────────────────────────────────
 
-export type UnifiedSettings = ServerSettings & ClientSettings;
+// `favorites` is server-owned but nullable until seeded; merged settings
+// resolve it to a list (see `resolveModelPreferences`).
+export type UnifiedSettings = Omit<ServerSettings, "favorites"> & ClientSettings;
 export const DEFAULT_UNIFIED_SETTINGS: UnifiedSettings = {
   ...DEFAULT_SERVER_SETTINGS,
   ...DEFAULT_CLIENT_SETTINGS,
@@ -1896,6 +1905,25 @@ export const ServerSettingsPatch = Schema.Struct({
   // settings editor always sends a fully-formed map.
   providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
   providerModelPreferencesMigrated: Schema.optionalKey(Schema.Boolean),
+  // Whole-list replacement for favorites.
+  favorites: Schema.optionalKey(ModelFavorites),
+  // Per-entry edits applied against the latest saved state under the settings
+  // write lock, so two clients editing at once do not drop each other's
+  // changes, and a repeated add or remove is idempotent.
+  setModelFavorites: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
+  ),
+  setModelsHidden: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ ...ModelFavorite.fields, hidden: Schema.Boolean })),
+  ),
+  setProviderModelOrder: Schema.optionalKey(
+    Schema.Struct({ provider: ProviderInstanceId, modelOrder: Schema.Array(TrimmedString) }),
+  ),
+  // A device-local list seeded only while the environment has none; see
+  // `modelPreferencesMigrationPatch`.
+  migrateModelPreferences: Schema.optionalKey(
+    Schema.Struct({ favorites: Schema.optionalKey(ModelFavorites) }),
+  ),
   hermesProactiveDefaultApplied: Schema.optionalKey(Schema.Boolean),
   projectFileBackfillApplied: Schema.optionalKey(Schema.Boolean),
   usageLimitSources: Schema.optionalKey(
@@ -1991,14 +2019,8 @@ export const ClientSettingsPatch = Schema.Struct({
   fontFamilyTerminal: Schema.optionalKey(FontFamilyPreference),
   fontSmoothing: Schema.optionalKey(Schema.Boolean),
   persistComposerContextStrip: Schema.optionalKey(Schema.Boolean),
-  favorites: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        provider: ProviderInstanceId,
-        model: TrimmedNonEmptyString,
-      }),
-    ),
-  ),
+  /** @deprecated Migration shim — the live value is `ServerSettings.favorites`. */
+  favorites: Schema.optionalKey(ModelFavorites),
   /** @deprecated Migration shim — patched only to clear the legacy copy. */
   providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),

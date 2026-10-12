@@ -97,6 +97,7 @@ import {
 import { ProjectService } from "../project/ProjectService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import {
   clientRuntimeModeCeiling,
@@ -914,6 +915,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
   const projects = yield* ProjectService;
+  const serverSettings = yield* ServerSettingsService;
   const git = yield* GitVcsDriver;
   const fileSystem = yield* FileSystem.FileSystem;
 
@@ -1848,6 +1850,11 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
         const providers = yield* loadProviders;
+        // Models the user hid from pickers stay out of the catalog agents choose from.
+        const modelPreferences = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.providerModelPreferences),
+          Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
+        );
         return {
           parentThreadId: parent?.thread.id ?? null,
           inheritedProviderInstanceId: parent?.thread.modelSelection.instanceId ?? null,
@@ -1864,13 +1871,19 @@ const make = Effect.gen(function* () {
               driverKind: provider.driver,
               displayName: provider?.displayName ?? null,
               models:
-                provider?.models.map((model) => ({
-                  id: model.slug,
-                  label: model.name ?? null,
-                  ...(model.capabilities?.optionDescriptors === undefined
-                    ? {}
-                    : { options: model.capabilities.optionDescriptors }),
-                })) ?? [],
+                provider?.models
+                  .filter(
+                    (model) =>
+                      model.isCustom ||
+                      !modelPreferences[provider.instanceId]?.hiddenModels.includes(model.slug),
+                  )
+                  .map((model) => ({
+                    id: model.slug,
+                    label: model.name ?? null,
+                    ...(model.capabilities?.optionDescriptors === undefined
+                      ? {}
+                      : { options: model.capabilities.optionDescriptors }),
+                  })) ?? [],
               ...(provider.supportedRuntimeModes === undefined ||
               provider.supportedRuntimeModes.length === 0
                 ? {}
@@ -2672,6 +2685,7 @@ export const layer: Layer.Layer<
   | ScheduledTaskService
   | ProjectService
   | SecretRequests.SecretRequests
+  | ServerSettingsService
   | GitVcsDriver
   | FileSystem.FileSystem
 > = Layer.effect(OrchestratorMcpService, make);

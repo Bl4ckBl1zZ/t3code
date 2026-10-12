@@ -643,6 +643,7 @@ export function ScheduledTasksSettings(props: {
               <div className="flex min-w-0 items-center gap-1.5">
                 <div className="min-w-0 flex-1">
                   <ProviderModelPicker
+                    environmentId={environment?.environmentId ?? null}
                     activeInstanceId={activeInstanceId}
                     model={activeModel}
                     lockedProvider={null}

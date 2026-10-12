@@ -6,6 +6,7 @@ import {
   type ModelSelection,
   type ProjectId,
   type ProviderDriverKind,
+  type ProviderInstanceId,
   type PullRequestMergeMethod,
   type ServerProvider,
   ServerSettings,
@@ -177,6 +178,12 @@ export function applyServerSettingsPatch(
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
   const {
+    favorites: favoritesPatch,
+    migrateModelPreferences,
+    setModelFavorites,
+    setModelsHidden,
+    setProviderModelOrder,
+    providerModelPreferences: modelPreferencesPatch,
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
     backgroundActivityProfile,
@@ -227,6 +234,15 @@ export function applyServerSettingsPatch(
             },
           }
         : undefined;
+  const favorites = applyModelFavoriteChanges(
+    favoritesPatch ?? current.favorites ?? migrateModelPreferences?.favorites ?? null,
+    setModelFavorites,
+  );
+  const providerModelPreferences = applyModelPreferenceChanges(
+    modelPreferencesPatch ?? current.providerModelPreferences,
+    setModelsHidden,
+    setProviderModelOrder,
+  );
   const next = deepMerge(current, patchForMerge);
   const usageLimitSources = { ...current.usageLimitSources };
   for (const [id, source] of Object.entries(usageSourcesPatch ?? {})) {
@@ -323,9 +339,8 @@ export function applyServerSettingsPatch(
     // instance keys the settings editor deleted (it drops an entry once both
     // its lists are empty) and could union the arrays, so un-hiding a model
     // would never actually un-hide it.
-    ...(patch.providerModelPreferences !== undefined
-      ? { providerModelPreferences: patch.providerModelPreferences }
-      : {}),
+    providerModelPreferences,
+    favorites,
     ...(patch.defaultModelSelection !== undefined
       ? { defaultModelSelection: patch.defaultModelSelection }
       : {}),
@@ -365,4 +380,87 @@ export function applyServerSettingsPatch(
     ...nextWithReplacements,
     textGenerationModelSelection: createModelSelection(instanceId, model, options),
   };
+}
+
+type ModelFavoriteList = NonNullable<ServerSettings["favorites"]>;
+type ProviderModelPreferenceMap = ServerSettings["providerModelPreferences"];
+
+/** Idempotent per-entry favorite edits; the list stays unset until something claims it. */
+function applyModelFavoriteChanges(
+  initial: ModelFavoriteList | null,
+  changes: ServerSettingsPatch["setModelFavorites"],
+): ModelFavoriteList | null {
+  if (changes === undefined) return initial;
+  const favorites = [...(initial ?? [])];
+  for (const change of changes) {
+    const index = favorites.findIndex(
+      (favorite) => favorite.provider === change.provider && favorite.model === change.model,
+    );
+    if (change.favorite && index === -1) {
+      favorites.push({ provider: change.provider, model: change.model });
+    } else if (!change.favorite && index !== -1) {
+      favorites.splice(index, 1);
+    }
+  }
+  return favorites;
+}
+
+/** Per-model visibility and per-instance order edits that leave every other entry alone. */
+function applyModelPreferenceChanges(
+  initial: ProviderModelPreferenceMap,
+  hiddenChanges: ServerSettingsPatch["setModelsHidden"],
+  orderChange: ServerSettingsPatch["setProviderModelOrder"],
+): ProviderModelPreferenceMap {
+  if (hiddenChanges === undefined && orderChange === undefined) return initial;
+  const next: Record<ProviderInstanceId, ProviderModelPreferenceMap[ProviderInstanceId]> = {
+    ...initial,
+  };
+  const entryFor = (provider: ProviderInstanceId) =>
+    next[provider] ?? { hiddenModels: [], modelOrder: [] };
+  for (const change of hiddenChanges ?? []) {
+    const entry = entryFor(change.provider);
+    const hiddenModels = entry.hiddenModels.filter((model) => model !== change.model);
+    if (change.hidden) hiddenModels.push(change.model);
+    next[change.provider] = { ...entry, hiddenModels };
+  }
+  if (orderChange !== undefined) {
+    next[orderChange.provider] = {
+      ...entryFor(orderChange.provider),
+      modelOrder: [...orderChange.modelOrder],
+    };
+  }
+  return next;
+}
+
+/**
+ * Model preferences as clients read them: the environment's favorites once
+ * any client has seeded them, this device's legacy list until then.
+ */
+export function resolveModelPreferences(
+  settings: Pick<ServerSettings, "favorites" | "providerModelPreferences">,
+  legacy: { readonly favorites?: ModelFavoriteList } = {},
+): {
+  readonly favorites: ModelFavoriteList;
+  readonly providerModelPreferences: ProviderModelPreferenceMap;
+} {
+  return {
+    favorites: settings.favorites ?? legacy.favorites ?? [],
+    providerModelPreferences: settings.providerModelPreferences,
+  };
+}
+
+/**
+ * Seeds this device's legacy favorites while the environment has none. An
+ * empty legacy list does not claim the environment, so another device can
+ * still seed the list it actually holds; the server applies the seed only
+ * while still unset, so a delayed seed cannot undo a later clear.
+ */
+export function modelPreferencesMigrationPatch(
+  settings: Pick<ServerSettings, "favorites">,
+  legacy: { readonly favorites?: ModelFavoriteList },
+): ServerSettingsPatch | null {
+  const favorites = legacy.favorites ?? [];
+  return settings.favorites === null && favorites.length > 0
+    ? { migrateModelPreferences: { favorites } }
+    : null;
 }

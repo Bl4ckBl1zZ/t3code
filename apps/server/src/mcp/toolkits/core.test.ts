@@ -25,6 +25,7 @@ import { ProjectService } from "../../project/ProjectService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { GitVcsDriver } from "../../vcs/GitVcsDriver.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import * as McpToolAccessTestkit from "../McpToolAccess.testkit.ts";
@@ -542,6 +543,7 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
         ),
         Layer.provide(Layer.mock(ProjectService)({})),
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+        Layer.provide(ServerSettings.layerTest()),
       ),
     ),
   ),
@@ -586,6 +588,7 @@ it.effect("a caller cannot interrupt a thread that runs above its own modes", ()
         Layer.provide(Layer.mock(ScheduledTaskService)({})),
         Layer.provide(Layer.mock(ProjectService)({})),
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+        Layer.provide(ServerSettings.layerTest()),
       ),
     ),
   ),

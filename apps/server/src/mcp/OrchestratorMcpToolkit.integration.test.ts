@@ -70,6 +70,7 @@ import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts"
 import { ThreadSearchQuery } from "../orchestration-v2/ThreadSearchQuery.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -582,6 +583,7 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provideMerge(orchestrationLayer),
             Layer.provide(providerRegistryLayer),
             Layer.provide(scheduledTaskStubLayer),
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(
               Layer.mock(ProjectService)({
                 getById: (id) =>

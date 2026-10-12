@@ -96,4 +96,17 @@ describe("mergeEnvironmentSettings", () => {
     expect(settings.providerInstances).toBe(serverSettings.providerInstances);
     expect(settings.favorites).toBe(clientSettings.favorites);
   });
+
+  it("uses the environment's favorites once seeded, including an empty list", () => {
+    const client = {
+      ...DEFAULT_CLIENT_SETTINGS,
+      favorites: [{ provider: ProviderInstanceId.make("codex_work"), model: "old" }],
+    };
+    expect(mergeEnvironmentSettings(DEFAULT_SERVER_SETTINGS, client).favorites).toEqual(
+      client.favorites,
+    );
+    expect(
+      mergeEnvironmentSettings({ ...DEFAULT_SERVER_SETTINGS, favorites: [] }, client).favorites,
+    ).toEqual([]);
+  });
 });

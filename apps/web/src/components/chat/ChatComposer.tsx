@@ -3662,6 +3662,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         </Button>
       ) : (
         <ProviderModelPicker
+          environmentId={environmentId}
           isComposerOwned
           size={isComposerResting ? "xs" : "sm"}
           {...(props.onOpenProviderSetup ? { onOpenProviderSetup: props.onOpenProviderSetup } : {})}

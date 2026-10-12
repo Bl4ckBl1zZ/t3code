@@ -230,6 +230,7 @@ export function ProjectDefaultsSettings({
                 className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 disabled:opacity-50"
               >
                 <ProviderModelPicker
+                  environmentId={representative?.environmentId ?? null}
                   {...(representative?.serverConfig?.environment.capabilities
                     .providerTerminalEnvironment === true
                     ? {
