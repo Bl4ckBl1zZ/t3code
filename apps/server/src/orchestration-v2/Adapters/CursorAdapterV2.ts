@@ -2152,15 +2152,15 @@ export function makeCursorAdapterV2(
               runtimePolicy: turnInput.runtimePolicy,
             });
             const message = yield* resolveUserMessage(turnInput);
-            const mcpServers = cursorMcpServers(turnInput.threadId);
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
+            // MCP send overrides replace the ambient servers loaded when the agent opens,
+            // so T3's server rides on the agent options instead.
             const sdkRun = yield* agent.session.send({
               message,
               options: {
                 model: cursorSdkModelSelection(turnInput.modelSelection),
                 mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
-                ...(mcpServers === undefined ? {} : { mcpServers }),
               },
               onDelta: (update) => {
                 if (context === null) {
