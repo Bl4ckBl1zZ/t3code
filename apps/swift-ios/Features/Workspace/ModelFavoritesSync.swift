@@ -154,6 +154,8 @@ extension FeatureRootModel {
             guard let server = preferences[environmentID]?.modelFavorites else { continue }
             let serverIDs = Set(server.map(ModelFavoritesSync.id))
             let remaining = pending.filter { serverIDs.contains($0.key) != $0.value }
+            // Writing an unchanged entry back would re-render every picker.
+            guard remaining != pending else { continue }
             pendingModelFavorites[environmentID] = remaining.isEmpty ? nil : remaining
         }
         guard let manager = client as? any FeatureServerSettingsManaging else { return }
