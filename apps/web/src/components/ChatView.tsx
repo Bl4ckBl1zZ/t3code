@@ -8860,6 +8860,56 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  // The memoized composer gets call-time stable handlers, so a panel toggle that
+  // re-renders ChatView does not re-render the composer with it.
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
+  const onComposerSend = useCallback(
+    (...args: Parameters<typeof onSend>) => onSendRef.current(...args),
+    [],
+  );
+  const onComposerStartFreshChat = useCallback(() => {
+    const sendContext = composerRef.current?.getSendContext();
+    if (!activeProject || !sendContext) return;
+    promptRef.current = "";
+    clearComposerDraftContent(composerDraftTarget);
+    composerRef.current?.resetCursorState();
+    void openFreshHermesConversation(sendContext.selectedModelSelection);
+  }, [activeProject, clearComposerDraftContent, composerDraftTarget, openFreshHermesConversation]);
+  const onComposerClearChat = useCallback(() => {
+    void (async () => {
+      const cleared = await clearCurrentHermesTimeline();
+      if (!cleared) return;
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+    })();
+  }, [clearComposerDraftContent, clearCurrentHermesTimeline, composerDraftTarget]);
+  const composerAttachments = useMemo(
+    () => (
+      <>
+        <ComposerBannerStack items={composerBannerItems} />
+        {composerTasks &&
+          (tasksDrawerExpanded ? (
+            <ComposerTasksDrawer
+              onCollapse={() => setTasksDrawerExpanded(false)}
+              progress={composerTasks.progress}
+              steps={composerTasks.steps}
+            />
+          ) : (
+            <ComposerBanner.Attachment>
+              <ComposerTasksBadge
+                expanded={false}
+                onToggle={() => setTasksDrawerExpanded(true)}
+                progress={composerTasks.progress}
+                steps={composerTasks.steps}
+              />
+            </ComposerBanner.Attachment>
+          ))}
+      </>
+    ),
+    [composerBannerItems, composerTasks, tasksDrawerExpanded],
+  );
 
   // Files dropped on a sidebar row land here once the dropped-on thread is
   // actually open, then take the exact same path as a workspace drop:
@@ -9472,28 +9522,7 @@ function ChatViewContent(props: ChatViewProps) {
                               expandedTaskDrawer={tasksDrawerExpanded}
                               onRestingChange={setComposerResting}
                               onOverlayHeightChange={publishComposerOverlayHeight}
-                              attachments={
-                                <>
-                                  <ComposerBannerStack items={composerBannerItems} />
-                                  {composerTasks &&
-                                    (tasksDrawerExpanded ? (
-                                      <ComposerTasksDrawer
-                                        onCollapse={() => setTasksDrawerExpanded(false)}
-                                        progress={composerTasks.progress}
-                                        steps={composerTasks.steps}
-                                      />
-                                    ) : (
-                                      <ComposerBanner.Attachment>
-                                        <ComposerTasksBadge
-                                          expanded={false}
-                                          onToggle={() => setTasksDrawerExpanded(true)}
-                                          progress={composerTasks.progress}
-                                          steps={composerTasks.steps}
-                                        />
-                                      </ComposerBanner.Attachment>
-                                    ))}
-                                </>
-                              }
+                              attachments={composerAttachments}
                               promptHistoryMessages={serverProjection?.messages ?? []}
                               composerRef={composerRef}
                               composerDraftTarget={composerDraftTarget}
@@ -9577,26 +9606,9 @@ function ChatViewContent(props: ChatViewProps) {
                               composerElementContextsRef={composerElementContextsRef}
                               shouldAutoScrollRef={composerShouldStickToEndRef}
                               scheduleStickToBottom={scrollToEnd}
-                              onSend={onSend}
-                              onStartFreshChat={() => {
-                                const sendContext = composerRef.current?.getSendContext();
-                                if (!activeProject || !sendContext) return;
-                                promptRef.current = "";
-                                clearComposerDraftContent(composerDraftTarget);
-                                composerRef.current?.resetCursorState();
-                                void openFreshHermesConversation(
-                                  sendContext.selectedModelSelection,
-                                );
-                              }}
-                              onClearChat={() => {
-                                void (async () => {
-                                  const cleared = await clearCurrentHermesTimeline();
-                                  if (!cleared) return;
-                                  promptRef.current = "";
-                                  clearComposerDraftContent(composerDraftTarget);
-                                  composerRef.current?.resetCursorState();
-                                })();
-                              }}
+                              onSend={onComposerSend}
+                              onStartFreshChat={onComposerStartFreshChat}
+                              onClearChat={onComposerClearChat}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
