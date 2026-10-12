@@ -1025,7 +1025,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func mcpAppDocumentURL(threadID: String, app: McpAppReference) async throws -> URL {
         let route = try threadRoute(for: threadID)
         return try await route.client.resolvedAssetURL(
-            resource: .documentAttachment(id: app.attachmentID, name: app.documentFileName, mimeType: "text/html")
+            resource: .mcpAppDocument(id: app.attachmentID, name: app.documentFileName)
         )
     }
 

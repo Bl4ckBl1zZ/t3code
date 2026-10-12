@@ -1507,6 +1507,14 @@ const filePreviewFixture = `${JSON.stringify(
       mimeType: "application/pdf",
       disposition: "inline",
     }),
+    mcpApp: Schema.encodeSync(AssetResource)({
+      _tag: "attachment",
+      attachmentId: "mcp-app-snapshot",
+      fileName: "app.html",
+      mimeType: "text/html",
+      disposition: "inline",
+      renderIntent: "mcp-app",
+    }),
     capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
       repositoryIdentity: true,
       fileDocumentPreviews: true,

@@ -11,6 +11,14 @@
     "mimeType": "application/pdf",
     "disposition": "inline"
   },
+  "mcpApp": {
+    "_tag": "attachment",
+    "attachmentId": "mcp-app-snapshot",
+    "fileName": "app.html",
+    "mimeType": "text/html",
+    "disposition": "inline",
+    "renderIntent": "mcp-app"
+  },
   "capabilities": {
     "fileDocumentPreviews": true,
     "repositoryIdentity": true

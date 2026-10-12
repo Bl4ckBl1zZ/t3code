@@ -49,6 +49,13 @@ final class ThreadMcpApps {
     var fullscreen: McpAppPresentation?
     var awaitingUser = false
     var unsupported = false
+    /// Each inline app's reported content height, clamped; absent until the
+    /// app reports one, and cleared when its document reloads.
+    var inlineHeights: [String: CGFloat] = [:]
+
+    func inlineHeight(for id: String) -> CGFloat {
+        inlineHeights[id] ?? McpAppLayout.inlineHeight
+    }
 
     init(client: any FeatureMcpAppHosting, threadID: String) {
         self.client = client
@@ -68,8 +75,18 @@ extension EnvironmentValues {
 }
 
 enum McpAppLayout {
-    /// The feed reserves a fixed box for an app; a taller app scrolls inside it.
+    /// An inline row's tallest size, and its size until the app reports its
+    /// own; a taller app scrolls inside it.
     static let inlineHeight: CGFloat = 420
+    static let inlineMinHeight: CGFloat = 80
+
+    /// The row height for an app's reported content height, or nil for an
+    /// absent or invalid report. Mirrors `mcpAppInlineHeight` in upstream's
+    /// mobile `mcpAppSizing.ts`.
+    static func inlineHeight(forContentHeight height: Double?) -> CGFloat? {
+        guard let height, height.isFinite else { return nil }
+        return min(inlineHeight, max(inlineMinHeight, CGFloat(height.rounded())))
+    }
     /// Largest file an app may hand the user through `ui/download-file`.
     static let maxDownloadBytes = 25 * 1024 * 1024
     static let messageHandlerName = "t3McpApp"
@@ -191,6 +208,7 @@ final class McpAppSession {
             host = nil
             phase = .loading
             generation += 1
+            apps.inlineHeights[target.id] = nil
         }
         guard !started else { return }
         started = true
@@ -296,11 +314,13 @@ final class McpAppSession {
         started = false
         phase = .loading
         closed = false
+        apps.inlineHeights[target.id] = nil
     }
 
     private func reloadDocument() {
         host?.dispose()
         declineApprovals()
+        if mode == .inline { apps.inlineHeights[target.id] = nil }
         makeHost()
         if let toolCall { host?.setToolCall(arguments: toolCall.arguments, result: toolCall.result) }
         generation += 1
@@ -447,6 +467,14 @@ final class McpAppSession {
                     await host.teardown()
                     if self.mode == .fullscreen { self.onExitFullscreen() } else { self.closed = true }
                 }
+            },
+            // Full screen fills its presentation; only an inline row follows
+            // the app's content.
+            onSizeChanged: { [weak self] _, height in
+                guard let self, self.mode == .inline,
+                      let next = McpAppLayout.inlineHeight(forContentHeight: height),
+                      abs(next - apps.inlineHeight(for: target.id)) > 0.5 else { return }
+                apps.inlineHeights[target.id] = next
             }
         ))
     }
@@ -819,7 +847,7 @@ struct ThreadMcpAppRow<Fallback: View>: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: McpAppLayout.inlineHeight)
+            .frame(height: apps.inlineHeight(for: presentation.id))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 if presentation.app.prefersBorder == true || apps.fullscreen?.id == presentation.id {
