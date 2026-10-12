@@ -83,6 +83,10 @@ import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
 type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
+const filePathCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
 
 interface CollapsedDiffFilesState {
   readonly scopeKey: string | null;
@@ -411,10 +415,7 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
       return [];
     }
     return renderablePatch.files.toSorted((left, right) =>
-      resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right), undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }),
+      filePathCollator.compare(resolveFileDiffPath(left), resolveFileDiffPath(right)),
     );
   }, [renderablePatch]);
   const renderableFileEntries = useMemo(
