@@ -89,6 +89,9 @@
       "followChangeRequestTemplates": true
     },
     "sourceControlWriterModelSelection": null,
+    "reviewGuidesEnabled": false,
+    "reviewGuideModelSelection": null,
+    "reviewGuideInstructions": "",
     "providers": {
       "codex": {
         "enabled": true,

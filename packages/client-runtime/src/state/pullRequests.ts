@@ -99,6 +99,12 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     tag: WS_METHODS.pullRequestsActivity,
     staleTimeMs: 15_000,
   });
+  // The stored guide only changes when somebody generates one, which refreshes it below.
+  const reviewGuide = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:pull-requests:review-guide",
+    tag: WS_METHODS.pullRequestsReviewGuide,
+    staleTimeMs: 60_000,
+  });
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:list",
@@ -284,6 +290,13 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       tag: WS_METHODS.pullRequestsReplyToThread,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
+    }),
+    reviewGuide,
+    /** Runs a model on the environment; never fired without the reader asking for it. */
+    generateReviewGuide: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:generate-review-guide",
+      tag: WS_METHODS.pullRequestsGenerateReviewGuide,
+      onSuccess: (target, registry) => Effect.sync(() => registry.refresh(reviewGuide(target))),
     }),
     /**
      * Its own query rather than part of the detail: the people who may be asked are only wanted

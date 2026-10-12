@@ -59,6 +59,7 @@ import {
 } from "./agentSessions.ts";
 import { PullRequestLabelCandidateList, PullRequestLabelChangeInput } from "./pullRequest.ts";
 import { PullRequestStack } from "./pullRequest.ts";
+import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -474,6 +475,8 @@ export const WS_METHODS = {
   pullRequestsDetail: "pullRequests.detail",
   pullRequestsStack: "pullRequests.stack",
   pullRequestsActivity: "pullRequests.activity",
+  pullRequestsReviewGuide: "pullRequests.reviewGuide",
+  pullRequestsGenerateReviewGuide: "pullRequests.generateReviewGuide",
   pullRequestsThreadComments: "pullRequests.threadComments",
   pullRequestsDiffFileContents: "pullRequests.diffFileContents",
   pullRequestsRunAction: "pullRequests.runAction",
@@ -805,6 +808,21 @@ export const WsPullRequestsActivityRpc = Rpc.make(WS_METHODS.pullRequestsActivit
   success: PullRequestActivity,
   error: PullRequestRpcError,
 });
+
+export const WsPullRequestsReviewGuideRpc = Rpc.make(WS_METHODS.pullRequestsReviewGuide, {
+  payload: PullRequestRef,
+  success: PullRequestReviewGuideResult,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsGenerateReviewGuideRpc = Rpc.make(
+  WS_METHODS.pullRequestsGenerateReviewGuide,
+  {
+    payload: PullRequestRef,
+    success: PullRequestReviewGuideResult,
+    error: PullRequestRpcError,
+  },
+);
 
 export const WsPullRequestsThreadCommentsRpc = Rpc.make(WS_METHODS.pullRequestsThreadComments, {
   payload: PullRequestThreadCommentsInput,
@@ -1688,6 +1706,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsDetailRpc,
   WsPullRequestsStackRpc,
   WsPullRequestsActivityRpc,
+  WsPullRequestsReviewGuideRpc,
+  WsPullRequestsGenerateReviewGuideRpc,
   WsPullRequestsThreadCommentsRpc,
   WsPullRequestsDiffFileContentsRpc,
   WsPullRequestsRunActionRpc,

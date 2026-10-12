@@ -88,6 +88,16 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("reads a review guide like the pull request, but writing one operates the environment", () => {
+    // Writing a guide runs a model on this environment's providers; reading one does not.
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsReviewGuide)).toBe(
+      requiredScopeForRpcMethod(WS_METHODS.pullRequestsDetail),
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsGenerateReviewGuide)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("separates reading Hermes work from changing assistants or schedules", () => {
     for (const method of [
       WS_METHODS.hermesWorkSetupStatus,

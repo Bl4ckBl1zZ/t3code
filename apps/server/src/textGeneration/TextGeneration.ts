@@ -6,6 +6,7 @@ import type {
   ChatAttachment,
   ModelSelection,
   ProviderInstanceId,
+  PullRequestReviewGuide,
 } from "@t3tools/contracts";
 import { TextGenerationError } from "@t3tools/contracts";
 
@@ -99,6 +100,46 @@ export interface HandoffSummaryGenerationResult {
   summary: string;
 }
 
+export interface ReviewGuideStackLayer {
+  readonly number: number;
+  readonly title: string | null;
+  /** The layer's head in the checkout, null where it could not be fetched. */
+  readonly headSha: string | null;
+  readonly state: "open" | "closed" | "merged";
+}
+
+export interface ReviewGuideGenerationInput {
+  /** A disposable checkout of the change's head. The model investigates it read-only. */
+  cwd: string;
+  number: number;
+  title: string;
+  /** The author's own description, which states intent the diff cannot. */
+  description: string;
+  baseBranch: string;
+  /** The commit the change is measured from, present in `cwd`. */
+  baseCommit: string;
+  /**
+   * What review already settled: resolved conversations, reduced to who raised what. The guide
+   * leaves these alone rather than raising them again.
+   */
+  settledReview: string;
+  /** The maintainer's preferences for guides (tone, emphasis, ordering). Empty for none. */
+  instructions?: string | undefined;
+  /**
+   * The stack the change is a layer of, bottom first, when it is in one. Another layer's head is
+   * fetched into `cwd` where the host served it, so the model can read across a seam.
+   */
+  stack?: ReadonlyArray<ReviewGuideStackLayer> | undefined;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+/** A guide as the model wrote it, before the server holds it to the change. */
+export type ReviewGuideGenerationResult = Omit<
+  PullRequestReviewGuide,
+  "headSha" | "generatedAt" | "modelSelection"
+>;
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -147,6 +188,11 @@ export class TextGeneration extends Context.Service<
     readonly generateHandoffSummary: (
       input: HandoffSummaryGenerationInput,
     ) => Effect.Effect<HandoffSummaryGenerationResult, TextGenerationError>;
+
+    /** Explain a change request to the maintainer deciding whether it lands. */
+    readonly generateReviewGuide: (
+      input: ReviewGuideGenerationInput,
+    ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -158,7 +204,8 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateHandoffSummary";
+  | "generateHandoffSummary"
+  | "generateReviewGuide";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -202,6 +249,10 @@ export const makeTextGenerationFromRegistry = (
       resolveInstance(registry, "generateHandoffSummary", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateHandoffSummary(input)),
       ),
+    generateReviewGuide: (input) =>
+      resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
+      ),
   });
 
 /**
@@ -218,6 +269,7 @@ export const unavailable = (detail: string): TextGeneration["Service"] => {
     generateBranchName: () => fail("generateBranchName"),
     generateThreadTitle: () => fail("generateThreadTitle"),
     generateHandoffSummary: () => fail("generateHandoffSummary"),
+    generateReviewGuide: () => fail("generateReviewGuide"),
   });
 };
 

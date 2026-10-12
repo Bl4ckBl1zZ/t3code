@@ -3,7 +3,10 @@ import { useRef } from "react";
 import type { SourceControlWritingStyleMode } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
-import { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
+import {
+  resolveReviewGuideModelSelection,
+  resolveSourceControlWriterModelSelection,
+} from "@t3tools/shared/serverSettings";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import {
@@ -22,6 +25,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
 import { BranchNamingSettings } from "./BranchNamingSettings";
 
 const MODE_OPTIONS: Record<SourceControlWritingStyleMode, { label: string; description: string }> =
@@ -71,6 +75,21 @@ export function SourceControlWritingSettingsSection() {
     serverProviders,
     activeSelection.instanceId,
     activeSelection.model,
+  );
+  const usesReviewGuideModel = settings.reviewGuideModelSelection !== null;
+  const reviewGuideSelection = resolveAppModelSelectionState(
+    {
+      ...settings,
+      textGenerationModelSelection: resolveReviewGuideModelSelection(settings, serverProviders),
+    },
+    serverProviders,
+  );
+  // Its own list: a custom model chosen for guides is not among the writer model's options.
+  const reviewGuideModelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    serverProviders,
+    reviewGuideSelection.instanceId,
+    reviewGuideSelection.model,
   );
 
   return (
@@ -216,6 +235,95 @@ export function SourceControlWritingSettingsSection() {
           </div>
         }
       />
+
+      {/* A beta the server owns: off hides the Guide tab in every client and refuses agents. */}
+      <SettingsRow
+        serverScoped
+        {...searchableSetting("review-guides")}
+        description="Adds a Guide tab to pull requests: an agent writes a tour of the change, stop by stop, with the calls a maintainer should make."
+        control={
+          <Switch
+            checked={settings.reviewGuidesEnabled}
+            onCheckedChange={(checked) => updateSettings({ reviewGuidesEnabled: Boolean(checked) })}
+            aria-label="Review guides"
+          />
+        }
+      />
+
+      {settings.reviewGuidesEnabled ? (
+        <>
+          <SettingsRow
+            serverScoped
+            {...searchableSetting("review-guide-model")}
+            description="Model that reads a pull request to write its review guide. It reads the change itself over many steps, so a stronger model helps. Off uses the source control writer model."
+            control={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {usesReviewGuideModel ? (
+                  <ProviderModelPicker
+                    activeInstanceId={reviewGuideSelection.instanceId}
+                    model={reviewGuideSelection.model}
+                    lockedProvider={null}
+                    instanceEntries={instanceEntries}
+                    modelOptionsByInstance={reviewGuideModelOptionsByInstance}
+                    triggerVariant="outline"
+                    triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                    triggerAriaLabel="Review guide model"
+                    onInstanceModelChange={(instanceId, model) => {
+                      updateSettings({
+                        reviewGuideModelSelection: createModelSelection(instanceId, model),
+                      });
+                    }}
+                  />
+                ) : null}
+                <Switch
+                  checked={usesReviewGuideModel}
+                  onCheckedChange={(checked) =>
+                    updateSettings({
+                      reviewGuideModelSelection: checked
+                        ? createModelSelection(
+                            activeSelection.instanceId,
+                            activeSelection.model,
+                            activeSelection.options,
+                          )
+                        : null,
+                    })
+                  }
+                  aria-label="Use a separate review guide model"
+                />
+              </div>
+            }
+          />
+
+          <SettingsRow
+            serverScoped
+            {...searchableSetting("review-guide-instructions")}
+            description="Your preferences for review guides: what to show first, dwell on, or skip. The guide's format and coverage stay the same."
+            resetAction={
+              settings.reviewGuideInstructions !== "" ? (
+                <SettingResetButton
+                  label="review guide instructions"
+                  onClick={() => updateSettings({ reviewGuideInstructions: "" })}
+                />
+              ) : null
+            }
+          >
+            <div className="mt-3 max-w-2xl pb-3.5">
+              <Textarea
+                key={settings.reviewGuideInstructions}
+                aria-label="Review guide instructions"
+                rows={4}
+                defaultValue={settings.reviewGuideInstructions}
+                placeholder="Show service interfaces before implementations. Skip test files unless they change behavior. Keep summaries to two sentences."
+                onBlur={(event) => {
+                  const value = event.target.value.trim();
+                  if (value !== settings.reviewGuideInstructions)
+                    updateSettings({ reviewGuideInstructions: value });
+                }}
+              />
+            </div>
+          </SettingsRow>
+        </>
+      ) : null}
     </SettingsSection>
   );
 }

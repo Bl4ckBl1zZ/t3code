@@ -320,6 +320,7 @@ function createTextGeneration(
       Effect.succeed({
         summary: "Handoff summary",
       }),
+    generateReviewGuide: () => Effect.succeed({ stops: [] }),
     ...overrides,
   };
 
@@ -379,6 +380,7 @@ function createTextGeneration(
             }),
         ),
       ),
+    generateReviewGuide: (input) => implementation.generateReviewGuide(input),
   };
 }
 

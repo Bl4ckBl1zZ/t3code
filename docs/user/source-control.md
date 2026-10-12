@@ -237,6 +237,36 @@ not auto-settle. Agents stop watching when they hand the work back to you, and t
 returns to your inbox. On web and desktop, the Stop shortcut ends a thread's watches when it has
 nothing else running.
 
+## Review guides
+
+Review guides are in beta. Turn on **Review guides** in Settings → Source Control to add the
+**Guide** tab to pull requests on that server.
+
+The **Guide** tab gives you a tour of a pull request without reading it line by line: stops
+through the change in reading order. Each stop points at the lines worth reading, and a stop marked
+**Look closely** has a call only a maintainer can make. Mechanical changes such as renames and
+snapshots are grouped at the end, and every changed file appears somewhere on the tour.
+Conversations already resolved in review are left out. For a pull request in a stack, the guide
+covers that layer only, and may point out what a lower layer introduced or what a higher one uses.
+
+Choose **Write guide** to have the review guide model from Settings → Source Control read the
+change in a temporary checkout; without one set, the source control writer model is used. Nothing
+in the checkout is changed, and a large pull request takes a few minutes; you can go elsewhere in
+the app and you are told when the guide is ready. Claude and Codex can write guides. The guide is
+kept for everyone using this server. To write it again, for example after a push or after changing
+the model or instructions, choose **Rewrite guide** from the pull request's **⋯** menu.
+
+While reading a stop, select lines in an excerpt to add a comment to your review or ask an agent
+about them; comments wait with the ones from the **Code** tab until you send the review. Choose a
+suggested question, or **Ask about this stop**, to open a thread that already knows which stop you
+are on. **Finish review** on the last stop opens the review form on the **Code** tab with
+everything you collected. On the **Pull requests** page, opening a guide maximizes the panel; use
+the maximize control or its shortcut to restore it.
+
+To shape guides to your taste, write **Review guide instructions** in Settings → Source Control,
+such as what to show first or what to skip. They change emphasis and ordering, not the guide's
+layout or which files it covers.
+
 ## Completing and reversing a review
 
 To keep agent co-author and generated-by lines out of GitHub merge and squash messages, turn on

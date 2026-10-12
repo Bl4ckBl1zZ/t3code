@@ -34,6 +34,7 @@ import {
 } from "../components/ProviderModelPreferencesMigration";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
+import { PullRequestGuideRunCoordinator } from "../components/pullRequest/guide/PullRequestGuideRunCoordinator";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
 import { LegacyThreadMigrationToast } from "../components/LegacyThreadMigrationToast";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
@@ -221,6 +222,7 @@ function RootRouteView() {
           <ConnectOnboardingDialog />
           <SshPasswordPromptDialog />
           <ThreadNotificationCoordinator />
+          <PullRequestGuideRunCoordinator />
           <ReopenClosedViewShortcut />
           <ConfirmDialogHost />
           <SlowRpcRequestToastCoordinator />
