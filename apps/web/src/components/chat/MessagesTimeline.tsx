@@ -218,6 +218,7 @@ import { subagentOrbSeed, type SubagentTurnItem } from "./SubagentsStatusBadge.l
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { forwardWheelToTimeline } from "./timelineMinimapWheel";
 
 import {
   buildInlineTerminalContextText,
@@ -1043,6 +1044,14 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [],
   );
 
+  const forwardMinimapWheel = useCallback(
+    (event: WheelEvent) => {
+      const scrollNode = listRef.current?.getScrollableNode();
+      if (scrollNode) forwardWheelToTimeline(event, scrollNode);
+    },
+    [listRef],
+  );
+
   if (
     rows.length === 0 &&
     !isWorking &&
@@ -1115,6 +1124,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               hasPersistentGutter={minimapHasPersistentGutter}
               hitStripWidth={minimapHitStripWidth}
               stripMap={minimapStripMap}
+              onWheel={forwardMinimapWheel}
               onSelect={(item) => {
                 onManualNavigation();
                 void listRef.current?.scrollToIndex({
@@ -1167,6 +1177,7 @@ function TimelineMinimap({
   currentIndex,
   items,
   stripMap,
+  onWheel,
   onSelect,
 }: {
   hasPersistentGutter: boolean;
@@ -1174,9 +1185,18 @@ function TimelineMinimap({
   currentIndex: number | null;
   items: ReadonlyArray<TimelineMinimapItem>;
   stripMap: Map<string, HTMLSpanElement>;
+  onWheel: (event: WheelEvent) => void;
   onSelect: (item: TimelineMinimapItem) => void;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const wheelTargetRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) return;
+      node.addEventListener("wheel", onWheel, { passive: false });
+      return () => node.removeEventListener("wheel", onWheel);
+    },
+    [onWheel],
+  );
 
   const resolvedActiveIndex =
     activeIndex !== null && activeIndex < items.length ? activeIndex : null;
@@ -1250,6 +1270,7 @@ function TimelineMinimap({
       )}
       data-testid="timeline-minimap"
       data-persistent-gutter={hasPersistentGutter ? "true" : "false"}
+      ref={wheelTargetRef}
     >
       <div className="relative h-full w-full select-none">
         <div
