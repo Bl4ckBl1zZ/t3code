@@ -1582,6 +1582,11 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     /// The server's folder for projects started from just a name; see
     /// ``NewTaskWorkspaceDefaults/newThreadMode(environmentDefault:projectPath:newProjectsRoot:projectHasThreads:)``.
     public var newProjectsRoot: String? = nil
+    /// Whether this server keeps model favorites for every client. Nil on
+    /// older servers, where favorites stay on the device.
+    public var syncsModelFavorites: Bool? = nil
+    /// The server's favorites; nil until a client seeds them.
+    public var modelFavorites: [ModelFavorite]? = nil
 
     mutating func setPullRequestMergeMethod(_ method: String?, supported: Bool) {
         supportsPullRequestMergeMethod = supported ? true : nil

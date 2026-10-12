@@ -1676,6 +1676,42 @@ if (process.argv.includes("--check")) {
   }
 } else NodeFS.writeFileSync(projectDefaultsFixturePath, projectDefaultsFixture);
 
+// Synced model favorites: a seeded list, an unseeded (null) one, and a patch
+// that edits one favorite while seeding the device's list.
+const modelFavoritesFixturePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "modelFavorites.json",
+);
+const modelFavoritesFixture = `${JSON.stringify(
+  {
+    patch: Schema.encodeSync(ServerSettingsPatch)({
+      setModelFavorites: [
+        { provider: ProviderInstanceId.make("codex"), model: "gpt-5.4", favorite: false },
+      ],
+      migrateModelPreferences: {
+        favorites: [{ provider: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-4-6" }],
+      },
+    }),
+    seeded: Schema.encodeSync(ServerSettings)(
+      Schema.decodeSync(ServerSettings)({
+        favorites: [{ provider: "codex", model: "gpt-5.4" }],
+      }),
+    ),
+    unseeded: Schema.encodeSync(ServerSettings)(Schema.decodeSync(ServerSettings)({})),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(modelFavoritesFixturePath) ||
+    NodeFS.readFileSync(modelFavoritesFixturePath, "utf8") !== modelFavoritesFixture
+  ) {
+    console.error("[swift-fixtures] modelFavorites.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(modelFavoritesFixturePath, modelFavoritesFixture);
+
 const projectActionsFixturePath = NodePath.join(
   NodePath.dirname(outputPath),
   "projectActions.json",

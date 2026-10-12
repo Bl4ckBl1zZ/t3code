@@ -239,6 +239,7 @@ struct ModelPickerList: View {
 
     @AppStorage(ModelPickerMemory.favoritesKey) private var favoriteStorage = ""
     @AppStorage(ModelPickerMemory.recentsKey) private var recentStorage = ""
+    @SwiftUI.Environment(\.modelFavorites) private var syncedFavorites
     @State private var query = ""
     @State private var legacyModelsExpanded = false
 
@@ -483,7 +484,7 @@ struct ModelPickerList: View {
     }
 
     private var favoriteIDs: Set<String> {
-        Set(ModelPickerMemory.ids(in: favoriteStorage))
+        Set(syncedFavorites?.ids(localStorage: favoriteStorage) ?? ModelPickerMemory.ids(in: favoriteStorage))
     }
 
     private var recentIDs: [String] {
@@ -547,8 +548,13 @@ struct ModelPickerList: View {
             || option.model.id != threadSelection.modelID
     }
 
+    /// Synced environments take the edit; older servers keep the device list.
     private func toggleFavorite(_ id: String) {
-        favoriteStorage = ModelPickerMemory.toggling(id, in: favoriteStorage)
+        if let syncedFavorites {
+            syncedFavorites.setFavorite(id, !favoriteIDs.contains(id))
+        } else {
+            favoriteStorage = ModelPickerMemory.toggling(id, in: favoriteStorage)
+        }
     }
 }
 

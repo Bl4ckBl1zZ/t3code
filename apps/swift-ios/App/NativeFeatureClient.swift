@@ -5852,6 +5852,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 claudeAutoCompactWindow: serverSettings.claudeAutoCompactWindow
             )
             mapped.newProjectsRoot = serverConfigsByEnvironmentID[environment.id]?.newProjectsRoot
+            if serverSettings.syncsModelFavorites {
+                mapped.syncsModelFavorites = true
+                mapped.modelFavorites = serverSettings.favorites
+            }
             mapped.setPullRequestMergeMethod(serverSettings.pullRequestMergeMethod,
                 supported: serverConfigsByEnvironmentID[environment.id]?.environment?.capabilities.pullRequestMergeMethodDefaults == true)
             preferences[environment.id] = mapped

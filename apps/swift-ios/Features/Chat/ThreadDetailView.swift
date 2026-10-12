@@ -1266,6 +1266,7 @@ public struct ThreadDetailView: View {
             }
         )
         .simultaneousGesture(composerKeyboardDismissGesture)
+        .modelFavorites(model, environmentID: thread.environmentID)
         .environment(\.openURL, OpenURLAction { url in
             if let citation = AssistantCitation.parse(url.absoluteString) { citationPreview = citation; return .handled }
             return .systemAction

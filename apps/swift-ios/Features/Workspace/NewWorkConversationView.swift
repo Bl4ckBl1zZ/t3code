@@ -86,6 +86,7 @@ public struct NewWorkConversationView: View {
                     powerFeatures: composerPowerFeatures,
                     sendBlocker: sendBlocker
                 )
+                .modelFavorites(model, environmentID: activeTarget?.environmentID)
             }
             .background(T3Colors.background.ignoresSafeArea())
             .navigationTitle(flavor == .chat ? "New Chat" : "New Conversation")
