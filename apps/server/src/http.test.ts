@@ -4,6 +4,11 @@ import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthOrchestrationOperateScope, AuthSessionId } from "@t3tools/contracts";
+import {
+  injectMcpAppCsp,
+  injectMcpAppThemeBootstrap,
+  MCP_APP_MAX_HTML_BYTES,
+} from "@t3tools/shared/mcpApp";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -32,6 +37,70 @@ import {
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 
 const fileResponseLayer = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
+
+describe("MCP app asset responses", () => {
+  it.effect(
+    "transforms existing snapshots only with explicit render intent and fresh metadata",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-theme-" });
+        const file = path.join(directory, "app.html");
+        const html = injectMcpAppCsp(
+          "<html><head><script>vendor()</script></head><body>\u2603</body></html>",
+          undefined,
+        );
+        yield* fs.writeFileString(file, html);
+        for (const method of ["GET", "HEAD"] as const) {
+          const response = HttpServerResponse.toWeb(
+            yield* assetFileResponse(
+              { path: file, mimeType: "text/html", renderIntent: "mcp-app" },
+              "bytes=0-1",
+              undefined,
+              method,
+            ),
+          );
+          const expected = injectMcpAppThemeBootstrap(html);
+          expect(response.status).toBe(200);
+          expect(response.headers.get("content-length")).toBe(
+            String(new TextEncoder().encode(expected).byteLength),
+          );
+          expect(response.headers.get("etag")).toBeNull();
+          expect(response.headers.get("last-modified")).toBeNull();
+          expect(response.headers.get("content-security-policy")).toBe(
+            assetResponseHeaders(file, { mimeType: "text/html" })["Content-Security-Policy"],
+          );
+          expect(yield* Effect.promise(() => response.text())).toBe(
+            method === "HEAD" ? "" : expected,
+          );
+        }
+        for (const download of [false, true]) {
+          const response = HttpServerResponse.toWeb(
+            yield* assetFileResponse({
+              path: file,
+              mimeType: "text/html",
+              download,
+              ...(download ? { renderIntent: "mcp-app" as const } : {}),
+            }),
+          );
+          expect(yield* Effect.promise(() => response.text())).toBe(html);
+        }
+      }).pipe(Effect.provide(fileResponseLayer)),
+  );
+
+  it.effect("rejects oversized captures before transforming them", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-theme-size-" });
+      const file = path.join(directory, "app.html");
+      yield* fs.writeFileString(file, "x".repeat(MCP_APP_MAX_HTML_BYTES + 128 * 1024 + 1));
+      const response = yield* assetFileResponse({ path: file, renderIntent: "mcp-app" });
+      expect(response.status).toBe(413);
+    }).pipe(Effect.provide(fileResponseLayer)),
+  );
+});
 
 describe("video asset byte ranges", () => {
   it.effect("streams exactly the requested bytes and leaves full downloads intact", () =>
