@@ -17,10 +17,12 @@ import {
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
+  selectsPlanAgent,
 } from "../../modelSelection";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
@@ -76,6 +78,9 @@ export function SourceControlWritingSettingsSection() {
     activeSelection.instanceId,
     activeSelection.model,
   );
+  const writerInstanceEntry = instanceEntries.find(
+    (entry) => entry.instanceId === activeSelection.instanceId,
+  );
   const usesReviewGuideModel = settings.reviewGuideModelSelection !== null;
   const reviewGuideSelection = resolveAppModelSelectionState(
     {
@@ -90,6 +95,9 @@ export function SourceControlWritingSettingsSection() {
     serverProviders,
     reviewGuideSelection.instanceId,
     reviewGuideSelection.model,
+  );
+  const reviewGuideInstanceEntry = instanceEntries.find(
+    (entry) => entry.instanceId === reviewGuideSelection.instanceId,
   );
 
   return (
@@ -217,6 +225,31 @@ export function SourceControlWritingSettingsSection() {
                 }}
               />
             ) : null}
+            {usesDedicatedModel && writerInstanceEntry ? (
+              <TraitsPicker
+                provider={writerInstanceEntry.driverKind}
+                models={writerInstanceEntry.models}
+                model={activeSelection.model}
+                prompt=""
+                onPromptChange={() => {}}
+                modelOptions={activeSelection.options ?? []}
+                allowPromptInjectedEffort={false}
+                planModeEnabled={
+                  settings.planModeEnabled || selectsPlanAgent(activeSelection.options)
+                }
+                triggerVariant="outline"
+                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                onModelOptionsChange={(options) =>
+                  updateSettings({
+                    sourceControlWriterModelSelection: createModelSelection(
+                      activeSelection.instanceId,
+                      activeSelection.model,
+                      options,
+                    ),
+                  })
+                }
+              />
+            ) : null}
             <Switch
               checked={usesDedicatedModel}
               onCheckedChange={(checked) =>
@@ -273,6 +306,31 @@ export function SourceControlWritingSettingsSection() {
                         reviewGuideModelSelection: createModelSelection(instanceId, model),
                       });
                     }}
+                  />
+                ) : null}
+                {usesReviewGuideModel && reviewGuideInstanceEntry ? (
+                  <TraitsPicker
+                    provider={reviewGuideInstanceEntry.driverKind}
+                    models={reviewGuideInstanceEntry.models}
+                    model={reviewGuideSelection.model}
+                    prompt=""
+                    onPromptChange={() => {}}
+                    modelOptions={reviewGuideSelection.options ?? []}
+                    allowPromptInjectedEffort={false}
+                    planModeEnabled={
+                      settings.planModeEnabled || selectsPlanAgent(reviewGuideSelection.options)
+                    }
+                    triggerVariant="outline"
+                    triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                    onModelOptionsChange={(options) =>
+                      updateSettings({
+                        reviewGuideModelSelection: createModelSelection(
+                          reviewGuideSelection.instanceId,
+                          reviewGuideSelection.model,
+                          options,
+                        ),
+                      })
+                    }
                   />
                 ) : null}
                 <Switch
