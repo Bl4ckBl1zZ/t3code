@@ -508,6 +508,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// Per-host GitHub logins and saved tokens. Nil on a server that never
     /// saved any, and on one that predates the setting.
     public let github: GitHubSettings?
+    /// Beta: whether pull requests on this server offer a review guide. Off on
+    /// a server that predates guides, which is what hides the Guide tab there.
+    public let reviewGuidesEnabled: Bool
 
     public init(
         providerInstances: [String: JSONValue] = [:],
@@ -538,7 +541,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         claudeAutoCompactWindow: String = "",
         defaultTheme: String = "",
         defaultThemeSetAt: String = "",
-        github: GitHubSettings? = nil
+        github: GitHubSettings? = nil,
+        reviewGuidesEnabled: Bool = false
     ) {
         self.providerInstances = providerInstances
         self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
@@ -566,6 +570,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.defaultTheme = defaultTheme
         self.defaultThemeSetAt = defaultThemeSetAt
         self.github = github
+        self.reviewGuidesEnabled = reviewGuidesEnabled
     }
 
     public func projectScriptsInheritDefaults(projectID: String, legacyScripts: [ProjectScript]) -> Bool {
@@ -599,6 +604,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case defaultTheme
         case defaultThemeSetAt
         case github
+        case reviewGuidesEnabled
     }
 
     /// The slice of `providers` this client reads. Deliberately not the whole
@@ -664,6 +670,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             forKey: .defaultThemeSetAt
         ) ?? ""
         github = try container.decodeIfPresent(GitHubSettings.self, forKey: .github)
+        reviewGuidesEnabled = try container.decodeIfPresent(Bool.self, forKey: .reviewGuidesEnabled) ?? false
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -699,6 +706,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(defaultTheme, forKey: .defaultTheme)
         try container.encode(defaultThemeSetAt, forKey: .defaultThemeSetAt)
         try container.encodeIfPresent(github, forKey: .github)
+        try container.encode(reviewGuidesEnabled, forKey: .reviewGuidesEnabled)
     }
 }
 

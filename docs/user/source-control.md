@@ -240,7 +240,10 @@ nothing else running.
 ## Review guides
 
 Review guides are in beta. Turn on **Review guides** in Settings → Source Control to add the
-**Guide** tab to pull requests on that server.
+**Guide** tab to pull requests on that server. On iPhone and iPad, open a stop from the outline and
+move between stops with **Next** or the arrows at the top; tap an excerpt's file name to see it in
+the full diff. A stale guide offers **Rewrite Guide** and hides excerpts that no longer match the
+change. While a guide is being written, stay on the tab or come back later to see it.
 
 The **Guide** tab gives you a tour of a pull request without reading it line by line: stops
 through the change in reading order. Each stop points at the lines worth reading, and a stop marked

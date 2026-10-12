@@ -1324,6 +1324,21 @@ public actor T3Client {
         return try await rpc.request("pullRequests.diff", payload: .object(payload), as: PullRequestDiffResult.self)
     }
 
+    /// The stored review guide and any run in progress (`pullRequests.reviewGuide`).
+    public func pullRequestReviewGuide(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestReviewGuideResult {
+        try await rpc.request("pullRequests.reviewGuide", payload: .object(PullRequestWireReference.withHost(host, [
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ])), as: PullRequestReviewGuideResult.self)
+    }
+
+    /// Starts a guide run on the server and answers with its first state; the
+    /// run itself takes minutes, so callers poll `pullRequestReviewGuide`.
+    public func generatePullRequestReviewGuide(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestReviewGuideResult {
+        try await rpc.request("pullRequests.generateReviewGuide", payload: .object(PullRequestWireReference.withHost(host, [
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ])), as: PullRequestReviewGuideResult.self)
+    }
+
     public func pullRequestLabelCandidates(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestLabelCandidateList {
         try await rpc.request("pullRequests.labelCandidates", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),

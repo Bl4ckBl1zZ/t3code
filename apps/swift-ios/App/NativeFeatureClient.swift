@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
+    FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeaturePullRequestReviewGuiding, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     FeatureMcpAppHosting, FeatureThreadFinding, FeatureSubagentStopping, T3ConnectCapable
 {
@@ -3323,6 +3323,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               config.environment?.capabilities.pullRequestMergeMethodDefaults == true,
               let settings = config.settings else { return nil }
         return settings.projectPullRequestMergeMethodOverrides[projectWireID] ?? settings.pullRequestMergeMethod
+    }
+
+    func pullRequestReviewGuidesEnabled(scope: FeaturePullRequestScope) -> Bool {
+        guard let client = try? pullRequestRoute(scope: scope).client else { return false }
+        return serverConfigsByEnvironmentID[client.environment.id]?.settings?.reviewGuidesEnabled == true
+    }
+
+    func pullRequestReviewGuide(scope: FeaturePullRequestScope, number: Int) async throws -> PullRequestReviewGuideResult {
+        let route = try pullRequestRoute(scope: scope)
+        return try await route.client.pullRequestReviewGuide(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
+    }
+
+    func generatePullRequestReviewGuide(scope: FeaturePullRequestScope, number: Int) async throws -> PullRequestReviewGuideResult {
+        let route = try pullRequestRoute(scope: scope)
+        try await requireScope(AuthScope.orchestrationOperate, client: route.client)
+        return try await route.client.generatePullRequestReviewGuide(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
     }
 
     func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {

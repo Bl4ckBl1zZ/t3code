@@ -50,6 +50,7 @@ struct PullRequestDetailSheet: View {
     @State private var loadedAt: Date?
     @State private var tab: PullRequestDetailTab = .summary
     @State private var codeSearch = ""
+    @State private var guide: PullRequestReviewGuideModel?
 
     var body: some View {
         Group {
@@ -144,7 +145,7 @@ struct PullRequestDetailSheet: View {
             Text("feature/branch → main").font(T3Typography.tool)
             Text("+00 −00 · 0 files · by someone").font(T3Typography.supporting)
             Picker("Section", selection: .constant(PullRequestDetailTab.summary)) {
-                ForEach(PullRequestDetailTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                ForEach(PullRequestDetailTab.allCases.filter { $0 != .guide }, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
             .padding(.top, 8)
@@ -170,6 +171,9 @@ struct PullRequestDetailSheet: View {
                 reviewDraft = PullRequestReviewDraftModel(key: draftKey)
             }
             if tab == .code, result.detail.capabilities?.diff != true { tab = .summary }
+            if guide == nil, let reviewGuide = access.reviewGuide {
+                guide = PullRequestReviewGuideModel(number: number, access: reviewGuide)
+            }
             overview = result
             loadedAt = .now
             if force { hostRefreshRevision += 1 }
@@ -197,6 +201,31 @@ struct PullRequestDetailSheet: View {
         refreshingHost = true
         defer { refreshingHost = false }
         await load(force: true)
+        if tab == .guide { await guide?.refresh() }
+    }
+
+    /// The Guide tab shows only where the server has guides turned on, and
+    /// hides again if the server turns out not to know the method.
+    private var showsGuide: Bool {
+        guard let guide, !guide.unsupported else { return false }
+        return access.reviewGuide?.isEnabled() == true
+    }
+
+    private func canCommentOnLines(_ detail: PullRequestDetail) -> Bool {
+        access.submitReview != nil && detail.capabilities?.review?.inlineComment == true && detail.viewerPermissions?.comment == true
+            && !PullRequestReviewDraftModel.verdicts(capabilities: detail.capabilities, viewer: detail.viewerPermissions).isEmpty
+    }
+
+    private func guideCode(_ overview: FeaturePullRequestOverview) -> PullRequestGuideCodeContext? {
+        let detail = overview.detail
+        guard detail.capabilities?.diff == true, let diff = access.diff else { return nil }
+        let number = number
+        return PullRequestGuideCodeContext(
+            load: { cursor, commit in try await diff(number, cursor, commit) },
+            reviewDraft: reviewDraft,
+            canComment: canCommentOnLines(detail),
+            conversations: conversationContext(detail, activity: overview.activity),
+            fileContents: access.fileContents.map { read in { input in try await read(number, detail.url, input) } })
     }
 
     // MARK: - Actions
@@ -230,6 +259,15 @@ struct PullRequestDetailSheet: View {
                             Button(kind.label, systemImage: kind.systemImage) { beginHandoff(kind, selection: nil) }
                         }
                     }
+                }
+            }
+            if showsGuide, let guide, guide.data?.guide != nil {
+                Section {
+                    Button("Rewrite Guide", systemImage: "arrow.clockwise") {
+                        tab = .guide
+                        Task { await guide.write() }
+                    }
+                    .disabled(guide.running)
                 }
             }
             Section {
@@ -350,8 +388,13 @@ struct PullRequestDetailSheet: View {
                                     fileContents: access.fileContents.map { read in { input in try await read(number, detail.url, input) } },
                                     reviewDraft: reviewDraft,
                                     conversations: conversationContext(detail, activity: overview.activity),
-                                    canComment: access.submitReview != nil && detail.capabilities?.review?.inlineComment == true && detail.viewerPermissions?.comment == true && !PullRequestReviewDraftModel.verdicts(capabilities: detail.capabilities, viewer: detail.viewerPermissions).isEmpty)
+                                    canComment: canCommentOnLines(detail))
                                     .id(number)
+                            }
+                        case .guide:
+                            if showsGuide, let guide {
+                                PullRequestGuideView(model: guide, code: guideCode(overview),
+                                    finishReview: canReview(detail) ? { reviewing = true } : nil)
                             }
                         }
                     }
@@ -359,7 +402,7 @@ struct PullRequestDetailSheet: View {
                 } header: {
                     Picker("Section", selection: $tab) {
                         ForEach(PullRequestDetailTab.allCases, id: \.self) { tab in
-                            if tab != .code || showsCode {
+                            if (tab != .code || showsCode) && (tab != .guide || showsGuide) {
                                 Text(tab.rawValue).tag(tab)
                             }
                         }
@@ -377,6 +420,7 @@ struct PullRequestDetailSheet: View {
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await refreshFromHost() }
         .modifier(PullRequestCodeSearch(isActive: tab == .code, text: $codeSearch))
+        .onChange(of: showsGuide) { _, shows in if !shows, tab == .guide { tab = .summary } }
     }
 
     private func header(_ detail: PullRequestDetail) -> some View {

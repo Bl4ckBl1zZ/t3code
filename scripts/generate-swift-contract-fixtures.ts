@@ -73,6 +73,7 @@ import {
   PullRequestDiffFileContentsResult,
   PullRequestSubmitReviewInput,
   PullRequestThreadCommentsResult,
+  PullRequestReviewGuideResult,
   PullRequestDetail,
   PullRequestActionInput,
   PullRequestUpdateInput,
@@ -1070,6 +1071,60 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestThreadPath, pullRequestThreadSerialized);
+
+const pullRequestReviewGuidePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestReviewGuide.json",
+);
+const pullRequestReviewGuideSerialized = `${JSON.stringify(
+  Schema.encodeSync(
+    Schema.Struct({ ready: PullRequestReviewGuideResult, failed: PullRequestReviewGuideResult }),
+  )({
+    ready: {
+      guide: {
+        headSha: "abc123",
+        generatedAt: "2026-10-11T00:00:00.000Z",
+        modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+        stops: [
+          {
+            title: "The contract",
+            summary: "Adds a **guide** schema.",
+            attention: { kind: "contract", note: "Is the run union enough?" },
+            excerpts: [
+              { path: "src/guide.ts", side: "new", start: 10, end: 14, caption: "The shape" },
+            ],
+            files: [{ path: "src/generated.ts", note: "Generated" }, { path: "src/index.ts" }],
+            notes: [{ path: "src/guide.ts", line: 12, title: "Why null", body: "Older rows." }],
+            questions: ["Should this be configurable?"],
+          },
+        ],
+      },
+      run: { _tag: "Running", headSha: "def456", startedAt: "2026-10-11T00:05:00.000Z" },
+      currentHeadSha: "def456",
+    },
+    failed: {
+      guide: null,
+      run: {
+        _tag: "Failed",
+        headSha: "abc123",
+        failedAt: "2026-10-11T00:06:00.000Z",
+        detail: "The writer disconnected.",
+      },
+      currentHeadSha: "abc123",
+    },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestReviewGuidePath) ||
+    NodeFS.readFileSync(pullRequestReviewGuidePath, "utf8") !== pullRequestReviewGuideSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestReviewGuide.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestReviewGuidePath, pullRequestReviewGuideSerialized);
 
 const pullRequestActionsPath = NodePath.join(
   NodePath.dirname(outputPath),
