@@ -5,7 +5,6 @@ import {
   CodexSettings,
   CursorSettings,
   GrokSettings,
-  HermesSettings,
   MuseSettings,
   OpenClawSettings,
   OpenCodeSettings,
@@ -85,34 +84,6 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
     value: ProviderDriverKind.make("grok"),
     label: "Grok",
     settingsSchema: GrokSettings,
-  },
-  {
-    value: ProviderDriverKind.make("hermes"),
-    label: "Hermes",
-    badgeLabel: "Preview",
-    settingsSchema: HermesSettings,
-    defaultInstance: {
-      driver: ProviderDriverKind.make("hermes"),
-      enabled: false,
-      config: {
-        endpoint: "",
-        remoteAccessEnabled: false,
-        profileKey: "default",
-        managedServerEnabled: true,
-        customModels: [],
-        attachmentsEnabled: true,
-      },
-    },
-    environmentFields: [
-      {
-        name: "HERMES_GATEWAY_TOKEN",
-        label: "Hermes gateway token",
-        description:
-          "Shared only with the attached gateway or a Hermes Serve process launched by T3.",
-        placeholder: "Paste gateway token",
-        sensitive: true,
-      },
-    ],
   },
   {
     value: ProviderDriverKind.make("openclaw"),

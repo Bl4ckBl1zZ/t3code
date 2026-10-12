@@ -43,7 +43,7 @@ struct AgentSetupCommandTests {
     @Test func selectsInstallersForTheServerPlatform() {
         #expect(AgentSetupCommand.resolve(driver: "codex", installed: false, binaryPath: nil, platform: "windows") == "irm https://chatgpt.com/codex/install.ps1 | iex")
         #expect(AgentSetupCommand.resolve(driver: "claudeAgent", installed: false, binaryPath: nil, platform: "darwin") == "curl -fsSL https://claude.ai/install.sh | bash")
-        #expect(AgentSetupCommand.resolve(driver: "hermes", installed: false, binaryPath: nil, platform: "darwin") == nil)
+        #expect(AgentSetupCommand.resolve(driver: "unknown-driver", installed: false, binaryPath: nil, platform: "darwin") == nil)
     }
     @Test func quotesTheChosenAccountBinaryWithoutSubmittingIt() {
         #expect(AgentSetupCommand.resolve(driver: "codex", installed: true, binaryPath: "C:\\Agent Files\\codex.exe", platform: "windows") == "& 'C:\\Agent Files\\codex.exe' login")

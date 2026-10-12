@@ -4,7 +4,7 @@ import { runtimeModeMenu } from "./runtimeModeMenu";
 
 describe("runtimeModeMenu", () => {
   it("keeps the four generic modes for a code provider", () => {
-    const menu = runtimeModeMenu({ isHermes: false, runtimeMode: "approval-required" });
+    const menu = runtimeModeMenu({ runtimeMode: "approval-required" });
     expect(menu.options.map((option) => option.mode)).toEqual([
       "approval-required",
       "auto-accept-edits",
@@ -17,7 +17,6 @@ describe("runtimeModeMenu", () => {
   it("offers only the modes a provider supports, reading an unsupported one as the first", () => {
     const supportedRuntimeModes = ["approval-required", "auto", "full-access"] as const;
     const menu = runtimeModeMenu({
-      isHermes: false,
       runtimeMode: "auto-accept-edits",
       supportedRuntimeModes,
     });
@@ -25,26 +24,10 @@ describe("runtimeModeMenu", () => {
     expect(menu.selected.mode).toBe("approval-required");
   });
 
-  it("offers a T3 Work thread the two modes Hermes distinguishes", () => {
-    const menu = runtimeModeMenu({ isHermes: true, runtimeMode: "full-access" });
-    expect(menu.options.map((option) => option.title)).toEqual([
-      "Approve risky commands",
-      "Full access",
-    ]);
-    expect(menu.selected.mode).toBe("full-access");
-  });
-
-  it("shows a carried-in mode Hermes does not offer as the approval option", () => {
-    const menu = runtimeModeMenu({ isHermes: true, runtimeMode: "auto-accept-edits" });
-    expect(menu.selected.mode).toBe("approval-required");
-    expect(menu.options).toContain(menu.selected);
-  });
-
   // The composer's settings pill summarizes the thread in one line, so every
-  // offered mode needs a short form — including the Hermes pair, which the
-  // thread settings sheet reads through this menu rather than its own list.
+  // offered mode needs a short form.
   it("gives every offered mode a short label for the summary pill", () => {
-    const code = runtimeModeMenu({ isHermes: false, runtimeMode: "auto" });
+    const code = runtimeModeMenu({ runtimeMode: "auto" });
     expect(code.options.map((option) => option.shortLabel)).toEqual([
       "Approve",
       "Edits",
@@ -52,9 +35,5 @@ describe("runtimeModeMenu", () => {
       "Full",
     ]);
     expect(code.selected.shortLabel).toBe("Auto");
-
-    const hermes = runtimeModeMenu({ isHermes: true, runtimeMode: "full-access" });
-    expect(hermes.options.map((option) => option.shortLabel)).toEqual(["Approve", "Full"]);
-    expect(hermes.selected.shortLabel).toBe("Full");
   });
 });

@@ -1,12 +1,7 @@
 # Rich answers in chat
 
-T3 Work and Code conversations support rich answers: Markdown tables,
-checklists, highlighted code, images, callouts, expandable details, and
-interactive HTML previews.
-
-In Work, the assistant receives formatting guidance in new and existing
-conversations, including imported Hermes sessions. This does not depend on
-whether the connected Hermes gateway supports T3's MCP tools.
+Conversations support rich answers: Markdown tables, checklists, highlighted
+code, images, callouts, expandable details, and interactive HTML previews.
 
 ## Generated files
 

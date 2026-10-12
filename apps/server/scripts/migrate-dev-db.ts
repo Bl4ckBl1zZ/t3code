@@ -427,7 +427,7 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
     )`;
 
   // Every V2 table, every V1 table the legacy importer reads, and the fork's
-  // Hermes and retention tables are keyed by thread_id, so one sweep covers
+  // retention tables are keyed by thread_id, so one sweep covers
   // them all and new tables need no change here. Rows with a NULL thread_id
   // survive the NOT IN filter. Provider sessions are shared between threads
   // and pruned by binding below.

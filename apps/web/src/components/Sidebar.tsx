@@ -58,19 +58,13 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import { resolveThreadPreview } from "@t3tools/client-runtime/state/models";
 import {
   parseScopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import {
-  ProviderDriverKind,
-  type EnvironmentId,
-  type ScopedThreadRef,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { type ScopedThreadRef, type ThreadId } from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -177,14 +171,7 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
-import { useSidebarWorkspace } from "../sidebarWorkspace";
-import { isT3WorkBackingProject } from "../t3WorkProject";
-import { useHermesChat } from "../hooks/useHermesChat";
 import type { SidebarThreadSummary } from "../types";
-import {
-  resolveWorkEnvironmentScope,
-  useWorkEnvironmentScopePreference,
-} from "../workEnvironmentScope";
 import { cn } from "~/lib/utils";
 import {
   summarizeThreadDeletions,
@@ -195,17 +182,16 @@ import {
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
-  canPinWorkInboxThread,
+  canPinSidebarThread,
   formatBackgroundWorkTooltip,
   isSidebarNestedLinkClick,
   isSidebarThreadWorking,
-  isThreadVisibleInSidebarWorkspace,
+  isSidebarLifecycleThread,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
   resolveSidebarSweepKeys,
   sidebarThreadKeyAtY,
-  resolveWorkspaceSwitchNavigation,
   resolveSettledTimestamp,
   resolveSidebarRowAccessibility,
   resolveSidebarThreadStatus,
@@ -213,17 +199,12 @@ import {
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
-  resolveWorkInboxBadge,
-  sidebarProviderInstanceKey,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
   sortSidebarV2ProjectGroups,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
   useThreadJumpHintVisibility,
-  workspaceLandingKind,
-  type SidebarWorkspace,
-  type WorkInboxBadge,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -255,16 +236,7 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
-import {
-  Menu,
-  MenuItem,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuShortcut,
-  MenuTrigger,
-} from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import {
   SidebarContent,
   SidebarGroup,
@@ -284,7 +256,6 @@ import {
   type DraftSessionState,
 } from "../composerDraftStore";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { T3Wordmark } from "./sidebar/SidebarChrome";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -327,34 +298,6 @@ function observeInboxReturns(threads: readonly EnvironmentThreadShell[] | null):
   lastWorkingThreadKeys = working;
 }
 
-const SIDEBAR_WORKSPACE_ROUTES_STORAGE_KEY = "t3code:sidebar-workspace-routes:v1";
-const SIDEBAR_WORKSPACE_ROUTES_SCHEMA = Schema.Struct({
-  work: Schema.optional(Schema.String),
-  code: Schema.optional(Schema.String),
-  chat: Schema.optional(Schema.String),
-});
-const SIDEBAR_WORKSPACE_OPTIONS: ReadonlyArray<{
-  value: SidebarWorkspace;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: "code",
-    label: "T3 Code",
-    description: "Build, debug, and ship",
-  },
-  {
-    value: "work",
-    label: "T3 Work",
-    description: "Create, learn, and explore",
-  },
-  {
-    value: "chat",
-    label: "T3 Chat",
-    description: "Talk it through",
-  },
-];
-
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
   return label.endsWith(" ago") ? label.slice(0, -4) : label;
@@ -363,62 +306,6 @@ function compactSidebarTimeLabel(label: string): string {
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
   return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
-}
-
-function SidebarWorkspaceSelector(props: {
-  workspace: SidebarWorkspace;
-  onWorkspaceChange: (workspace: SidebarWorkspace) => void;
-}) {
-  const selected = SIDEBAR_WORKSPACE_OPTIONS.find((option) => option.value === props.workspace)!;
-
-  return (
-    <Menu>
-      <MenuTrigger
-        aria-label={`Switch workspace. Current workspace: ${selected.label}`}
-        className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex h-8 min-w-0 max-w-[calc(100%-var(--workspace-titlebar-content-left)-0.5rem)] cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-sidebar-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring in-data-[on-backdrop]:text-white in-data-[on-backdrop]:hover:bg-white/15 in-data-[on-backdrop]:focus-visible:ring-white/90"
-      >
-        <T3Wordmark />
-        <span className="truncate text-sm font-medium tracking-tight">
-          {selected.label.slice(3)}
-        </span>
-        <ChevronDownIcon
-          aria-hidden
-          className="size-3.5 shrink-0 text-sidebar-muted-foreground in-data-[on-backdrop]:text-white/70"
-        />
-      </MenuTrigger>
-      <MenuPopup align="start">
-        <MenuRadioGroup
-          value={props.workspace}
-          onValueChange={(value) => {
-            if (value === "work" || value === "code" || value === "chat") {
-              props.onWorkspaceChange(value);
-            }
-          }}
-        >
-          {SIDEBAR_WORKSPACE_OPTIONS.map((option) => (
-            <MenuRadioItem
-              key={option.value}
-              value={option.value}
-              closeOnClick
-              className="min-h-12 px-2 py-1.5"
-            >
-              <span className="flex min-w-0 items-center gap-3">
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{option.label}</span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {option.description}
-                  </span>
-                </span>
-                {props.workspace === option.value ? (
-                  <CheckIcon aria-hidden className="size-4 shrink-0 text-foreground" />
-                ) : null}
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </MenuPopup>
-    </Menu>
-  );
 }
 
 // Settled rows read "how long ago did this wrap up", matching their sort
@@ -490,7 +377,6 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
-  showProjectContext,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string | null;
@@ -508,7 +394,6 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
-  showProjectContext: boolean;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
   const previousProviderNames = thread.providerInstanceHistory
@@ -517,7 +402,7 @@ function SidebarThreadTooltip({
   return (
     <ThreadHoverCardPopup side="right" align="start" sideOffset={4}>
       <ThreadHoverCard title={thread.title}>
-        {showProjectContext && projectTitle ? (
+        {projectTitle ? (
           <div className="flex min-w-0 items-center gap-2">
             <ProjectFavicon
               projectId={thread.projectId}
@@ -538,13 +423,13 @@ function SidebarThreadTooltip({
             <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
           </div>
         ) : null}
-        {showProjectContext && thread.branch ? (
+        {thread.branch ? (
           <div className="flex min-w-0 items-center gap-2 text-foreground/75">
             <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
             <MiddleTruncate value={thread.branch} className="flex" />
           </div>
         ) : null}
-        {showProjectContext && branchMismatch ? (
+        {branchMismatch ? (
           <div className="flex min-w-0 items-start gap-2 text-warning">
             <CircleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
             <div className="min-w-0 flex-1 wrap-break-word leading-5">
@@ -681,46 +566,6 @@ function SnoozeMenuButton(props: {
     </Menu>
   );
 }
-
-// The Work lozenge reuses the status hues, as a filled pill rather than a bare
-// word: it stands where a Code card puts its project favicon and name, so it
-// has to carry that slot's visual weight. The rail is the same hue down the
-// row's leading edge, and only "Needs you" earns one — a rail on every row is a
-// rail on none, and the point is that the inbox triages in one pass.
-const WORK_INBOX_BADGE_STYLE: Record<
-  WorkInboxBadge,
-  {
-    label: string;
-    className: string;
-    railClassName: string | null;
-  }
-> = {
-  "needs-you": {
-    label: "Needs you",
-    className: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-    railClassName: "bg-amber-500/70",
-  },
-  working: {
-    label: "Working",
-    className: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
-    railClassName: null,
-  },
-  failed: {
-    label: "Failed",
-    className: "bg-red-500/15 text-red-700 dark:text-red-300",
-    railClassName: null,
-  },
-  limited: {
-    label: "Limited",
-    className: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-    railClassName: null,
-  },
-  done: {
-    label: "Done",
-    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-    railClassName: null,
-  },
-};
 
 // Drag plumbing handed down by SortableSidebarThreadRow: the row owns its <li>
 // (no wrapper element — li>li nesting is invalid), so the sortable ref,
@@ -1226,17 +1071,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
-  const isHermes = driverKind === "hermes" || (driverKind === null && modelInstanceId === "hermes");
-  // Chat conversations are Hermes threads born on the Chat surface; the rest of
-  // Hermes is the Work inbox. Same split the workspace filter makes, so a row
-  // renders as what its workspace says it is.
-  const isChat = isHermes && thread.workInboxRole === "chat";
-  const isWork = isHermes && !isChat;
-  const workBadge = isWork
-    ? resolveWorkInboxBadge({ status, hasUnseenCompletion: isUnread })
-    : null;
-  const workBadgeStyle = workBadge === null ? null : WORK_INBOX_BADGE_STYLE[workBadge];
-  const preview = resolveThreadPreview(thread);
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -1246,7 +1080,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
-    !isHermes && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
       ? vcsEnvironment.status({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd, includeRemote: false },
@@ -1319,7 +1153,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const detailsTooltip = (
     <SidebarThreadTooltip
       thread={thread}
-      projectTitle={isHermes ? null : props.projectTitle}
+      projectTitle={props.projectTitle}
       projectCwd={props.projectCwd}
       projectFaviconPath={props.projectFaviconPath}
       environmentLabel={props.environmentLabel}
@@ -1328,10 +1162,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       showInstanceBadge={showInstanceBadge}
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
-      branchMismatch={isHermes ? null : branchMismatch}
+      branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
-      showProjectContext={!isHermes}
     />
   );
 
@@ -1587,7 +1420,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // second link to the same place: it stays part of the row, so clicking it
   // opens the thread like clicking any other text on the row does.
   const prLine =
-    !isHermes && prStatus && pr ? (
+    prStatus && pr ? (
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left">
         {(thread.linkedPullRequests?.length ?? 0) > 1 ? (
           <ThreadPullRequestsControl threadRef={threadRef} compact />
@@ -1703,22 +1536,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
-              {isHermes ? (
-                <ProviderInstanceIcon
-                  driverKind={ProviderDriverKind.make("hermes")}
-                  displayName="Hermes"
-                  iconClassName="size-4"
-                />
-              ) : (
-                <ProjectFavicon
-                  projectId={thread.projectId}
-                  environmentId={thread.environmentId}
-                  cwd={props.projectCwd ?? ""}
-                  faviconPath={props.projectFaviconPath}
-                  className="size-4"
-                  fallbackIcon={MessageSquareIcon}
-                />
-              )}
+              <ProjectFavicon
+                projectId={thread.projectId}
+                environmentId={thread.environmentId}
+                cwd={props.projectCwd ?? ""}
+                faviconPath={props.projectFaviconPath}
+                className="size-4"
+                fallbackIcon={MessageSquareIcon}
+              />
             </span>
             {draftIndicator}
             {title}
@@ -1840,13 +1665,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const diff = latestTurnDiff(thread);
 
-  // Chat shows live progress below the title; other rows keep status beside it.
-  const headStatus = isWokeStatus ? topStatus : isChat && status === "working" ? null : topStatus;
+  const headStatus = topStatus;
 
   // The visible state owns this slot's width: status at rest, actions on
   // hover/keyboard focus or while the popover is open. Keeping the hidden state
   // out of flow lets the label beside it reclaim space without either state
-  // overlapping it. Code uses the meta line; Work and Chat use the title line.
+  // overlapping it.
   const statusSlot = (
     <span
       className={cn(
@@ -1912,21 +1736,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             snoozeMenuOpen && "pointer-events-auto static opacity-100",
           )}
         >
-          {thread.workInboxRole === "main" ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    aria-label="Main thread is always pinned"
-                    className="inline-flex items-center px-1.5 text-muted-foreground"
-                  />
-                }
-              >
-                <PinIcon aria-hidden className="size-3" />
-              </TooltipTrigger>
-              <TooltipPopup side="top">Main thread is always pinned</TooltipPopup>
-            </Tooltip>
-          ) : props.canPin ? (
+          {props.canPin ? (
             <button
               type="button"
               aria-label={props.isPinned ? "Unpin thread" : "Pin thread"}
@@ -1984,20 +1794,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     </>
   );
 
-  // The last thing said, dimmed where the user is the one who said it. Hermes
-  // rows have no branch, no repo and no diff, so this is what differs between
-  // them — the same line every message list leads with.
-  const previewLine = preview ? (
-    <span className="min-w-0 flex-1 truncate whitespace-nowrap">
-      {preview.fromUser ? <span className="opacity-60">You: </span> : null}
-      {preview.text}
-    </span>
-  ) : (
-    <span className="min-w-0 flex-1 truncate text-muted-foreground/55">
-      {isWork ? "Start a conversation" : null}
-    </span>
-  );
-
   const rowIconCluster = (
     <span
       aria-hidden
@@ -2016,7 +1812,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
           <PinIcon aria-hidden className="size-3.5" />
         </span>
-      ) : driverKind && !isHermes ? (
+      ) : driverKind ? (
         <span className="inline-flex shrink-0 items-center opacity-60">
           <ProviderInstanceIcon
             driverKind={driverKind}
@@ -2036,10 +1832,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       {...fileDrop.handlers}
       data-thread-item={threadKey}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto]",
-        isChat || isWork
-          ? "[contain-intrinsic-size:auto_66px]"
-          : "[contain-intrinsic-size:auto_96px]",
+        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
         props.sortable?.isDragging && "relative z-20 opacity-80",
       )}
     >
@@ -2062,117 +1855,73 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           }
         >
           {accessibleTitle}
-          {workBadgeStyle?.railClassName != null ? (
-            <span
-              aria-hidden
-              className={cn(
-                "absolute inset-y-1.5 left-0 z-10 w-[3px] rounded-full",
-                workBadgeStyle.railClassName,
-              )}
-            />
-          ) : null}
-          <div
-            className={cn(
-              "relative z-10 px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]",
-              // Conversations lead with their title and preview.
-              isChat || isWork ? "h-[3.375rem]" : "h-[4.875rem]",
-              workBadgeStyle?.railClassName != null &&
-                "pl-[calc(var(--sidebar-row-content-inset)+0.25rem)]",
-            )}
-          >
-            {isChat || isWork ? (
-              /* T3 Work and Chat: a conversation, so title and time share one line and
-                 the last thing said sits under it. There is no meta line above
-                 the title, because every row in Chat would have filled it with
-                 the same word. */
-              <>
-                <div className="flex min-w-0 items-center gap-1.5">
-                  {titleLine}
-                  {statusSlot}
-                  {sweepBadge}
-                </div>
-                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-                  {isChat && status === "working" ? (
-                    <span className="min-w-0 flex-1 truncate whitespace-nowrap text-sky-600 dark:text-sky-400">
-                      responding…
+          <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
+            <>
+              <div className="flex h-5 min-w-0 items-center gap-1.5">
+                <>
+                  <ProjectFavicon
+                    projectId={thread.projectId}
+                    environmentId={thread.environmentId}
+                    cwd={props.projectCwd ?? ""}
+                    faviconPath={props.projectFaviconPath}
+                    className="size-4 shrink-0"
+                  />
+                  {props.projectTitle ? (
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
+                        shouldRecede ? "font-normal" : "font-medium",
+                      )}
+                    >
+                      {props.projectTitle}
                     </span>
-                  ) : (
-                    previewLine
-                  )}
-                  {terminalStatusIcon}
-                  {rowIconCluster}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex h-5 min-w-0 items-center gap-1.5">
-                  <>
-                    <ProjectFavicon
-                      projectId={thread.projectId}
-                      environmentId={thread.environmentId}
-                      cwd={props.projectCwd ?? ""}
-                      faviconPath={props.projectFaviconPath}
-                      className="size-4 shrink-0"
-                    />
-                    {props.projectTitle ? (
-                      <span
-                        className={cn(
-                          "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
-                          shouldRecede ? "font-normal" : "font-medium",
-                        )}
-                      >
-                        {props.projectTitle}
-                      </span>
-                    ) : (
-                      <span className="flex-1" />
-                    )}
-                  </>
-                  {statusSlot}
-                  {sweepBadge}
-                </div>
-                <div className="mt-1 flex min-w-0">{titleLine}</div>
-                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-                  {isWork ? (
-                    previewLine
-                  ) : prLine ? (
-                    prLine
-                  ) : thread.branch ? (
-                    <>
-                      <ThreadWorktreeIndicator thread={thread} />
-                      <span className="min-w-0 flex-1 truncate whitespace-nowrap">
-                        {thread.branch}
-                      </span>
-                    </>
-                  ) : showsScratchMachine ? (
-                    <>
-                      <ConnectedEnvironmentMachineIcon
-                        environmentId={thread.environmentId}
-                        aria-hidden
-                        className="size-3 shrink-0 text-muted-foreground/40"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-muted-foreground/40">
-                        {props.scratchMachineLabel}
-                      </span>
-                    </>
                   ) : (
                     <span className="flex-1" />
                   )}
-                  {terminalStatusIcon}
-                  {isWork || prLine ? null : prBadge}
-                  {!isHermes && diff ? (
-                    <span className="shrink-0 font-mono">
-                      <span className="text-diff-addition-foreground">
-                        +{formatDiffCount(diff.insertions)}
-                      </span>{" "}
-                      <span className="text-diff-deletion-foreground">
-                        −{formatDiffCount(diff.deletions)}
-                      </span>
+                </>
+                {statusSlot}
+                {sweepBadge}
+              </div>
+              <div className="mt-1 flex min-w-0">{titleLine}</div>
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
+                {prLine ? (
+                  prLine
+                ) : thread.branch ? (
+                  <>
+                    <ThreadWorktreeIndicator thread={thread} />
+                    <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                      {thread.branch}
                     </span>
-                  ) : null}
-                  {rowIconCluster}
-                </div>
-              </>
-            )}
+                  </>
+                ) : showsScratchMachine ? (
+                  <>
+                    <ConnectedEnvironmentMachineIcon
+                      environmentId={thread.environmentId}
+                      aria-hidden
+                      className="size-3 shrink-0 text-muted-foreground/40"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground/40">
+                      {props.scratchMachineLabel}
+                    </span>
+                  </>
+                ) : (
+                  <span className="flex-1" />
+                )}
+                {terminalStatusIcon}
+                {prLine ? null : prBadge}
+                {diff ? (
+                  <span className="shrink-0 font-mono">
+                    <span className="text-diff-addition-foreground">
+                      +{formatDiffCount(diff.insertions)}
+                    </span>{" "}
+                    <span className="text-diff-deletion-foreground">
+                      −{formatDiffCount(diff.deletions)}
+                    </span>
+                  </span>
+                ) : null}
+                {rowIconCluster}
+              </div>
+            </>
           </div>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </TooltipTrigger>
@@ -2269,7 +2018,6 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
-  const driverKind = providerEntry?.driverKind ?? null;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -2349,14 +2097,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           showInstanceBadge={showInstanceBadge}
           modelInstanceId={modelInstanceId}
           modelLabel={modelLabel}
-          branchMismatch={
-            driverKind === "hermes" || (driverKind === null && modelInstanceId === "hermes")
-              ? null
-              : branchMismatch
-          }
-          showProjectContext={
-            !(driverKind === "hermes" || (driverKind === null && modelInstanceId === "hermes"))
-          }
+          branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}
         />
@@ -2366,12 +2107,6 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 });
 
 export default function Sidebar() {
-  const [workspace, setWorkspace] = useSidebarWorkspace();
-  const [workspaceRoutes, setWorkspaceRoutes] = useLocalStorage(
-    SIDEBAR_WORKSPACE_ROUTES_STORAGE_KEY,
-    {},
-    SIDEBAR_WORKSPACE_ROUTES_SCHEMA,
-  );
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threadOrder = useUiStateStore((store) => store.threadOrder);
@@ -2414,7 +2149,7 @@ export default function Sidebar() {
     () =>
       new Set(
         threads
-          .filter((thread) => thread.pinnedAt !== null || thread.workInboxRole === "main")
+          .filter((thread) => thread.pinnedAt !== null)
           .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
       ),
     [threads],
@@ -2587,17 +2322,11 @@ export default function Sidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
-  const routeTargetRef = useRef(routeTarget);
-  routeTargetRef.current = routeTarget;
   // Post-settle navigation validates against the CURRENT route, not the one
   // captured when the settle started: if the user navigated elsewhere while
   // the command was in flight, completing it must not yank them away.
   const routeThreadKeyRef = useRef(routeThreadKey);
   routeThreadKeyRef.current = routeThreadKey;
-  useEffect(() => {
-    if (routeThreadKey === null || workspaceRoutes[workspace] === routeThreadKey) return;
-    setWorkspaceRoutes((current) => ({ ...current, [workspace]: routeThreadKey }));
-  }, [routeThreadKey, setWorkspaceRoutes, workspace, workspaceRoutes]);
 
   const environmentLabelById = useMemo(
     () =>
@@ -2607,14 +2336,10 @@ export default function Sidebar() {
     [environments],
   );
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const visibleProjects = useMemo(
-    () => projects.filter((project) => !isT3WorkBackingProject(project, serverConfigs)),
-    [projects, serverConfigs],
-  );
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
-        items: visibleProjects,
+        items: projects,
         preferredIds: projectOrder,
         getId: getProjectOrderKey,
         getPreferenceIds: (project) => [
@@ -2622,12 +2347,12 @@ export default function Sidebar() {
           legacyProjectCwdPreferenceKey(project.workspaceRoot),
         ],
       }),
-    [projectOrder, visibleProjects],
+    [projectOrder, projects],
   );
   const unsortedProjectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
-        projects: sidebarProjectSortOrder === "manual" ? orderedProjects : visibleProjects,
+        projects: sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
         // Each environment's "No project" (Scratch) merges into one filter.
         groupScratchProjects: true,
         settings: projectGroupingSettings,
@@ -2639,7 +2364,7 @@ export default function Sidebar() {
       orderedProjects,
       primaryEnvironmentId,
       projectGroupingSettings,
-      visibleProjects,
+      projects,
       sidebarProjectSortOrder,
     ],
   );
@@ -2659,51 +2384,6 @@ export default function Sidebar() {
       ),
     [serverConfigs],
   );
-  const providerDriverKindByInstance = useMemo(() => {
-    const result = new Map<string, ProviderInstanceEntry["driverKind"]>();
-    for (const [environmentId, serverConfig] of serverConfigs) {
-      for (const provider of serverConfig.providers) {
-        result.set(sidebarProviderInstanceKey(environmentId, provider.instanceId), provider.driver);
-      }
-    }
-    return result;
-  }, [serverConfigs]);
-  // Work-mode environment scope: one menu above the list, mirroring the
-  // code-mode project scope. Scoping filters the visible work threads and
-  // retargets the New-thread composer to the selected environment. Unlike the
-  // project scope this is never "all": Work and Chat run on one machine's
-  // Hermes, so the menu offers the machines that can host them and the choice
-  // is remembered across reloads.
-  const [storedWorkEnvironmentScopeId, setStoredWorkEnvironmentScopeId] =
-    useWorkEnvironmentScopePreference();
-  const workThreadEnvironmentIds = useMemo(() => {
-    const ids = new Set<EnvironmentId>();
-    if (workspace !== "work" && workspace !== "chat") return ids;
-    for (const thread of threads) {
-      if (isThreadVisibleInSidebarWorkspace(thread, workspace, providerDriverKindByInstance)) {
-        ids.add(thread.environmentId);
-      }
-    }
-    return ids;
-  }, [providerDriverKindByInstance, threads, workspace]);
-  const { options: workEnvironmentOptions, scopeId: workEnvironmentScopeId } = useMemo(
-    () =>
-      resolveWorkEnvironmentScope({
-        environments,
-        serverConfigs,
-        threadEnvironmentIds: workThreadEnvironmentIds,
-        storedEnvironmentId: storedWorkEnvironmentScopeId,
-        primaryEnvironmentId,
-      }),
-    [
-      environments,
-      primaryEnvironmentId,
-      serverConfigs,
-      storedWorkEnvironmentScopeId,
-      workThreadEnvironmentIds,
-    ],
-  );
-  const hermesChat = useHermesChat();
   const projectCwdByKey = useMemo(
     () =>
       new Map(
@@ -2886,7 +2566,7 @@ export default function Sidebar() {
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeKey, workEnvironmentScopeId]);
+  }, [clearSelection, projectScopeKey]);
 
   const handleProjectSettings = useCallback(
     (event: SyntheticEvent, projectGroup: SidebarProjectSnapshot) => {
@@ -2921,11 +2601,9 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     const visible = threads.filter(
       (thread) =>
-        isThreadVisibleInSidebarWorkspace(thread, workspace, providerDriverKindByInstance) &&
-        (workspace === "work" || workspace === "chat"
-          ? workEnvironmentScopeId === null || thread.environmentId === workEnvironmentScopeId
-          : scopedProjectKeys === null ||
-            scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+        isSidebarLifecycleThread(thread) &&
+        (scopedProjectKeys === null ||
+          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
     // Every thread, not just the scoped ones, so a scope flip keeps returns.
     observeInboxReturns(workingShelfEnabled ? threads : null);
@@ -2961,11 +2639,9 @@ export default function Sidebar() {
       // A pin does not outrank either: a settled pinned thread belongs in the
       // settled shelf, keeping its pin (and its place at the top of active)
       // for when it wakes.
-      const fixedInMain = thread.workInboxRole === "main";
-      if (!fixedInMain && supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
+      if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
         snoozed.push(thread);
       } else if (
-        !fixedInMain &&
         supportsSettlement &&
         effectiveSettled(thread, {
           now,
@@ -2976,8 +2652,8 @@ export default function Sidebar() {
       ) {
         settled.push(thread);
       } else if (workingShelfEnabled && !isPinnedThread(thread) && isSidebarThreadWorking(thread)) {
-        // Working beta: only inbox threads fold away. Pins and Work's main
-        // thread stay put; snoozed and settled threads keep their shelves.
+        // Working beta: only inbox threads fold away. Pins stay put; snoozed
+        // and settled threads keep their shelves.
         working.push(thread);
       } else {
         active.push(thread);
@@ -3035,19 +2711,15 @@ export default function Sidebar() {
     changeRequestSnapshotByKey,
     nowMinute,
     pinnedThreadKeySet,
-    providerDriverKindByInstance,
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
     threadOrder,
     threads,
-    workEnvironmentScopeId,
     workingShelfEnabled,
-    workspace,
   ]);
   const { activeThreads, workingThreads, snoozedThreads, settledThreads, snoozeNow } =
     sidebarSections;
-  // All workspaces share the same ordered thread list and drag behavior.
   const { sortableThreadKeys, activeSectionByKey } = useMemo(() => {
     const keys = activeThreads.map((thread) =>
       scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -3119,28 +2791,11 @@ export default function Sidebar() {
         return;
       }
       if (reorderInFlight.current || pendingOrder !== null) return;
-      if (
-        activeThreads.some(
-          (thread) =>
-            thread.workInboxRole === "main" &&
-            [activeKey, overKey].includes(
-              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            ),
-        )
-      )
-        return;
       const pinned = pinnedThreadKeySet.has(activeKey);
       if (pinned !== pinnedThreadKeySet.has(overKey)) return;
-      const fixedKeys = new Set(
-        activeThreads
-          .filter((thread) => thread.workInboxRole === "main")
-          .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-      );
       const orderedIds = sortableThreadKeys.filter(
         (key) =>
-          !fixedKeys.has(key) &&
-          activeSectionByKey.get(key) === activeSection &&
-          pinnedThreadKeySet.has(key) === pinned,
+          activeSectionByKey.get(key) === activeSection && pinnedThreadKeySet.has(key) === pinned,
       );
       const refs = orderedIds.map(parseScopedThreadKey);
       if (refs.some((ref) => ref === null)) return;
@@ -3313,10 +2968,7 @@ export default function Sidebar() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey =
-    workspace === "work" || workspace === "chat"
-      ? `${workspace}:${workEnvironmentScopeId ?? "all"}`
-      : `code:${projectScopeKey ?? "all"}`;
+  const settledResetKey = projectScopeKey ?? "all";
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -3507,85 +3159,6 @@ export default function Sidebar() {
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
   const handleThreadFileDrop = useSidebarFileDropNavigation(navigateToThread);
-  // Route all Work/Chat creation through the native Hermes conversation service.
-  const openWorkComposer = useCallback((): boolean => {
-    if (!hermesChat.isReady) return false;
-    if (isMobile) setOpenMobile(false);
-    void hermesChat.start();
-    return true;
-  }, [hermesChat, isMobile, setOpenMobile]);
-  const handleWorkspaceChange = useCallback(
-    (nextWorkspace: SidebarWorkspace) => {
-      if (nextWorkspace === workspace) return;
-      setWorkspace(nextWorkspace);
-      // A draft composer is only workspace-neutral when its project does not
-      // pin it to one side: a draft on the Hermes backing project is a Work
-      // composer and must not stay open when switching to Code.
-      const routeDraftWorkspace = (() => {
-        const target = routeTargetRef.current;
-        if (target?.kind !== "draft") return null;
-        const draft = useComposerDraftStore.getState().getDraftSession(target.draftId);
-        if (draft === null) return null;
-        const draftProject =
-          projects.find(
-            (project) =>
-              project.environmentId === draft.environmentId && project.id === draft.projectId,
-          ) ?? null;
-        // Unknown project (still loading) stays neutral rather than guessing.
-        if (draftProject === null) return null;
-        return isT3WorkBackingProject(draftProject, serverConfigs)
-          ? ("work" as const)
-          : ("code" as const);
-      })();
-      const navigation = resolveWorkspaceSwitchNavigation({
-        nextWorkspace,
-        rememberedThreadKey: workspaceRoutes[nextWorkspace],
-        routeThreadKey,
-        routeDraftWorkspace,
-        threads: threads.map((thread) => ({
-          ...thread,
-          threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        })),
-        providerDriverKindByInstance,
-      });
-      if (navigation.kind === "remembered-thread") {
-        const rememberedThread = threads.find(
-          (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-            navigation.threadKey,
-        );
-        if (rememberedThread) {
-          navigateToThread(scopeThreadRef(rememberedThread.environmentId, rememberedThread.id));
-        }
-        return;
-      }
-      if (navigation.kind === "new-chat") {
-        if (workspaceLandingKind(nextWorkspace) === "chat-composer") {
-          // Chat lands on a composer, so open it here rather than bouncing
-          // through the index route: this path honors the work environment
-          // scope, and when Hermes cannot open, staying on the current thread
-          // beats a dead landing. Code and Work land on a page, which the
-          // index route renders per workspace.
-          openWorkComposer();
-          return;
-        }
-        void router.navigate({ to: "/" });
-      }
-    },
-    [
-      navigateToThread,
-      openWorkComposer,
-      projects,
-      providerDriverKindByInstance,
-      routeThreadKey,
-      serverConfigs,
-      router,
-      setWorkspace,
-      threads,
-      workspace,
-      workspaceRoutes,
-    ],
-  );
   const navigateToDraft = useCallback(
     (draftId: DraftId) => {
       // Unconditional: also drops a stale selection anchor left by
@@ -3867,11 +3440,11 @@ export default function Sidebar() {
       dragSensorRef.current?.cancel();
       const originKey = scopedThreadKey(threadRef);
       const originSection = sectionByThreadKeyRef.current.get(originKey);
-      // The same gate the row uses to show the button: Work's main thread
-      // never parks, and older servers lack the commands.
+      // The same gate the row uses to show the button: older servers lack
+      // the commands.
       const canApply = (key: string) => {
         const thread = threadByKeyRef.current.get(key);
-        if (thread === undefined || thread.workInboxRole === "main") return false;
+        if (thread === undefined) return false;
         if (sectionByThreadKeyRef.current.get(key) !== originSection) return false;
         const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
         return action === "unsnooze"
@@ -4009,9 +3582,7 @@ export default function Sidebar() {
       const pinnedSelectedThreads = selectedThreads.filter(
         (thread) =>
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinning ===
-            true &&
-          thread.pinnedAt != null &&
-          thread.workInboxRole !== "main",
+            true && thread.pinnedAt != null,
       );
       const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
       const clicked = await settlePromise(() =>
@@ -4253,16 +3824,12 @@ export default function Sidebar() {
         // clears the override, for auto-settled rows it pins the thread
         // active until real activity clears the pin. Environments without
         // the settlement capability get no lifecycle items at all.
-        const isWorkMain = thread.workInboxRole === "main";
         const supportsSettlement =
-          !isWorkMain &&
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
-            true;
+          true;
         const supportsSnooze =
-          !isWorkMain &&
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
         const supportsAutoSettleOptOut =
-          !isWorkMain &&
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadAutoSettleOptOut === true;
         const autoSettleEnabled = thread.autoSettleDisabledAt == null;
@@ -4275,26 +3842,24 @@ export default function Sidebar() {
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = pinnedThreadKeySet.has(threadKey);
-        const canPin = canPinWorkInboxThread({
+        const canPin = canPinSidebarThread({
           thread,
-          providerDriverKindByInstance,
+          supportsPinning:
+            serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinning ===
+            true,
           isSnoozed,
           isSettled,
         });
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
-        // Project scoping only exists on the Code list; Work and Chat have no
-        // project filter behind the menu, so the item must not show there.
         const threadProjectGroup =
-          workspace === "code"
-            ? (projectGroups.find((project) =>
-                project.memberProjectRefs.some(
-                  (projectRef) =>
-                    projectRef.environmentId === thread.environmentId &&
-                    projectRef.projectId === thread.projectId,
-                ),
-              ) ?? null)
-            : null;
+          projectGroups.find((project) =>
+            project.memberProjectRefs.some(
+              (projectRef) =>
+                projectRef.environmentId === thread.environmentId &&
+                projectRef.projectId === thread.projectId,
+            ),
+          ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             [
@@ -4677,14 +4242,12 @@ export default function Sidebar() {
       projectCwdByKey,
       projectGroups,
       projectScopeKey,
-      providerDriverKindByInstance,
       serverConfigs,
       setThreadAutoSettle,
       startThreadRename,
       toggleThreadPin,
       updateThreadMetadata,
       workingShelfEnabled,
-      workspace,
     ],
   );
 
@@ -4780,17 +4343,6 @@ export default function Sidebar() {
   // for multi-project setups.
   const handleNewThreadClick = useCallback(
     (event?: ReactMouseEvent) => {
-      if (workspace === "work" || workspace === "chat") {
-        if (!openWorkComposer()) {
-          toastManager.add({
-            type: "warning",
-            title: "Hermes is not ready",
-            description:
-              "Enable and configure Hermes, then wait for T3 Work to finish preparing its private conversation directory.",
-          });
-        }
-        return;
-      }
       // One project: nothing to pick, create immediately. Shift+click creates
       // directly in the current project even with several projects, skipping
       // the palette picker.
@@ -4807,7 +4359,7 @@ export default function Sidebar() {
       if (isMobile) setOpenMobile(false);
       openCommandPalette({ open: "new-thread-in" });
     },
-    [isMobile, newThreadContext, openWorkComposer, projectGroups.length, setOpenMobile, workspace],
+    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
   // The button mirrors chat.new: in multi-project setups both route through
@@ -4824,15 +4376,7 @@ export default function Sidebar() {
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
-      <SidebarChromeHeader
-        isElectron={isElectron}
-        workspaceSelector={
-          <SidebarWorkspaceSelector
-            workspace={workspace}
-            onWorkspaceChange={handleWorkspaceChange}
-          />
-        }
-      />
+      <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         fixedHeader={
           <SidebarGroup className="gap-1">
@@ -4892,11 +4436,7 @@ export default function Sidebar() {
                           type="button"
                           className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                           onClick={handleNewThreadClick}
-                          disabled={
-                            workspace === "work" || workspace === "chat"
-                              ? !hermesChat.isReady
-                              : projects.length === 0
-                          }
+                          disabled={projects.length === 0}
                           aria-label="New thread"
                         >
                           <SquarePenIcon />
@@ -4932,7 +4472,7 @@ export default function Sidebar() {
                 </Tooltip>
               </div>
             </div>
-            {workspace === "code" && projectGroups.length > 0 ? (
+            {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
                 <Combobox
                   items={projectScopeItems}
@@ -5097,54 +4637,6 @@ export default function Sidebar() {
                 </Tooltip>
               </div>
             ) : null}
-            {(workspace === "work" || workspace === "chat") && workEnvironmentOptions.length > 1 ? (
-              <div className="flex items-center gap-1">
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <SidebarMenuButton
-                        aria-label="Filter threads by environment"
-                        className="min-w-0 flex-1 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                      />
-                    }
-                  >
-                    <ConnectedEnvironmentMachineIcon
-                      environmentId={workEnvironmentScopeId}
-                      className="size-4 shrink-0"
-                    />
-                    <span className="min-w-0 flex-1 truncate">
-                      {(workEnvironmentScopeId !== null
-                        ? environmentLabelById.get(workEnvironmentScopeId)
-                        : null) ?? "Select environment"}
-                    </span>
-                    <ChevronDownIcon className="-mr-px size-4 shrink-0" />
-                  </MenuTrigger>
-                  <MenuPopup align="start" className="w-(--anchor-width)">
-                    <MenuRadioGroup
-                      value={workEnvironmentScopeId ?? ""}
-                      onValueChange={(value) =>
-                        setStoredWorkEnvironmentScopeId(value as EnvironmentId)
-                      }
-                    >
-                      {workEnvironmentOptions.map((environment) => (
-                        <MenuRadioItem
-                          key={environment.environmentId}
-                          value={environment.environmentId}
-                          closeOnClick
-                          className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                        >
-                          <ConnectedEnvironmentMachineIcon
-                            environmentId={environment.environmentId}
-                            className="size-4 shrink-0"
-                          />
-                          <span className="min-w-0 truncate text-sm">{environment.label}</span>
-                        </MenuRadioItem>
-                      ))}
-                    </MenuRadioGroup>
-                  </MenuPopup>
-                </Menu>
-              </div>
-            ) : null}
           </SidebarGroup>
         }
       >
@@ -5286,11 +4778,9 @@ export default function Sidebar() {
                                 : "settle",
                           sweepAction: actionSweep?.keys.has(threadKey) ? actionSweep.action : null,
                           settlementSupported:
-                            thread.workInboxRole !== "main" &&
                             serverConfigs.get(thread.environmentId)?.environment.capabilities
                               .threadSettlement === true,
                           snoozeSupported:
-                            thread.workInboxRole !== "main" &&
                             serverConfigs.get(thread.environmentId)?.environment.capabilities
                               .threadSnooze === true,
                           autoDeleteLabelText:
@@ -5310,9 +4800,11 @@ export default function Sidebar() {
                           isPinned: pinnedThreadKeySet.has(threadKey),
                           canPin:
                             isCard &&
-                            canPinWorkInboxThread({
+                            canPinSidebarThread({
                               thread,
-                              providerDriverKindByInstance,
+                              supportsPinning:
+                                serverConfigs.get(thread.environmentId)?.environment.capabilities
+                                  .threadPinning === true,
                               isSnoozed: false,
                               isSettled: false,
                             }),

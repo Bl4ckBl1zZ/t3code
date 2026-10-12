@@ -38,21 +38,15 @@ const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent", "c
 /**
  * Compact "Fable 5 · Max · Auto" style summary for the composer trigger pill,
  * covering model, provider options, runtime mode, and plan mode in one label.
- *
- * Runtime labels come from `runtimeModeMenu` so a T3 Work (Hermes) thread
- * summarizes with the pair Hermes actually distinguishes rather than a generic
- * mode it does not honour.
  */
 export function threadSettingsSummaryLabel(input: {
   readonly modelLabel: string;
   readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  readonly isHermes: boolean;
   readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode> | undefined;
 }): string {
   const runtime = runtimeModeMenu({
-    isHermes: input.isHermes,
     runtimeMode: input.runtimeMode,
     supportedRuntimeModes: input.supportedRuntimeModes,
   }).selected;
@@ -287,8 +281,6 @@ export function ThreadSettingsSheet(props: {
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
-  /** T3 Work threads offer only the runtime modes Hermes distinguishes. */
-  readonly isHermes: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
@@ -332,7 +324,6 @@ export function ThreadSettingsSheet(props: {
     pendingModel ??
     props.providerGroups.flatMap((group) => group.models).find((option) => isApplied(option));
   const runtimeChoices = runtimeModeMenu({
-    isHermes: props.isHermes,
     runtimeMode: props.runtimeMode,
     supportedRuntimeModes: displayedModel?.supportedRuntimeModes,
   });

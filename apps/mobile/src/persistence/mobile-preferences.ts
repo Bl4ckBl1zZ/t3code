@@ -16,7 +16,6 @@ const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 
 export interface Preferences {
-  readonly workspace?: "work" | "code";
   readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
@@ -112,7 +111,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingMode?: SidebarProjectGroupingMode;
     autoSettleOnMerge?: boolean;
     legacyThreadListEnabled?: boolean;
-    workspace?: "work" | "code";
     lastNewTaskProjectKey?: string;
     planModeEnabled?: boolean;
     threadListV2SettledShelfExpanded?: boolean;
@@ -186,9 +184,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.legacyThreadListEnabled === "boolean") {
     preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
-  }
-  if (parsed.workspace === "work" || parsed.workspace === "code") {
-    preferences.workspace = parsed.workspace;
   }
   if (typeof parsed.lastNewTaskProjectKey === "string" && parsed.lastNewTaskProjectKey.length > 0) {
     preferences.lastNewTaskProjectKey = parsed.lastNewTaskProjectKey;

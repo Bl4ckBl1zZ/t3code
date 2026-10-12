@@ -4,7 +4,7 @@ import type { AssetResource, ThreadId } from "@t3tools/contracts";
  * Resolves a markdown image/video `src` to something the app can load.
  *
  * Assistant media arrives three ways: an ordinary URL, a path inside the
- * thread workspace, or a Hermes browser artifact. Mirrors the web
+ * thread workspace, or a browser artifact. Mirrors the web
  * `resolveMarkdownMediaSource` so both clients agree on what a given src means.
  */
 

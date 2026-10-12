@@ -9,7 +9,6 @@ import {
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   HermesAcpSettings,
-  HermesSettings,
   OpenClawSettings,
   defaultEnabledForDriver,
   requiredScopesForProjectMutation,
@@ -24,7 +23,6 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
-const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
 const decodeHermesAcpSettings = Schema.decodeUnknownSync(HermesAcpSettings);
 const decodeOpenClawSettings = Schema.decodeUnknownSync(OpenClawSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
@@ -266,100 +264,6 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     expect(() =>
       decodeServerSettings({
         providerInstances: { "1bad": { driver: "codex" } },
-      }),
-    ).toThrow();
-  });
-});
-
-describe("ServerSettings Hermes rollout", () => {
-  it("defaults the global feature off and accepts an explicit instance envelope", () => {
-    expect(decodeServerSettings({}).enableHermes).toBe(false);
-    expect(decodeServerSettings({}).enableRemoteHermes).toBe(false);
-    expect(decodeServerSettingsPatch({ enableHermes: true }).enableHermes).toBe(true);
-    expect(decodeServerSettingsPatch({ enableRemoteHermes: true }).enableRemoteHermes).toBe(true);
-    expect(
-      decodeServerSettingsPatch({
-        providers: { hermes: { managedServerEnabled: false } },
-      }).providers?.hermes?.managedServerEnabled,
-    ).toBe(false);
-
-    const decoded = decodeServerSettings({
-      enableHermes: true,
-      providerInstances: {
-        hermes_local: {
-          driver: "hermes",
-          enabled: true,
-          environment: [
-            {
-              name: "HERMES_GATEWAY_TOKEN",
-              value: "",
-              sensitive: true,
-              valueRedacted: true,
-            },
-          ],
-          config: {
-            endpoint: "ws://127.0.0.1:9119/api/ws",
-            profileKey: "real-profile",
-          },
-        },
-      },
-    });
-
-    expect(decoded.providerInstances[ProviderInstanceId.make("hermes_local")]).toMatchObject({
-      driver: "hermes",
-      enabled: true,
-      config: {
-        endpoint: "ws://127.0.0.1:9119/api/ws",
-        profileKey: "real-profile",
-      },
-    });
-    expect(decoded.providers.hermes).toEqual({
-      enabled: false,
-      endpoint: "",
-      remoteAccessEnabled: false,
-      profileKey: "default",
-      managedServerEnabled: true,
-      customModels: [],
-      importEnabled: false,
-      mcpEnabled: true,
-      attachmentsEnabled: true,
-      proactiveEnabled: true,
-      voiceEnabled: false,
-    });
-  });
-
-  it("accepts dormant encrypted remote configuration but rejects plaintext or credentials", () => {
-    expect(
-      decodeHermesSettings({
-        endpoint: "wss://gateway.example.com/api/ws",
-        profileKey: "profile",
-      }),
-    ).toMatchObject({
-      endpoint: "wss://gateway.example.com/api/ws",
-      remoteAccessEnabled: false,
-    });
-    expect(() =>
-      decodeHermesSettings({
-        endpoint: "ws://127.0.0.1/api/ws?session_secret=secret",
-        profileKey: "profile",
-      }),
-    ).toThrow();
-    expect(() =>
-      decodeHermesSettings({
-        endpoint: "wss://gateway.example.com/api/ws?session_secret=secret",
-        profileKey: "profile",
-      }),
-    ).toThrow();
-    expect(() =>
-      decodeHermesSettings({
-        endpoint: "ws://gateway.example.com/api/ws",
-        profileKey: "profile",
-      }),
-    ).toThrow();
-    expect(() =>
-      decodeHermesSettings({
-        endpoint: "ws://127.0.0.1:9119/api/ws?token=plain-text-secret",
-        profileKey: "profile",
       }),
     ).toThrow();
   });

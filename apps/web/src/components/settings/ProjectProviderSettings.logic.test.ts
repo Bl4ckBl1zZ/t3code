@@ -41,10 +41,9 @@ describe("project provider switches", () => {
       {
         projectIds: [projectA],
         settings,
-        providers: [provider("codex", "codex"), provider("hermes", "hermes")],
+        providers: [provider("codex", "codex")],
       },
     ]);
-    // Hermes keeps its machine-wide rollout gate, so it has no project switch.
     expect(rows).toEqual([
       { instanceId: codex, displayName: expect.any(String), choice: "on", machineEnabled: false },
     ]);

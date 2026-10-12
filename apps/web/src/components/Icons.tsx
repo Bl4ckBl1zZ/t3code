@@ -837,30 +837,6 @@ export const OpenClawIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
-/**
- * Hermes Agent logo from the user-selected, commit-pinned upstream asset:
- * https://github.com/NousResearch/hermes-agent/blob/62e07223d630c122317d5bed3102d24bd1144976/website/static/img/logo.png
- *
- * The checked-in public asset is a size-optimized derivative of that exact
- * PNG (matching source SHA-256:
- * 2eaff911b9da9b1f1fcc81adb02f4992bb9ea6b781f4dd048cd79349927ddb7a).
- */
-export const HermesIcon: Icon = ({ className, ...props }) => (
-  <svg
-    {...props}
-    viewBox="0 0 252 256"
-    xmlns="http://www.w3.org/2000/svg"
-    className={cn("overflow-hidden rounded-[2px]", className)}
-  >
-    <image
-      href="/hermes-agent-logo.png"
-      width="252"
-      height="256"
-      preserveAspectRatio="xMidYMid slice"
-    />
-  </svg>
-);
-
 export const GithubCopilotIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}

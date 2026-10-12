@@ -36,8 +36,6 @@ export interface ProjectThreadStartTurnSpec {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin: boolean;
-  /** False for conversation providers whose backing project is routing-only. */
-  readonly prepareWorkspace?: boolean;
   /** Generated temp branch for worktree mode; unused for local mode. */
   readonly worktreeBranchName: string;
 }
@@ -65,7 +63,6 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     runtimeMode: spec.runtimeMode,
     interactionMode: spec.interactionMode,
     bootstrap: {
-      ...(spec.prepareWorkspace === undefined ? {} : { prepareWorkspace: spec.prepareWorkspace }),
       createThread: {
         projectId: spec.projectId,
         title,

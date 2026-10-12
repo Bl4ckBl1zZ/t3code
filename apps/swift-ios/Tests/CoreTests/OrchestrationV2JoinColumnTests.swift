@@ -318,13 +318,10 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
     }
 
     func testProviderSessionActivityAcceptsMissingPresentAndNull() throws {
-        let fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/hermesWork.json")
-        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
-        let activity = try XCTUnwrap(fixture["providerActivity"] as? [String: Any])
         var present = sessionRow(id: "present", capabilities: nil)
-        present["activityText"] = activity["active"]
+        present["activityText"] = "Formulating…"
         var cleared = sessionRow(id: "cleared", capabilities: nil)
-        cleared["activityText"] = activity["cleared"]
+        cleared["activityText"] = NSNull()
         let projection = try decodeProjection {
             $0["providerSessions"] = [sessionRow(id: "legacy", capabilities: nil), present, cleared]
         }

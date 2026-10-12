@@ -253,115 +253,6 @@ final class ModelOptionsTests: XCTestCase {
         // No config (environment offline) — nothing to validate against.
         XCTAssertEqual(ModelOptions.selectable(disabled, in: nil), disabled)
     }
-
-    // MARK: - Provider scope
-
-    private func scopedConfig() throws -> ServerConfigSnapshot {
-        try config(
-            providers: """
-            [{
-              \(Self.codexHeader),
-              "models": [{ "slug": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "isCustom": false }]
-            }, {
-              "instanceId": "hermes",
-              "driver": "hermes",
-              "displayName": "Hermes",
-              "enabled": true,
-              "installed": true,
-              "status": "ready",
-              "auth": { "status": "authenticated" },
-              "checkedAt": "2026-08-02T12:00:00.000Z",
-              "models": [{ "slug": "default", "name": "Default", "isCustom": false }]
-            }]
-            """
-        )
-    }
-
-    func testHermesOnlyScopeOffersATWorkPickerHermesModelsOnly() throws {
-        let config = try scopedConfig()
-        XCTAssertEqual(
-            ModelOptions.build(
-                config: config,
-                fallbackSelection: nil,
-                scope: .hermesOnly
-            ).map(\.key),
-            ["hermes:default"]
-        )
-    }
-
-    func testExcludeHermesScopeKeepsHermesOutOfACodePicker() throws {
-        let config = try scopedConfig()
-        XCTAssertEqual(
-            ModelOptions.build(
-                config: config,
-                fallbackSelection: nil,
-                scope: .excludeHermes
-            ).map(\.key),
-            ["codex:gpt-5.6-sol"]
-        )
-    }
-
-    func testAllScopeLeavesSurfacesThatAreNeitherWithTheFullList() throws {
-        let config = try scopedConfig()
-        XCTAssertEqual(
-            ModelOptions.build(config: config, fallbackSelection: nil).map(\.key),
-            ["codex:gpt-5.6-sol", "hermes:default"]
-        )
-    }
-
-    // MARK: - Feature-layer provider scope
-
-    private static let scopedFeatureProviders: [FeatureProvider] = [
-        FeatureProvider(
-            id: "codex",
-            name: "Codex",
-            driver: "codex",
-            models: [FeatureModel(id: "gpt-5.6-sol", name: "GPT-5.6 Sol")]
-        ),
-        FeatureProvider(
-            id: "hermes",
-            name: "Hermes",
-            driver: "hermes",
-            models: [FeatureModel(id: "default", name: "Default")]
-        ),
-        FeatureProvider(
-            id: "hermes_personal",
-            name: "Hermes Personal",
-            driver: "hermes",
-            models: [FeatureModel(id: "default", name: "Default")]
-        ),
-    ]
-
-    func testScopedKeepsEveryHermesInstanceForAWorkOrChatPicker() {
-        XCTAssertEqual(
-            ModelOptions.scoped(Self.scopedFeatureProviders, to: .hermesOnly).map(\.id),
-            ["hermes", "hermes_personal"]
-        )
-    }
-
-    func testScopedKeepsHermesOutOfACodePicker() {
-        XCTAssertEqual(
-            ModelOptions.scoped(Self.scopedFeatureProviders, to: .excludeHermes).map(\.id),
-            ["codex"]
-        )
-    }
-
-    func testScopedLeavesSurfacesThatAreNeitherWithTheFullList() {
-        XCTAssertEqual(
-            ModelOptions.scoped(Self.scopedFeatureProviders, to: .all).map(\.id),
-            ["codex", "hermes", "hermes_personal"]
-        )
-    }
-
-    func testIsHermesProviderResolvesCustomInstancesByDriver() {
-        XCTAssertTrue(
-            ModelOptions.isHermesProvider("hermes_personal", in: Self.scopedFeatureProviders)
-        )
-        XCTAssertFalse(ModelOptions.isHermesProvider("codex", in: Self.scopedFeatureProviders))
-        // Unknown or absent instance: nothing says Hermes, so nothing is scoped.
-        XCTAssertFalse(ModelOptions.isHermesProvider("gone", in: Self.scopedFeatureProviders))
-        XCTAssertFalse(ModelOptions.isHermesProvider(nil, in: Self.scopedFeatureProviders))
-    }
 }
 
 /// Mirrors the "model visibility preferences" block in
@@ -377,13 +268,13 @@ final class ProviderModelPreferencesTests: XCTestCase {
                     "defaultThreadEnvMode": "local",
                     "newWorktreesStartFromOrigin": true,
                     "providerModelPreferences": {
-                      "hermes": { "hiddenModels": \#(hidden), "modelOrder": \#(order) }
+                      "opencode": { "hiddenModels": \#(hidden), "modelOrder": \#(order) }
                     }
                   },
                   "providers": [{
-                    "instanceId": "hermes",
-                    "driver": "hermes",
-                    "displayName": "Hermes",
+                    "instanceId": "opencode",
+                    "driver": "opencode",
+                    "displayName": "OpenCode",
                     "enabled": true,
                     "installed": true,
                     "status": "ready",
@@ -405,7 +296,7 @@ final class ProviderModelPreferencesTests: XCTestCase {
         let config = try config(hidden: #"["beta"]"#, order: "[]")
         XCTAssertEqual(
             ModelOptions.build(config: config, fallbackSelection: nil).map(\.key),
-            ["hermes:alpha", "hermes:mine"]
+            ["opencode:alpha", "opencode:mine"]
         )
     }
 
@@ -413,7 +304,7 @@ final class ProviderModelPreferencesTests: XCTestCase {
         let config = try config(hidden: #"["mine"]"#, order: "[]")
         XCTAssertTrue(
             ModelOptions.build(config: config, fallbackSelection: nil).map(\.key)
-                .contains("hermes:mine")
+                .contains("opencode:mine")
         )
     }
 
@@ -421,7 +312,7 @@ final class ProviderModelPreferencesTests: XCTestCase {
         let config = try config(hidden: "[]", order: #"["mine", "beta"]"#)
         XCTAssertEqual(
             ModelOptions.build(config: config, fallbackSelection: nil).map(\.key),
-            ["hermes:mine", "hermes:beta", "hermes:alpha"]
+            ["opencode:mine", "opencode:beta", "opencode:alpha"]
         )
     }
 
@@ -432,8 +323,8 @@ final class ProviderModelPreferencesTests: XCTestCase {
                 #"""
                 {
                   "providers": [{
-                    "instanceId": "hermes",
-                    "driver": "hermes",
+                    "instanceId": "opencode",
+                    "driver": "opencode",
                     "enabled": true,
                     "installed": true,
                     "status": "ready",
@@ -447,7 +338,7 @@ final class ProviderModelPreferencesTests: XCTestCase {
         )
         XCTAssertEqual(
             ModelOptions.build(config: config, fallbackSelection: nil).map(\.key),
-            ["hermes:alpha"]
+            ["opencode:alpha"]
         )
     }
 }

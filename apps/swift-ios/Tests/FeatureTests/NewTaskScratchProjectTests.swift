@@ -7,7 +7,7 @@ import XCTest
 /// the folder.
 final class NewTaskScratchProjectTests: XCTestCase {
     private func config(_ environmentID: String, scratch: String?) -> MobileWorkspaceEnvironmentConfig {
-        var config = MobileWorkspaceEnvironmentConfig(environmentID: environmentID, t3WorkDirectory: nil, providers: [])
+        var config = MobileWorkspaceEnvironmentConfig(environmentID: environmentID, providers: [])
         config.scratchWorkspaceRoot = scratch
         return config
     }

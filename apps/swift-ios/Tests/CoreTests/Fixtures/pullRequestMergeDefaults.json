@@ -14,8 +14,6 @@
     "autoResumeLimitedThreads": false,
     "autoDeleteSettledAfterDays": null,
     "enableLegacyTokenStreaming": false,
-    "enableHermes": false,
-    "enableRemoteHermes": false,
     "enableProviderUpdateChecks": true,
     "enableAgentBrowserAccess": true,
     "projectAgentBrowserAccessOverrides": {},
@@ -96,19 +94,6 @@
         "binaryPath": "grok",
         "customModels": []
       },
-      "hermes": {
-        "enabled": false,
-        "endpoint": "",
-        "remoteAccessEnabled": false,
-        "profileKey": "default",
-        "managedServerEnabled": true,
-        "customModels": [],
-        "importEnabled": false,
-        "mcpEnabled": true,
-        "attachmentsEnabled": true,
-        "proactiveEnabled": true,
-        "voiceEnabled": false
-      },
       "antigravity": {
         "enabled": false,
         "authMethod": "oauth-personal",
@@ -150,7 +135,6 @@
       "accessToken": "",
       "apiToken": ""
     },
-    "hermesProactiveDefaultApplied": false,
     "projectFileBackfillApplied": false,
     "usageLimitSources": {},
     "usagePriceOverrides": {},

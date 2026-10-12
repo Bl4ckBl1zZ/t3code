@@ -8,35 +8,6 @@ import {
   McpAppToolInfoInput,
   McpAppUpdateModelContextInput,
 } from "./mcpApps.ts";
-import {
-  HermesWorkModelStatusInput,
-  HermesWorkModelStatus,
-  HermesWorkModelAuthStartInput,
-  HermesWorkModelAuthStartResult,
-  HermesWorkModelAuthPollInput,
-  HermesWorkModelAuthPollResult,
-  HermesWorkModelAuthCancelInput,
-  HermesWorkModelSetInput,
-  HermesWorkModelSetResult,
-} from "./hermesWorkModelAuth.ts";
-import { HermesWorkSetupInput, HermesWorkSetupState } from "./hermesWorkSetup.ts";
-import {
-  HermesWorkGroupsQueryInput,
-  HermesWorkGroupsQueryResult,
-  HermesWorkGroupsMutateInput,
-  HermesWorkGroupsMutateResult,
-} from "./hermesWorkGroups.ts";
-import {
-  HermesWorkSubscribeChangesInput,
-  HermesWorkChangeEvent,
-  HermesWorkConnectionsInput,
-  HermesWorkConnectionsResult,
-  HermesWorkQueryInput,
-  HermesWorkQueryResult,
-  HermesWorkMutateInput,
-  HermesWorkMutateResult,
-  HermesWorkError,
-} from "./hermesWork.ts";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ProviderAuthState,
@@ -452,19 +423,6 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
-  hermesWorkGroupsQuery: "hermesWork.groupsQuery",
-  hermesWorkGroupsMutate: "hermesWork.groupsMutate",
-  hermesWorkSetupStart: "hermesWork.setupStart",
-  hermesWorkSetupStatus: "hermesWork.setupStatus",
-  hermesWorkModelStatus: "hermesWork.modelStatus",
-  hermesWorkModelAuthStart: "hermesWork.modelAuthStart",
-  hermesWorkModelAuthPoll: "hermesWork.modelAuthPoll",
-  hermesWorkModelAuthCancel: "hermesWork.modelAuthCancel",
-  hermesWorkModelSet: "hermesWork.modelSet",
-  hermesWorkConnections: "hermesWork.connections",
-  hermesWorkSubscribeChanges: "hermesWork.subscribeChanges",
-  hermesWorkQuery: "hermesWork.query",
-  hermesWorkMutate: "hermesWork.mutate",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1548,73 +1506,6 @@ export const WsScheduledTasksGetWebhookDeliveryRpc = Rpc.make(
   },
 );
 
-export const WsHermesWorkGroupsQueryRpc = Rpc.make(WS_METHODS.hermesWorkGroupsQuery, {
-  payload: HermesWorkGroupsQueryInput,
-  success: HermesWorkGroupsQueryResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkGroupsMutateRpc = Rpc.make(WS_METHODS.hermesWorkGroupsMutate, {
-  payload: HermesWorkGroupsMutateInput,
-  success: HermesWorkGroupsMutateResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkSetupStartRpc = Rpc.make(WS_METHODS.hermesWorkSetupStart, {
-  payload: HermesWorkSetupInput,
-  success: HermesWorkSetupState,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkSetupStatusRpc = Rpc.make(WS_METHODS.hermesWorkSetupStatus, {
-  payload: HermesWorkSetupInput,
-  success: HermesWorkSetupState,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkModelStatusRpc = Rpc.make(WS_METHODS.hermesWorkModelStatus, {
-  payload: HermesWorkModelStatusInput,
-  success: HermesWorkModelStatus,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkModelAuthStartRpc = Rpc.make(WS_METHODS.hermesWorkModelAuthStart, {
-  payload: HermesWorkModelAuthStartInput,
-  success: HermesWorkModelAuthStartResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkModelAuthPollRpc = Rpc.make(WS_METHODS.hermesWorkModelAuthPoll, {
-  payload: HermesWorkModelAuthPollInput,
-  success: HermesWorkModelAuthPollResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkModelAuthCancelRpc = Rpc.make(WS_METHODS.hermesWorkModelAuthCancel, {
-  payload: HermesWorkModelAuthCancelInput,
-  success: Schema.Struct({ ok: Schema.Boolean }),
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkModelSetRpc = Rpc.make(WS_METHODS.hermesWorkModelSet, {
-  payload: HermesWorkModelSetInput,
-  success: HermesWorkModelSetResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkConnectionsRpc = Rpc.make(WS_METHODS.hermesWorkConnections, {
-  payload: HermesWorkConnectionsInput,
-  success: HermesWorkConnectionsResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkSubscribeChangesRpc = Rpc.make(WS_METHODS.hermesWorkSubscribeChanges, {
-  payload: HermesWorkSubscribeChangesInput,
-  success: HermesWorkChangeEvent,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-export const WsHermesWorkQueryRpc = Rpc.make(WS_METHODS.hermesWorkQuery, {
-  payload: HermesWorkQueryInput,
-  success: HermesWorkQueryResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-export const WsHermesWorkMutateRpc = Rpc.make(WS_METHODS.hermesWorkMutate, {
-  payload: HermesWorkMutateInput,
-  success: HermesWorkMutateResult,
-  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
-});
-
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1693,19 +1584,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
-  WsHermesWorkGroupsQueryRpc,
-  WsHermesWorkGroupsMutateRpc,
-  WsHermesWorkSetupStartRpc,
-  WsHermesWorkSetupStatusRpc,
-  WsHermesWorkModelStatusRpc,
-  WsHermesWorkModelAuthStartRpc,
-  WsHermesWorkModelAuthPollRpc,
-  WsHermesWorkModelAuthCancelRpc,
-  WsHermesWorkModelSetRpc,
-  WsHermesWorkConnectionsRpc,
-  WsHermesWorkSubscribeChangesRpc,
-  WsHermesWorkQueryRpc,
-  WsHermesWorkMutateRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

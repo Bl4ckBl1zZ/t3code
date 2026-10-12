@@ -405,11 +405,6 @@ export type TimelineLatestRun = Pick<
 
 export type MessagesTimelineRow =
   | {
-      kind: "chat-cleared";
-      id: string;
-      createdAt: string;
-    }
-  | {
       kind: "day-divider";
       id: string;
       createdAt: string;
@@ -971,25 +966,12 @@ function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
 
 type TimelineTurnFoldInput = Pick<
   Parameters<typeof deriveMessagesTimelineRows>[0],
-  | "timelineEntries"
-  | "timelineClearedAt"
-  | "latestRun"
-  | "alwaysExpandActivity"
-  | "isWorking"
-  | "runlessWorkActive"
+  "timelineEntries" | "latestRun" | "alwaysExpandActivity" | "isWorking" | "runlessWorkActive"
 >;
 
-/** The entries the timeline draws: after a cleared-chat cutoff, without delegation rows. */
+/** The entries the timeline draws: without delegation rows. */
 function timelineRowEntries(input: TimelineTurnFoldInput) {
-  const timelineClearedAtMs =
-    input.timelineClearedAt === null || input.timelineClearedAt === undefined
-      ? Number.NaN
-      : Date.parse(input.timelineClearedAt);
-  return withoutSubagentDelegationRows(
-    Number.isFinite(timelineClearedAtMs)
-      ? input.timelineEntries.filter((entry) => Date.parse(entry.createdAt) > timelineClearedAtMs)
-      : input.timelineEntries,
-  );
+  return withoutSubagentDelegationRows(input.timelineEntries);
 }
 
 /** The turn folds the timeline would draw, before applying expansion state. */
@@ -1029,7 +1011,6 @@ export function timelineTurnFoldRunIdsByEntryId(
 
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
-  timelineClearedAt?: string | null;
   latestRun?: TimelineLatestRun | null;
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
@@ -1052,13 +1033,6 @@ export function deriveMessagesTimelineRows(input: {
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const timelineEntries = timelineRowEntries(input);
-  if (input.timelineClearedAt && Number.isFinite(Date.parse(input.timelineClearedAt))) {
-    nextRows.push({
-      kind: "chat-cleared",
-      id: `chat-cleared:${input.timelineClearedAt}`,
-      createdAt: input.timelineClearedAt,
-    });
-  }
   const durationStartByMessageId = computeMessageDurationStart(
     timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
@@ -1405,7 +1379,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   if (a.kind !== b.kind || a.id !== b.id) return false;
 
   switch (a.kind) {
-    case "chat-cleared":
     case "day-divider":
     case "working":
       return a.createdAt === (b as typeof a).createdAt;

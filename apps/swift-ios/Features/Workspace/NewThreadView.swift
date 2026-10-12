@@ -301,13 +301,8 @@ public struct NewThreadView: View {
 
             ComposeFlowLayout(spacing: 8) {
                 computerMenu
-                // A T3 Work conversation is directory-based Hermes chat:
-                // worktrees, branches and origin do not apply, so the
-                // capsules that offer them disappear entirely.
-                if !isWorkConversation {
-                    workspaceMenu
-                    branchControl
-                }
+                workspaceMenu
+                branchControl
             }
         }
         .frame(maxWidth: .infinity)
@@ -608,7 +603,7 @@ public struct NewThreadView: View {
         if restoredDraftProjectID != projectID {
             return hasContent ? FeatureComposerSendBlocker("Loading draft…", systemImage: "hourglass") : waitingBlocker
         }
-        if effectiveWorkspaceMode == .worktree, branchLoadFailed, selectedBranch == nil {
+        if workspaceMode == .worktree, branchLoadFailed, selectedBranch == nil {
             return FeatureComposerSendBlocker(
                 "Couldn’t load branches.",
                 systemImage: "exclamationmark.triangle",
@@ -619,7 +614,7 @@ public struct NewThreadView: View {
         if branchesLoading {
             return hasContent ? FeatureComposerSendBlocker("Loading branches…", systemImage: "hourglass") : waitingBlocker
         }
-        if effectiveWorkspaceMode == .worktree, selectedBranch == nil {
+        if workspaceMode == .worktree, selectedBranch == nil {
             return FeatureComposerSendBlocker(
                 "Choose a base branch.",
                 systemImage: "arrow.triangle.branch",
@@ -771,10 +766,7 @@ public struct NewThreadView: View {
     }
 
     private var creationProjects: [FeatureProject] {
-        DailyUXCreationContext.projects(
-            in: model.snapshot,
-            serverConfigs: model.client.workspaceServerConfigs()
-        )
+        DailyUXCreationContext.projects(in: model.snapshot)
     }
 
     private var creationProjectIDs: [String] {
@@ -901,27 +893,7 @@ public struct NewThreadView: View {
             && concreteSelection != nil
             && (!trimmedPrompt.isEmpty || !attachments.isEmpty)
             && (attachments.isEmpty || imagesAllowed)
-            && (effectiveWorkspaceMode != .worktree || selectedBranch != nil)
-    }
-
-    /// The selected project is the server's Hermes backing project — the one
-    /// sitting on its configured `t3WorkDirectory`. Work conversations are
-    /// directory-based, so every worktree affordance and parameter drops out.
-    private var isWorkConversation: Bool {
-        guard let project = executionProject else { return false }
-        return model.client.workspaceServerConfigs().contains { config in
-            config.environmentID == project.environmentID
-                && config.t3WorkDirectory == project.path
-        }
-    }
-
-    /// Work always resolves to the current checkout; a server-configured
-    /// worktree default would otherwise leave the send gate permanently off.
-    private var effectiveWorkspaceMode: FeatureWorkspaceMode {
-        MobileWorkspaceRouting.resolveDraftWorkspaceMode(
-            isWorkConversation: isWorkConversation,
-            requestedMode: workspaceMode
-        )
+            && (workspaceMode != .worktree || selectedBranch != nil)
     }
 
     private var trimmedPrompt: String {
@@ -961,15 +933,15 @@ public struct NewThreadView: View {
             selection: concreteSelection,
             runtimeMode: .fullAccess,
             interactionMode: interactionMode,
-            workspaceMode: effectiveWorkspaceMode,
-            branch: isWorkConversation ? nil : selectedBranch?.name,
-            worktreePath: !isWorkConversation && effectiveWorkspaceMode == .local
+            workspaceMode: workspaceMode,
+            branch: selectedBranch?.name,
+            worktreePath: workspaceMode == .local
                 ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
                     for: selectedBranch,
                     projectPath: project.path
                 )
                 : nil,
-            startFromOrigin: isWorkConversation ? false : startFromOrigin,
+            startFromOrigin: startFromOrigin,
             attachments: attachments
         )
 

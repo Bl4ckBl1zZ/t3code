@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ChatAttachment, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import type { ChatAttachment, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -24,8 +24,6 @@ const TestLayer = Layer.empty.pipe(
 );
 
 const THREAD_ID = "thread:project-abc:01J8Z9QK3M4N5P6R7S8T9V0W1X" as ThreadId;
-const CLAUDE = "claudeAgent" as ProviderDriverKind;
-const HERMES = "hermes" as ProviderDriverKind;
 
 const PDF: ChatAttachment = {
   type: "pdf",
@@ -74,7 +72,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -103,7 +100,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
         // No blob seeded: the write fails, but the ignore file must still exist.
         yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -128,7 +124,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -155,7 +150,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const first = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -164,7 +158,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const second = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -181,7 +174,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
         const service = yield* AttachmentMaterialization.AttachmentMaterialization;
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd: null,
           attachments: [PDF],
         });
@@ -204,7 +196,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF, orphan],
         });
@@ -227,7 +218,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -248,7 +238,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd: missing,
           attachments: [PDF],
         });
@@ -268,7 +257,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [IMAGE],
         });
@@ -291,7 +279,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
         };
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [orphanImage],
         });
@@ -309,7 +296,6 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
 
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -318,37 +304,13 @@ it.layer(TestLayer, { excludeTestServices: true })("AttachmentMaterialization", 
         expect(result.promptBlock).not.toContain("also attached to this message");
       }),
     );
-
-    it.effect("writes nothing to disk for a possibly-remote Hermes gateway", () =>
-      Effect.gen(function* () {
-        const service = yield* AttachmentMaterialization.AttachmentMaterialization;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const cwd = yield* makeWorkspace;
-        yield* seedBlob(PDF, "HELLO");
-
-        const result = yield* service.materialize({
-          threadId: THREAD_ID,
-          driver: HERMES,
-          cwd,
-          attachments: [PDF, IMAGE],
-        });
-
-        expect(result.outcome).toBe("skipped");
-        expect(result.materialized).toEqual([]);
-        expect(result.inlineAttachments.map((a) => a.id)).toEqual([PDF.id, IMAGE.id]);
-        expect(yield* fileSystem.exists(path.join(cwd, ".t3code"))).toBe(false);
-      }),
-    );
   });
 
   describe("resolveAttachmentDelivery", () => {
     it.effect("is the single place delivery is decided", () =>
       Effect.sync(() => {
-        expect(AttachmentMaterialization.resolveAttachmentDelivery(CLAUDE, IMAGE)).toBe("both");
-        expect(AttachmentMaterialization.resolveAttachmentDelivery(CLAUDE, PDF)).toBe("workspace");
-        expect(AttachmentMaterialization.resolveAttachmentDelivery(HERMES, IMAGE)).toBe("inline");
-        expect(AttachmentMaterialization.resolveAttachmentDelivery(HERMES, PDF)).toBe("inline");
+        expect(AttachmentMaterialization.resolveAttachmentDelivery(IMAGE)).toBe("both");
+        expect(AttachmentMaterialization.resolveAttachmentDelivery(PDF)).toBe("workspace");
       }),
     );
   });

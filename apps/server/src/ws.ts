@@ -1,6 +1,3 @@
-import { subscribeHermesWorkChanges } from "./hermes/HermesWorkChanges.ts";
-import { HermesWorkSetupService } from "./hermes/HermesWorkSetupService.ts";
-import { HermesWorkModelAuth } from "./hermes/HermesWorkModelAuth.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import { consumeInstanceResetCredit } from "./provider/consumeResetCredit.ts";
@@ -110,9 +107,6 @@ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ThreadFeedbackService from "./orchestration-v2/ThreadFeedbackService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
-import { HermesDashboardClient } from "./hermes/HermesDashboardClient.ts";
-import { HermesWorkService } from "./hermes/HermesWorkService.ts";
-import { HermesWorkGroupsService } from "./hermes/HermesWorkGroupsService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as LiveThreadShells from "./orchestration-v2/LiveThreadShells.ts";
 import {
@@ -687,11 +681,6 @@ const makeWsRpcLayer = (
           : {
               tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task),
             };
-      const hermesSetup = yield* HermesWorkSetupService;
-      const hermesModelAuth = yield* HermesWorkModelAuth;
-      const hermesDashboard = yield* HermesDashboardClient;
-      const hermesWork = yield* HermesWorkService;
-      const hermesWorkGroups = yield* HermesWorkGroupsService;
       const agentSessionScanner = yield* AgentSessionScanner;
       const agentSessionImporter = yield* AgentSessionImporter;
       const projectService = yield* ProjectService.ProjectService;
@@ -813,7 +802,6 @@ const makeWsRpcLayer = (
           environment,
           auth,
           cwd: config.cwd,
-          t3WorkDirectory: config.t3WorkDir ?? path.join(config.baseDir, "t3-work"),
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
@@ -1565,9 +1553,6 @@ const makeWsRpcLayer = (
                       runtimeMode: input.runtimeMode,
                       interactionMode: input.interactionMode,
                       workspaceStrategy,
-                      ...(input.prepareWorkspace === undefined
-                        ? {}
-                        : { prepareWorkspace: input.prepareWorkspace }),
                       ...(input.initialMessage === undefined
                         ? {}
                         : {
@@ -1738,20 +1723,6 @@ const makeWsRpcLayer = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
-        [WS_METHODS.hermesWorkSetupStart]: (input) => hermesSetup.start(input),
-        [WS_METHODS.hermesWorkSetupStatus]: (input) => hermesSetup.status(input),
-        [WS_METHODS.hermesWorkModelStatus]: (input) => hermesModelAuth.modelStatus(input),
-        [WS_METHODS.hermesWorkModelAuthStart]: (input) => hermesModelAuth.modelAuthStart(input),
-        [WS_METHODS.hermesWorkModelAuthPoll]: (input) => hermesModelAuth.modelAuthPoll(input),
-        [WS_METHODS.hermesWorkModelAuthCancel]: (input) => hermesModelAuth.modelAuthCancel(input),
-        [WS_METHODS.hermesWorkModelSet]: (input) => hermesModelAuth.modelSet(input),
-        [WS_METHODS.hermesWorkConnections]: () => hermesDashboard.connections(),
-        [WS_METHODS.hermesWorkSubscribeChanges]: (input) =>
-          subscribeHermesWorkChanges(hermesDashboard, input),
-        [WS_METHODS.hermesWorkQuery]: (input) => hermesWork.query(input),
-        [WS_METHODS.hermesWorkMutate]: (input) => hermesWork.mutate(input),
-        [WS_METHODS.hermesWorkGroupsQuery]: (input) => hermesWorkGroups.query(input),
-        [WS_METHODS.hermesWorkGroupsMutate]: (input) => hermesWorkGroups.mutate(input),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig,
         [WS_METHODS.serverRefreshProviders]: (input) =>

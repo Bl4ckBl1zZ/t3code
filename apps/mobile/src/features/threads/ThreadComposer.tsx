@@ -62,7 +62,6 @@ import {
   type DraftComposerAttachment,
 } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
-import { buildProviderDriverMap, isHermesThread } from "../../lib/mobileWorkspace";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { RemoteClientConnectionState } from "../../lib/connection";
@@ -382,18 +381,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
-  // A T3 Work thread offers Hermes models only; a Code thread never offers
-  // them. Which side this thread is on comes from the thread, not the picker.
-  const isHermesConversation = useMemo(
-    () =>
-      isHermesThread(
-        props.selectedThread,
-        buildProviderDriverMap(
-          props.serverConfig ? new Map([[props.environmentId, props.serverConfig]]) : new Map(),
-        ),
-      ),
-    [props.environmentId, props.serverConfig, props.selectedThread],
-  );
 
   // ── Trigger detection ────────────────────────────────────
   const [composerSelection, setComposerSelection] = useState(() => ({
@@ -699,13 +686,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   // ── Model menu ───────────────────────────────────────────
   const modelOptions = useMemo(
-    () =>
-      buildModelOptions(
-        props.serverConfig,
-        currentModelSelection,
-        isHermesConversation ? "hermes-only" : "exclude-hermes",
-      ),
-    [props.serverConfig, currentModelSelection, isHermesConversation],
+    () => buildModelOptions(props.serverConfig, currentModelSelection),
+    [props.serverConfig, currentModelSelection],
   );
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   // An existing thread is bound to its harness: sessions can't move between
@@ -733,7 +715,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     optionDescriptors: providerOptionDescriptors,
     runtimeMode: currentRuntimeMode,
     interactionMode: currentInteractionMode,
-    isHermes: isHermesConversation,
     supportedRuntimeModes: currentModelOption?.supportedRuntimeModes,
   });
 
@@ -1167,7 +1148,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         }
         runtimeMode={currentRuntimeMode}
         onUpdateRuntimeMode={props.onUpdateRuntimeMode}
-        isHermes={isHermesConversation}
       />
 
       <ImageViewing

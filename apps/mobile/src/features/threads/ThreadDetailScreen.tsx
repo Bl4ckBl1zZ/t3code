@@ -698,7 +698,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             latestRun={props.activityRun}
             activeWorkStartedAt={props.activeWorkStartedAt}
             activeWorkActivityText={props.activeWorkActivityText}
-            timelineClearedAt={props.selectedThread.timelineClearedAt ?? null}
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}

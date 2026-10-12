@@ -1,8 +1,6 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { useCallback, useMemo, useSyncExternalStore, type PropsWithChildren } from "react";
 
-import { useMobileWorkspace } from "../../state/preferences";
-import { useStartHermesConversation } from "../threads/use-start-hermes-conversation";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import {
   dispatchHardwareKeyboardCommand,
@@ -18,8 +16,6 @@ export function HardwareKeyboardCommandProvider({
   pathname,
 }: PropsWithChildren<{ readonly pathname: string }>) {
   const navigation = useNavigation();
-  const [workspace] = useMobileWorkspace();
-  const startHermesConversation = useStartHermesConversation();
   const registrationVersion = useSyncExternalStore(
     subscribeToHardwareKeyboardCommandRegistrations,
     getHardwareKeyboardCommandRegistrationVersion,
@@ -42,10 +38,6 @@ export function HardwareKeyboardCommandProvider({
       if (dispatchHardwareKeyboardCommand(command)) return;
 
       if (command === "newTask") {
-        if (workspace === "work") {
-          startHermesConversation();
-          return;
-        }
         navigation.navigate("NewTaskSheet", { screen: "NewTask" });
         return;
       }
@@ -70,7 +62,7 @@ export function HardwareKeyboardCommandProvider({
         navigation.navigate("ThreadReview", thread);
       }
     },
-    [pathname, navigation, workspace, startHermesConversation],
+    [pathname, navigation],
   );
 
   return (

@@ -3,33 +3,23 @@ import { describe, expect, it } from "vite-plus/test";
 import { presentProviderError } from "./providerErrors.ts";
 
 describe("presentProviderError", () => {
-  it("turns Hermes attachment configuration failures into a next step", () => {
+  it("presents protocol failures as a next step without adapter jargon", () => {
     expect(
       presentProviderError(
-        "hermes provider protocol error: Attachments are disabled for this Hermes instance.",
+        "ProviderAdapterProtocolError: opencode provider protocol error: Server closed the connection.",
       ),
     ).toBe(
-      "Hermes attachments are turned off. Enable Attachments in Settings → Providers, then try again.",
-    );
-  });
-
-  it("explains unsupported gateway attachment capabilities without adapter jargon", () => {
-    expect(
-      presentProviderError(
-        "ProviderAdapterProtocolError: hermes provider protocol error: This Hermes gateway does not support PDF attachments.",
-      ),
-    ).toBe(
-      "This Hermes gateway does not support pdf attachments. Remove the pdf attachment or update the gateway, then try again.",
+      "Opencode couldn't complete the request: Server closed the connection. Check the provider connection in Settings → Providers, then try again.",
     );
   });
 
   it("removes internal run and provider-thread ids from turn-start failures", () => {
     expect(
       presentProviderError(
-        "Failed to start run run-secret on hermes provider thread provider-thread-secret.",
+        "Failed to start run run-secret on codex provider thread provider-thread-secret.",
       ),
     ).toBe(
-      "Hermes couldn't start this message. Check the provider connection in Settings → Providers, then try again.",
+      "Codex couldn't start this message. Check the provider connection in Settings → Providers, then try again.",
     );
   });
 

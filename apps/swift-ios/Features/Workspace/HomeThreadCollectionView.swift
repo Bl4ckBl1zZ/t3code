@@ -9,9 +9,6 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     /// presentation is built, so they are overlaid onto row contexts here
     /// rather than folded into it — a PR landing must not rebuild every shelf.
     let changeRequests: [String: FeaturePullRequest]
-    /// Only T3 Work splits its active block into inbox sections, so the rows a
-    /// workspace shows and the dividers between them are decided together.
-    let workspace: MobileWorkspace
     let query: String
     let selectedThreadID: String?
     let forceRichRows: Bool
@@ -334,7 +331,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 return true
             case let .banner(banner):
                 return banner.opensConnections && !collectionView.isEditing
-            case .empty, .searchEmpty, .searchStatus, .workSectionHeader, .sectionTitle,
+            case .empty, .searchEmpty, .searchStatus, .sectionTitle,
                  .subtitle, .placeholder:
                 return false
             }
@@ -366,7 +363,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             case .banner:
                 collectionView.deselectItem(at: indexPath, animated: true)
                 parent.onOpenConnections()
-            case .empty, .searchEmpty, .searchStatus, .workSectionHeader, .sectionTitle,
+            case .empty, .searchEmpty, .searchStatus, .sectionTitle,
                  .subtitle, .placeholder:
                 collectionView.deselectItem(at: indexPath, animated: false)
             }
@@ -438,7 +435,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 pin.backgroundColor = .systemOrange
                 actions.append(pin)
             }
-            if Self.canSnooze(thread, in: parent.workspace) {
+            if HomeBatchAvailability.canSnooze(thread) {
                 let isSnoozed = thread.isEffectivelySnoozed(at: .now)
                 let snooze = UIContextualAction(style: .normal, title: isSnoozed ? "Unsnooze" : "Snooze") {
                     [weak self] _, _, finish in
@@ -497,10 +494,9 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 }
                 primaryAction.image = UIImage(systemName: "arrow.uturn.backward")
                 primaryAction.backgroundColor = .systemBlue
-            } else if parent.workspace == .chat || !thread.canShelveSettled {
-                // Chat has no parking, and a thread the Settled shelf may not
-                // claim (no capability, or Work's Main thread, whose settle the
-                // server refuses) has nothing to settle into.
+            } else if !thread.canShelveSettled {
+                // A thread the Settled shelf may not claim (no capability) has
+                // nothing to settle into.
                 let configuration = UISwipeActionsConfiguration(actions: [delete])
                 configuration.performsFirstActionWithFullSwipe = false
                 return configuration
@@ -525,10 +521,6 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             let configuration = UISwipeActionsConfiguration(actions: [primaryAction, delete])
             configuration.performsFirstActionWithFullSwipe = true
             return configuration
-        }
-
-        private static func canSnooze(_ thread: FeatureThread, in workspace: MobileWorkspace) -> Bool {
-            HomeBatchAvailability.canSnooze(thread, in: workspace)
         }
 
         private func configure(
@@ -586,8 +578,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     : .button
                 cell.accessibilityLabel = thread.title + (hasDraft(item) ? ", unsent draft" : "")
                     + (context.searchExcerpt.map { ", \($0.speaker) \($0.match.snippet)" } ?? "")
-                // The row's own style decides what it says: a Chat row has no
-                // project or account worth reading on every row.
+                // The row's own style decides what it says.
                 cell.accessibilityValue = FeatureThreadRow.accessibilityValue(
                     thread: thread,
                     context: context,
@@ -620,15 +611,6 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 cell.accessibilityValue = isExpanded ? "Expanded" : "Collapsed"
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = { [weak self] in self?.toggle(shelf) }
-            case let .workSectionHeader(header):
-                // A Work section is structure, not a control: it reads as a
-                // heading and has nothing to activate.
-                cell.isAccessibilityElement = true
-                cell.accessibilityTraits = .header
-                cell.accessibilityLabel = header.label
-                cell.accessibilityValue = nil
-                cell.accessibilityHint = nil
-                cell.onAccessibilityActivate = nil
             case let .sectionTitle(title):
                 cell.isAccessibilityElement = true
                 cell.accessibilityTraits = .header
@@ -728,7 +710,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             let context = ThreadRowMenuContext(
                 thread: thread,
                 isArchived: isArchived,
-                offersParking: parent.workspace != .chat,
+                offersParking: true,
                 now: now,
                 changeRequest: parent.changeRequests[thread.id],
                 isGeneratingHandoffScript: parent.generatingHandoffIDs.contains(thread.id)
@@ -908,25 +890,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
     }
 
-    /// The row this workspace's list is made of.
-    ///
-    /// Only Code's row names a project and a branch, because only Code's threads
-    /// have either. Work and Chat share one backing checkout, so the same three
-    /// fields would repeat down the whole list.
-    private var primaryRowStyle: FeatureThreadRow.Style {
-        switch workspace {
-        case .code: .rich
-        case .work: .inbox
-        case .chat: .conversation
-        }
-    }
-
-    /// The parked and archived shelves. Code compacts them to a slim row, which
-    /// leads with the project favicon — no use to a workspace whose rows all
-    /// share one project, so Work and Chat keep their own row there instead.
+    /// The parked and archived shelves compact to a slim row, which leads with
+    /// the project favicon.
     private var shelfRowStyle: FeatureThreadRow.Style {
-        guard workspace == .code else { return primaryRowStyle }
-        return forceRichRows ? .rich : .slim
+        forceRichRows ? .rich : .slim
     }
 
     private func rowContext(for thread: FeatureThread) -> HomeThreadRowContext {
@@ -967,7 +934,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     HomeThreadSearchExcerpt(match: $0, query: normalizedQuery)
                 }
                 context.showsArchivedBadge = thread.isArchived
-                return .thread(thread, context, primaryRowStyle, thread.isArchived, forceRichRows)
+                return .thread(thread, context, .rich, thread.isArchived, forceRichRows)
             }
             items.append(contentsOf: titleMatches.map(result))
             if !messageMatches.isEmpty {
@@ -981,7 +948,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             return items
         }
 
-        let mainStyle = primaryRowStyle
+        let mainStyle = FeatureThreadRow.Style.rich
         let shelvesAreEmpty = presentation.working.isEmpty
             && presentation.snoozed.isEmpty
             && presentation.settled.isEmpty
@@ -995,51 +962,36 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             items.append(.sectionTitle("Pinned"))
             items.append(contentsOf: presentation.pinned.map { row($0, style: mainStyle) })
         }
-        if workspace == .work {
-            // `\.workInboxRole` rather than the closure's nil default: without
-            // the role every row lands in Needs You / Active and the Main
-            // section never appears at all.
-            let groups = WorkInboxSections.groups(
-                active: presentation.active,
-                workInboxRole: \.workInboxRole
-            )
-            for group in groups {
-                items.append(.workSectionHeader(group.header))
-                items.append(contentsOf: group.rows.map { row($0, style: mainStyle) })
-            }
-        } else if !presentation.active.isEmpty {
+        if !presentation.active.isEmpty {
             if !presentation.pinned.isEmpty {
-                items.append(.sectionTitle(workspace == .chat ? "Recent" : "Active"))
+                items.append(.sectionTitle("Active"))
             }
             items.append(contentsOf: presentation.active.map { row($0, style: mainStyle) })
         }
 
-        // Chat has neither parking shelf: a conversation is either in the list
-        // or deleted. Empty shelves are not drawn at all.
-        if workspace != .chat {
-            // Working beta: busy threads wait here until they need the user.
-            // The open thread stays listed while the shelf is collapsed, so
-            // the selection never points at nothing.
-            if !presentation.working.isEmpty {
-                items.append(.shelfHeader(.working, presentation.working.count, isWorkingExpanded))
-                let shown = isWorkingExpanded
-                    ? presentation.working
-                    : presentation.working.filter { $0.id == selectedThreadID }
-                items.append(contentsOf: shown.map { row($0, style: mainStyle) })
+        // Empty shelves are not drawn at all.
+        // Working beta: busy threads wait here until they need the user.
+        // The open thread stays listed while the shelf is collapsed, so
+        // the selection never points at nothing.
+        if !presentation.working.isEmpty {
+            items.append(.shelfHeader(.working, presentation.working.count, isWorkingExpanded))
+            let shown = isWorkingExpanded
+                ? presentation.working
+                : presentation.working.filter { $0.id == selectedThreadID }
+            items.append(contentsOf: shown.map { row($0, style: mainStyle) })
+        }
+        if !presentation.snoozed.isEmpty {
+            items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
+            if isSnoozedExpanded {
+                items.append(contentsOf: presentation.snoozed.map { row($0, style: shelfRowStyle) })
             }
-            if !presentation.snoozed.isEmpty {
-                items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
-                if isSnoozedExpanded {
-                    items.append(contentsOf: presentation.snoozed.map { row($0, style: shelfRowStyle) })
-                }
-            }
-            if !presentation.settled.isEmpty {
-                items.append(.shelfHeader(.settled, presentation.settled.count, isSettledExpanded))
-                if isSettledExpanded {
-                    items.append(contentsOf: presentation.settled.prefix(settledLimit).map { row($0, style: shelfRowStyle) })
-                    if presentation.settled.count > settledLimit {
-                        items.append(.showMoreSettled(presentation.settled.count - settledLimit))
-                    }
+        }
+        if !presentation.settled.isEmpty {
+            items.append(.shelfHeader(.settled, presentation.settled.count, isSettledExpanded))
+            if isSettledExpanded {
+                items.append(contentsOf: presentation.settled.prefix(settledLimit).map { row($0, style: shelfRowStyle) })
+                if presentation.settled.count > settledLimit {
+                    items.append(.showMoreSettled(presentation.settled.count - settledLimit))
                 }
             }
         }
@@ -1096,13 +1048,12 @@ enum HomeShelf: String, Hashable {
     }
 }
 
-/// Internal rather than file-private so the list a workspace produces — which
-/// dividers appear and where — is assertable without a collection view.
+/// Internal rather than file-private so the list Home produces — which
+/// shelves appear and where — is assertable without a collection view.
 enum HomeCollectionItem: Equatable {
     enum ID: Hashable {
         case thread(String)
         case shelfHeader(HomeShelf)
-        case workSectionHeader(MobileWorkInboxSection)
         case sectionTitle(String)
         case empty
         case showMoreSettled
@@ -1120,7 +1071,6 @@ enum HomeCollectionItem: Equatable {
 
     case thread(FeatureThread, HomeThreadRowContext, FeatureThreadRow.Style, Bool, Bool)
     case shelfHeader(HomeShelf, Int, Bool)
-    case workSectionHeader(WorkInboxSectionHeader)
     /// A plain section heading: Pinned, Active, Messages.
     case sectionTitle(String)
     case empty(HomeEmptyState)
@@ -1137,7 +1087,6 @@ enum HomeCollectionItem: Equatable {
         switch self {
         case let .thread(thread, _, _, _, _): .thread(thread.id)
         case let .shelfHeader(shelf, _, _): .shelfHeader(shelf)
-        case let .workSectionHeader(header): .workSectionHeader(header.section)
         case let .sectionTitle(title): .sectionTitle(title)
         case .empty: .empty
         case .showMoreSettled: .showMoreSettled
@@ -1184,8 +1133,6 @@ private struct HomeCollectionCellContent: View {
             .id(thread.id)
         case let .shelfHeader(shelf, count, isExpanded):
             HomeShelfHeader(title: shelf.title, count: count, isExpanded: isExpanded)
-        case let .workSectionHeader(header):
-            WorkInboxSectionDivider(header: header)
         case let .sectionTitle(title):
             HomeSectionTitle(title: title)
         case let .empty(state):

@@ -982,23 +982,6 @@ describe("background commands", () => {
 });
 
 describe("thread feed system dividers", () => {
-  it("hides entries at or before the clear marker and says so", () => {
-    const feed = buildThreadFeed([
-      projected(userMessage("2026-06-20T00:00:01.000Z"), 0),
-      projected(
-        { ...assistantMessage("2026-06-20T00:00:09.000Z"), id: TurnItemId.make("item-after") },
-        1,
-      ),
-    ]);
-
-    const presented = deriveThreadFeedPresentation(feed, null, new Set(), new Set(), null, {
-      timelineClearedAt: "2026-06-20T00:00:05.000Z",
-    });
-
-    expect(presented.map((entry) => entry.type)).toEqual(["chat-cleared", "message"]);
-    expect(presented[0]).toMatchObject({ id: "chat-cleared:2026-06-20T00:00:05.000Z" });
-  });
-
   it("separates calendar days and leaves the first day unmarked", () => {
     // Local-anchored so the two entries land on different calendar days in any
     // timezone; day keys are local, not UTC.

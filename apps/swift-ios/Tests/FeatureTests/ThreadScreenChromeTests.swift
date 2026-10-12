@@ -75,12 +75,6 @@ struct ThreadScreenChromeTests {
     }
 
     @Test
-    func aChatThreadNamesItselfInsteadOfABranch() {
-        let chat = subtitle(thread(branch: "main") { $0.workInboxRole = "chat" })
-        #expect(chat.plainText == "Chat · MacBook")
-    }
-
-    @Test
     func anIdleThreadSaysNoStateAndNoPlaceholderBranch() {
         #expect(subtitle(thread()).status == nil)
         #expect(subtitle(thread(branch: nil)).details == ["MacBook"])

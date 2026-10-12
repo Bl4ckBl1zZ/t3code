@@ -6,7 +6,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
-  ProviderDriverKind,
+  type ProviderDriverKind,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -307,14 +307,7 @@ export { readFileAsDataUrl } from "../lib/imageCompression";
 export function resolveSendEnvMode(input: {
   requestedEnvMode: DraftThreadEnvMode;
   isGitRepo: boolean;
-  isProjectlessConversation?: boolean;
 }): DraftThreadEnvMode {
-  // A projectless conversation (T3 Work) routes through a backing project that
-  // exists only to own the thread: there is no checkout to branch from, and the
-  // launch path sends prepareWorkspace: false. Honouring a requested worktree
-  // there would demand a base branch that cannot exist and, if sent, is
-  // rejected server-side as an incompatible workspace strategy.
-  if (input.isProjectlessConversation === true) return "local";
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
@@ -340,58 +333,13 @@ export function shouldShowComposerContextStrip(input: {
   isDraftHeroState: boolean;
   isGitRepo: boolean;
   hasActiveProject: boolean;
-  isProjectlessConversation: boolean;
   persistInActiveThreads: boolean;
 }): boolean {
   return (
-    !input.isProjectlessConversation &&
     input.isGitRepo &&
     input.hasActiveProject &&
     (input.isDraftHeroState || input.persistInActiveThreads)
   );
-}
-
-export function shouldExposeWorkspaceArtifacts(input: {
-  readonly isProjectlessConversation: boolean;
-}): boolean {
-  return !input.isProjectlessConversation;
-}
-
-/**
- * A started conversation is Hermes when the runtime actually driving it is a
- * Hermes provider instance. Only drafts (no runtime yet) follow the composer's
- * selected provider, so opening the handoff/model picker on a live Hermes
- * thread cannot flip Hermes-only behaviour before the handoff runs.
- */
-export function deriveIsHermesConversation(input: {
-  readonly runtimeProviderInstanceId: string | null | undefined;
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly selectedProvider: ProviderDriverKind;
-}): boolean {
-  const runtimeEntry =
-    input.runtimeProviderInstanceId == null
-      ? undefined
-      : input.providers.find(
-          (candidate) => candidate.instanceId === input.runtimeProviderInstanceId,
-        );
-  const provider = runtimeEntry?.driver ?? input.selectedProvider;
-  return provider === ProviderDriverKind.make("hermes");
-}
-
-export function isHermesFreshChatCommand(input: {
-  readonly text: string;
-  readonly isHermesConversation: boolean;
-}): boolean {
-  if (!input.isHermesConversation) return false;
-  return /^\/(?:new|reset)$/iu.test(input.text.trim());
-}
-
-export function isHermesClearChatCommand(input: {
-  readonly text: string;
-  readonly isHermesConversation: boolean;
-}): boolean {
-  if (!input.isHermesConversation) return false;
-  return /^\/clear$/iu.test(input.text.trim());
 }
 
 export function shouldShowWorkingTimeline(input: {
@@ -406,20 +354,6 @@ export function shouldShowWorkingTimeline(input: {
     input.isSendBusy ||
     input.isConnecting ||
     input.isRevertingCheckpoint
-  );
-}
-
-export function isWorkspacePreparationTurnItem(item: {
-  readonly type: string;
-  readonly input?: unknown;
-  readonly providerTurnId?: string | null | undefined;
-  readonly nativeItemRef?: unknown;
-}): boolean {
-  return (
-    item.type === "command_execution" &&
-    item.input === "Preparing workspace" &&
-    item.providerTurnId === null &&
-    item.nativeItemRef === null
   );
 }
 
@@ -535,7 +469,7 @@ export function threadHasStarted(thread: Thread | null | undefined): boolean {
 // Session/model routing values are provider instance ids. Resolve them through
 // the environment's provider inventory before falling back to the open driver
 // slug shape used by rollback/fork builds. This keeps a custom instance such
-// as `hermes_local` locked to its actual `hermes` driver after the first turn.
+// as `codex_personal` locked to its actual `codex` driver after the first turn.
 export function deriveLockedProvider(input: {
   thread: Thread | null | undefined;
   selectedProvider: string | null;

@@ -15,11 +15,7 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 
-import {
-  EnvironmentId,
-  getProviderAttachmentLimitError,
-  type ModelSelection,
-} from "@t3tools/contracts";
+import { EnvironmentId, getProviderAttachmentLimitError } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -60,7 +56,6 @@ import {
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { resolveSelectableModelSelection } from "../../lib/modelOptions";
-import { resolveDraftWorkspaceMode } from "../../lib/mobileWorkspace";
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
@@ -104,8 +99,6 @@ export function NewTaskDraftScreen(props: {
   readonly pendingTaskId?: string;
   /** Durable native share inbox item to merge into this project draft. */
   readonly incomingShareId?: string;
-  readonly workspace?: "work" | "code";
-  readonly initialModelSelection?: ModelSelection;
 }) {
   const projects = useProjects();
   const createProjectThread = useCreateProjectThread();
@@ -169,7 +162,6 @@ export function NewTaskDraftScreen(props: {
   const shareImportMountedRef = useRef(true);
   const latestDraftKeyRef = useRef(flow.draftKey);
   const latestIncomingShareIdRef = useRef(props.incomingShareId);
-  const isWorkConversation = props.workspace === "work";
   latestDraftKeyRef.current = flow.draftKey;
   latestIncomingShareIdRef.current = props.incomingShareId;
   const isImportingShare = importingShareKey !== null;
@@ -287,46 +279,6 @@ export function NewTaskDraftScreen(props: {
   // A new navigation to this mounted screen delivers a fresh initialProjectRef
   // reference — treat it as a new request and let it apply again.
   const lastInitialProjectRefRef = useRef(props.initialProjectRef);
-  const clearedWorkDraftRef = useRef<string | null>(null);
-  const initializedWorkDraftRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    flow.setDraftScope(isWorkConversation ? "work" : "project");
-  }, [flow.setDraftScope, isWorkConversation]);
-
-  useEffect(() => {
-    if (
-      !isWorkConversation ||
-      flow.draftScope !== "work" ||
-      !flow.draftKey ||
-      !props.initialModelSelection
-    ) {
-      return;
-    }
-    // Clear once when the Work draft is first seen, before the user can type.
-    if (clearedWorkDraftRef.current !== flow.draftKey) {
-      clearedWorkDraftRef.current = flow.draftKey;
-      clearComposerDraftContent(flow.draftKey);
-    }
-    if (initializedWorkDraftRef.current === flow.draftKey) {
-      return;
-    }
-    const requestedModelKey = `${props.initialModelSelection.instanceId}:${props.initialModelSelection.model}`;
-    // Model options load asynchronously; selecting an absent key is a no-op,
-    // so the draft only counts as initialized once the option is selectable.
-    if (!flow.modelOptions.some((option) => option.key === requestedModelKey)) {
-      return;
-    }
-    initializedWorkDraftRef.current = flow.draftKey;
-    flow.setSelectedModelKey(requestedModelKey);
-  }, [
-    flow.draftKey,
-    flow.draftScope,
-    flow.modelOptions,
-    flow.setSelectedModelKey,
-    isWorkConversation,
-    props.initialModelSelection,
-  ]);
 
   useEffect(() => {
     // Pending-task editing owns project selection (and must not fall through
@@ -412,10 +364,8 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     loadedBranchesProjectKeyRef.current = projectKey;
-    if (!isWorkConversation) {
-      void flow.loadBranches();
-    }
-  }, [flow.loadBranches, isWorkConversation, selectedProject]);
+    void flow.loadBranches();
+  }, [flow.loadBranches, selectedProject]);
 
   useEffect(() => {
     const shareId = props.incomingShareId;
@@ -744,7 +694,6 @@ export function NewTaskDraftScreen(props: {
     optionDescriptors: providerOptionDescriptors,
     runtimeMode: flow.runtimeMode,
     interactionMode: flow.interactionMode,
-    isHermes: isWorkConversation,
     supportedRuntimeModes: flow.selectedModelOption?.supportedRuntimeModes,
   });
   const workspaceLabel = useMemo(
@@ -850,10 +799,7 @@ export function NewTaskDraftScreen(props: {
         selectedEnvironmentServerConfig,
         draft.modelSelection ?? null,
       ) ?? flow.selectedModel;
-    const workspaceMode = resolveDraftWorkspaceMode({
-      isWorkConversation,
-      requestedMode: draft.workspaceSelection?.mode ?? flow.workspaceMode,
-    });
+    const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const selectedWorktreePath =
       draft.workspaceSelection?.worktreePath ?? flow.selectedWorktreePath;
@@ -927,7 +873,7 @@ export function NewTaskDraftScreen(props: {
     armAgentAwarenessLiveActivityForLocalWork({
       environmentId: selectedProject.environmentId,
       threadTitle: deriveThreadTitleFromPrompt(initialMessageText),
-      projectTitle: isWorkConversation ? "Hermes" : selectedProject.title,
+      projectTitle: selectedProject.title,
     });
     const creationBranch = resolveProjectThreadCreationBranch({
       workspaceMode,
@@ -941,7 +887,6 @@ export function NewTaskDraftScreen(props: {
       branch: creationBranch,
       worktreePath: workspaceMode === "worktree" ? null : selectedWorktreePath,
       startFromOrigin,
-      prepareWorkspace: isWorkConversation ? false : undefined,
       runtimeMode,
       interactionMode,
       initialMessageText,
@@ -1038,11 +983,7 @@ export function NewTaskDraftScreen(props: {
       onFocus={() => setIsComposerFocused(true)}
       onBlur={() => setIsComposerFocused(false)}
       onPasteImages={(uris) => void handleNativePasteImages(uris)}
-      placeholder={
-        isWorkConversation
-          ? "Ask Hermes anything"
-          : `Describe a coding task in ${selectedProject.title}`
-      }
+      placeholder={`Describe a coding task in ${selectedProject.title}`}
       // Same collapsed centering as ThreadComposer: native vertical gravity
       // in a pill-height box.
       singleLineCentered={!isExpanded}
@@ -1095,19 +1036,17 @@ export function NewTaskDraftScreen(props: {
           label={selectedEnvironmentLabel}
         />
       </ControlPillMenu>
-      {isWorkConversation ? null : (
-        <ControlPillMenu
-          actions={workspaceMenuActions}
-          onPressAction={({ nativeEvent }) => handleWorkspaceMenuAction(nativeEvent.event)}
-        >
-          <ComposerToolbarTrigger
-            accessibilityLabel="Workspace"
-            disabled={isIncomingShareTransferPending}
-            icon="point.topleft.down.curvedto.point.bottomright.up"
-            label={workspaceLabel}
-          />
-        </ControlPillMenu>
-      )}
+      <ControlPillMenu
+        actions={workspaceMenuActions}
+        onPressAction={({ nativeEvent }) => handleWorkspaceMenuAction(nativeEvent.event)}
+      >
+        <ComposerToolbarTrigger
+          accessibilityLabel="Workspace"
+          disabled={isIncomingShareTransferPending}
+          icon="point.topleft.down.curvedto.point.bottomright.up"
+          label={workspaceLabel}
+        />
+      </ControlPillMenu>
     </>
   );
 
@@ -1120,9 +1059,7 @@ export function NewTaskDraftScreen(props: {
       ? {
           ...rawComboVisual,
           icon: "tray.and.arrow.up" as const,
-          accessibilityLabel: isWorkConversation
-            ? "Queue conversation. Hold to dictate"
-            : "Queue task. Hold to dictate",
+          accessibilityLabel: "Queue task. Hold to dictate",
         }
       : rawComboVisual;
   const comboButton = {
@@ -1179,7 +1116,6 @@ export function NewTaskDraftScreen(props: {
       onUpdateOptionSelections={flow.setSelectedModelOptions}
       runtimeMode={flow.runtimeMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
-      isHermes={isWorkConversation}
     />
   );
 
@@ -1201,10 +1137,7 @@ export function NewTaskDraftScreen(props: {
     return (
       <View className="flex-1 bg-screen">
         <NativeStackScreenOptions options={{ headerShown: false }} />
-        <AndroidScreenHeader
-          title={isWorkConversation ? "New Hermes conversation" : "New Thread"}
-          onBack={() => navigation.goBack()}
-        />
+        <AndroidScreenHeader title="New Thread" onBack={() => navigation.goBack()} />
 
         <View className="flex-1" />
 
@@ -1305,9 +1238,7 @@ export function NewTaskDraftScreen(props: {
 
   return (
     <View className="flex-1 bg-sheet">
-      <NativeStackScreenOptions
-        options={{ title: isWorkConversation ? "Hermes" : selectedProject.title }}
-      />
+      <NativeStackScreenOptions options={{ title: selectedProject.title }} />
 
       <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
         <View className="min-h-0 flex-1 px-5 pt-2">{promptEditor}</View>

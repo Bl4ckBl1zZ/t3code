@@ -27,14 +27,12 @@ final class BackgroundWorkStatusTests: XCTestCase {
         let devServer = thread(count: 1, tasks: [Entry(taskId: "dev", description: "vp run dev", kind: .command)])
         XCTAssertEqual(devServer.homeStatus, .ready)
         XCTAssertFalse(devServer.isHomeWorking)
-        XCTAssertNil(devServer.workInboxBadge)
 
         // Its finished turn still reads as done until seen, like any other.
         var finished = thread(state: .completed, count: 1, tasks: devServer.pendingBackgroundTasks)
         finished.latestTurnCompletedAt = Date(timeIntervalSince1970: 200)
         finished.lastVisitedAt = Date(timeIntervalSince1970: 100)
         XCTAssertEqual(finished.homeStatus, .done)
-        XCTAssertEqual(finished.workInboxBadge, .done)
     }
 
     func testWorkThatWakesTheAgentHoldsTheThread() {
@@ -45,7 +43,6 @@ final class BackgroundWorkStatusTests: XCTestCase {
             ])
             XCTAssertEqual(held.homeStatus, .background, "\(kind)")
             XCTAssertTrue(held.isHomeWorking)
-            XCTAssertEqual(held.workInboxBadge, .working)
         }
     }
 

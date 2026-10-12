@@ -110,20 +110,6 @@ export function resolveDefaultableModelSelection(
 }
 
 /**
- * Which providers a picker may offer. Hermes is the T3 Work assistant and the
- * only thing T3 Work runs on, and it is not a coding provider — so a T3 Work
- * picker lists Hermes and nothing else, and a Code picker lists everything
- * else. "all" is for surfaces that are neither, such as automations.
- */
-export type ModelOptionProviderScope = "all" | "hermes-only" | "exclude-hermes";
-
-function matchesProviderScope(driver: string, scope: ModelOptionProviderScope): boolean {
-  if (driver === "hermesAcp") return false;
-  if (scope === "all") return true;
-  return scope === "hermes-only" ? driver === "hermes" : driver !== "hermes";
-}
-
-/**
  * Applies the user's model visibility and ordering for one provider instance,
  * mirroring `applyInstanceModelPreferences` in `apps/web/src/modelSelection.ts`.
  *
@@ -158,7 +144,6 @@ function applyModelPreferences<T extends { readonly slug: string; readonly isCus
 export function buildModelOptions(
   config: T3ServerConfig | null | undefined,
   fallbackModelSelection: ModelSelection | null,
-  providerScope: ModelOptionProviderScope = "all",
 ): ReadonlyArray<ModelOption> {
   const options = new Map<string, ModelOption>();
 
@@ -166,7 +151,9 @@ export function buildModelOptions(
     if (!provider.enabled || !provider.installed || provider.auth.status === "unauthenticated") {
       continue;
     }
-    if (!matchesProviderScope(provider.driver, providerScope)) {
+    // Retired Hermes ACP keeps historical labels via the fallback below but is
+    // never offered for new selections.
+    if (provider.driver === "hermesAcp") {
       continue;
     }
 

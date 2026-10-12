@@ -3,14 +3,8 @@ import XCTest
 
 @testable import T3Code
 
-/// Covers the Home sidebar's half of the workspace switch: which rows a
-/// workspace shows, the cache that decides whether the switch is visible at all,
-/// and the inbox dividers T3 Work draws over its active block.
-///
-/// The T3 Work / T3 Code split is invisible in the failure case — a stale
-/// presentation renders perfectly, just with the other workspace's threads — so
-/// these assert the plumbing rather than the pure functions underneath, which
-/// `WorkspaceSwitcherTests` and `WorkInboxSectionsTests` already own.
+/// Covers the Home sidebar's presentation: which rows the list shows, search
+/// results, change-request overlays and the shelves it draws.
 final class HomeWorkspacePresentationTests: XCTestCase {
     private let environmentID = "environment:local"
 
@@ -19,7 +13,6 @@ final class HomeWorkspacePresentationTests: XCTestCase {
     private func thread(
         id: String,
         providerID: String,
-        workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
         state: FeatureThreadState = .idle,
         isArchived: Bool = false
@@ -33,7 +26,6 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             providerID: providerID,
             modelID: "default",
             isArchived: isArchived,
-            workInboxRole: workInboxRole,
             relationshipToParent: relationshipToParent
         )
     }
@@ -58,19 +50,14 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             ],
             threads: threads,
             providers: [
-                FeatureProvider(id: "hermes", name: "Hermes", driver: "hermes"),
                 FeatureProvider(id: "claude", name: "Claude", driver: "claude"),
             ]
         )
     }
 
-    private func presentation(
-        _ snapshot: FeatureSnapshot,
-        workspace: MobileWorkspace
-    ) -> HomePresentation {
+    private func presentation(of snapshot: FeatureSnapshot) -> HomePresentation {
         HomePresentation(
             snapshot: snapshot,
-            workspace: workspace,
             query: "",
             projectID: nil,
             now: .now
@@ -79,14 +66,12 @@ final class HomeWorkspacePresentationTests: XCTestCase {
 
     private func collectionView(
         _ presentation: HomePresentation,
-        workspace: MobileWorkspace,
         changeRequests: [String: FeaturePullRequest] = [:],
         query: String = ""
     ) -> HomeThreadCollectionView {
         HomeThreadCollectionView(
             presentation: presentation,
             changeRequests: changeRequests,
-            workspace: workspace,
             query: query,
             selectedThreadID: nil,
             forceRichRows: false,
@@ -124,13 +109,12 @@ final class HomeWorkspacePresentationTests: XCTestCase {
         ])
         let presentation = HomePresentation(
             snapshot: snapshot,
-            workspace: .code,
             query: "alp",
             projectID: nil,
             now: .now,
             contentMatchIDs: ["beta"]
         )
-        var view = collectionView(presentation, workspace: .code, query: "alp")
+        var view = collectionView(presentation, query: "alp")
         let match = FeatureThreadSearchMatch(source: .assistant, snippet: "The ALPha build passed")
         view.contentMatches = ["beta": match]
 
@@ -148,8 +132,8 @@ final class HomeWorkspacePresentationTests: XCTestCase {
     /// instead of claiming there are no results.
     func testEmptySearchWaitsForMessageSearch() {
         let snapshot = snapshot(threads: [thread(id: "alpha", providerID: "claude")])
-        let presentation = HomePresentation(snapshot: snapshot, workspace: .code, query: "zzz", projectID: nil, now: .now)
-        var view = collectionView(presentation, workspace: .code, query: "zzz")
+        let presentation = HomePresentation(snapshot: snapshot, query: "zzz", projectID: nil, now: .now)
+        var view = collectionView(presentation, query: "zzz")
         view.isSearchingContent = true
         XCTAssertEqual(view.collectionItems, [.searchEmpty("zzz", true)])
         view.isSearchingContent = false
@@ -166,7 +150,7 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             thread(id: "code", providerID: "claude"),
             thread(id: "other", providerID: "claude"),
         ])
-        let presentation = presentation(snapshot, workspace: .code)
+        let presentation = presentation(of: snapshot)
         let pullRequest = FeaturePullRequest(
             number: 184,
             title: "fix: TestFlight version regression",
@@ -175,7 +159,6 @@ final class HomeWorkspacePresentationTests: XCTestCase {
 
         let items = collectionView(
             presentation,
-            workspace: .code,
             changeRequests: ["code": pullRequest]
         ).collectionItems
 
@@ -187,7 +170,7 @@ final class HomeWorkspacePresentationTests: XCTestCase {
     /// stay empty rather than leaving a previous thread's PR behind it.
     func testARowWithoutAChangeRequestCarriesNone() {
         let snapshot = snapshot(threads: [thread(id: "code", providerID: "claude")])
-        let items = collectionView(presentation(snapshot, workspace: .code), workspace: .code)
+        let items = collectionView(presentation(of: snapshot))
             .collectionItems
 
         XCTAssertNil(rowContext(for: "code", in: items)?.pullRequest)
@@ -203,139 +186,45 @@ final class HomeWorkspacePresentationTests: XCTestCase {
         return nil
     }
 
-    // MARK: - Which rows a workspace shows
+    // MARK: - Which rows the list shows
 
-    func testEachWorkspaceShowsOnlyItsOwnThreads() {
-        let snapshot = snapshot(threads: [
-            thread(id: "work", providerID: "hermes"),
-            thread(id: "code", providerID: "claude"),
-        ])
-
-        XCTAssertEqual(presentation(snapshot, workspace: .work).active.map(\.id), ["work"])
-        XCTAssertEqual(presentation(snapshot, workspace: .code).active.map(\.id), ["code"])
-    }
-
-    /// A subagent is a step inside its parent's timeline, so neither workspace
-    /// lists it as work of its own — which only holds if `relationshipToParent`
-    /// actually reaches the routing model.
-    func testSubagentThreadsAreListedByNeitherWorkspace() {
+    /// A subagent is a step inside its parent's timeline, so the list never
+    /// shows it as work of its own.
+    func testSubagentThreadsAreNotListed() {
         let snapshot = snapshot(threads: [
             thread(id: "code", providerID: "claude"),
             thread(id: "code-subagent", providerID: "claude", relationshipToParent: "subagent"),
-            thread(id: "work-subagent", providerID: "hermes", relationshipToParent: "subagent"),
         ])
 
-        XCTAssertEqual(presentation(snapshot, workspace: .code).active.map(\.id), ["code"])
-        XCTAssertTrue(presentation(snapshot, workspace: .work).active.isEmpty)
+        XCTAssertEqual(presentation(of: snapshot).active.map(\.id), ["code"])
     }
 
-    func testTheArchiveShelfIsSplitByWorkspaceToo() {
+    func testArchivedThreadsLiveOnTheArchiveShelf() {
         let snapshot = snapshot(threads: [
-            thread(id: "work", providerID: "hermes", isArchived: true),
-            thread(id: "code", providerID: "claude", isArchived: true),
+            thread(id: "archived", providerID: "claude", isArchived: true),
+            thread(id: "live", providerID: "claude"),
         ])
 
-        XCTAssertEqual(presentation(snapshot, workspace: .work).archived.map(\.id), ["work"])
-        XCTAssertEqual(presentation(snapshot, workspace: .code).archived.map(\.id), ["code"])
+        let presentation = presentation(of: snapshot)
+        XCTAssertEqual(presentation.archived.map(\.id), ["archived"])
+        XCTAssertEqual(presentation.active.map(\.id), ["live"])
     }
 
-    // MARK: - The cache
-
-    /// The failure this guards is silent: the switcher flips, the cache returns
-    /// the presentation it already built, and the list keeps showing the other
-    /// workspace's threads without a crash or a compile error.
-    @MainActor
-    func testFlippingTheWorkspaceAloneInvalidatesTheCachedPresentation() {
-        let snapshot = snapshot(threads: [
-            thread(id: "work", providerID: "hermes"),
-            thread(id: "code", providerID: "claude"),
-        ])
-        let cache = HomePresentationCache()
-        let now = Date.now
-
-        let code = cache.presentation(
-            snapshot: snapshot,
-            revision: 1,
-            workspace: .code,
-            query: "",
-            projectIDs: nil,
-            now: now
-        )
-        let work = cache.presentation(
-            snapshot: snapshot,
-            revision: 1,
-            workspace: .work,
-            query: "",
-            projectIDs: nil,
-            now: now
-        )
-
-        XCTAssertEqual(code.active.map(\.id), ["code"])
-        XCTAssertEqual(work.active.map(\.id), ["work"])
-    }
-
-    // MARK: - Work inbox dividers
-
-    func testWorkGroupsItsActiveBlockUnderInboxHeaders() {
-        let snapshot = snapshot(threads: [
-            thread(id: "active", providerID: "hermes"),
-            thread(id: "blocked", providerID: "hermes", state: .waitingForApproval),
-            thread(id: "main", providerID: "hermes", workInboxRole: "main"),
-        ])
-        let items = collectionView(
-            presentation(snapshot, workspace: .work),
-            workspace: .work
-        ).collectionItems
-
-        // The Main section only exists when `workInboxRole` reaches the grouping
-        // — a nil role puts the pinned thread in Active with everything else.
-        XCTAssertEqual(
-            items.compactMap { item -> String? in
-                guard case let .workSectionHeader(header) = item else { return nil }
-                return header.label
-            },
-            ["Main", "Needs You", "Active"]
-        )
-        XCTAssertEqual(
-            headerFollowedByRows(items),
-            [
-                HeaderRows(label: "Main", rows: ["main"]),
-                HeaderRows(label: "Needs You", rows: ["blocked"]),
-                HeaderRows(label: "Active", rows: ["active"]),
-            ]
-        )
-    }
-
-    func testCodeKeepsOneUndifferentiatedActiveBlock() {
+    func testTheActiveBlockIsOneUndifferentiatedBlock() {
         let snapshot = snapshot(threads: [
             thread(id: "first", providerID: "claude"),
             thread(id: "second", providerID: "claude", state: .waitingForApproval),
         ])
-        let items = collectionView(
-            presentation(snapshot, workspace: .code),
-            workspace: .code
-        ).collectionItems
+        let items = collectionView(presentation(of: snapshot)).collectionItems
 
-        XCTAssertFalse(items.contains { item in
-            if case .workSectionHeader = item { return true }
-            return false
-        })
         XCTAssertEqual(Set(threadIDs(items)), ["first", "second"])
     }
 
-    /// An empty inbox is one empty state and nothing else: no inbox headers,
-    /// no shelf headers counting zero.
-    func testAnEmptyWorkInboxDrawsOnlyItsEmptyState() {
-        var view = collectionView(
-            presentation(snapshot(threads: []), workspace: .work),
-            workspace: .work
-        )
-        let empty = HomeEmptyState.resolve(
-            workspace: .work,
-            hasCreationProjects: true,
-            filteredProjectName: nil,
-            hermesReady: true
-        )
+    /// An empty list is one empty state and nothing else: no shelf headers
+    /// counting zero.
+    func testAnEmptyListDrawsOnlyItsEmptyState() {
+        var view = collectionView(presentation(of: snapshot(threads: [])))
+        let empty = HomeEmptyState.resolve(hasCreationProjects: true, filteredProjectName: nil)
         view.emptyState = empty
 
         XCTAssertEqual(view.collectionItems, [.empty(empty)])
@@ -344,16 +233,11 @@ final class HomeWorkspacePresentationTests: XCTestCase {
     /// Placeholders stand in for the whole list while the first snapshot
     /// loads, under the banner, never alongside an empty state.
     func testPlaceholdersReplaceTheListWhileLoading() {
-        var view = collectionView(
-            presentation(snapshot(threads: []), workspace: .code),
-            workspace: .code
-        )
+        var view = collectionView(presentation(of: snapshot(threads: [])))
         view.isPlaceholder = true
         view.emptyState = HomeEmptyState.resolve(
-            workspace: .code,
             hasCreationProjects: false,
-            filteredProjectName: nil,
-            hermesReady: true
+            filteredProjectName: nil
         )
         let banner = HomeConnectionBanner(
             tone: .warning,
@@ -372,8 +256,7 @@ final class HomeWorkspacePresentationTests: XCTestCase {
         var pinned = thread(id: "pinned", providerID: "claude")
         pinned.pinnedAt = .now
         let items = collectionView(
-            presentation(snapshot(threads: [pinned, thread(id: "active", providerID: "claude")]), workspace: .code),
-            workspace: .code
+            presentation(of: snapshot(threads: [pinned, thread(id: "active", providerID: "claude")]))
         ).collectionItems
 
         XCTAssertFalse(items.contains { item in
@@ -397,8 +280,8 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             thread(id: "alpha-archived", providerID: "claude", isArchived: true),
             thread(id: "alpha-live", providerID: "claude"),
         ])
-        let presentation = HomePresentation(snapshot: snapshot, workspace: .code, query: "alpha", projectID: nil, now: .now)
-        let items = collectionView(presentation, workspace: .code, query: "alpha").collectionItems
+        let presentation = HomePresentation(snapshot: snapshot, query: "alpha", projectID: nil, now: .now)
+        let items = collectionView(presentation, query: "alpha").collectionItems
 
         XCTAssertEqual(rowContext(for: "alpha-archived", in: items)?.showsArchivedBadge, true)
         XCTAssertEqual(rowContext(for: "alpha-live", in: items)?.showsArchivedBadge, false)
@@ -406,34 +289,10 @@ final class HomeWorkspacePresentationTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private struct HeaderRows: Equatable {
-        let label: String
-        let rows: [String]
-    }
-
     private func threadIDs(_ items: [HomeCollectionItem]) -> [String] {
         items.compactMap { item in
             guard case let .thread(thread, _, _, _, _) = item else { return nil }
             return thread.id
         }
-    }
-
-    private func headerFollowedByRows(_ items: [HomeCollectionItem]) -> [HeaderRows] {
-        var groups: [HeaderRows] = []
-        for item in items {
-            switch item {
-            case let .workSectionHeader(header):
-                groups.append(HeaderRows(label: header.label, rows: []))
-            case let .thread(thread, _, _, _, _):
-                guard let last = groups.last else { continue }
-                groups[groups.count - 1] = HeaderRows(
-                    label: last.label,
-                    rows: last.rows + [thread.id]
-                )
-            default:
-                continue
-            }
-        }
-        return groups
     }
 }

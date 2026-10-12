@@ -88,13 +88,13 @@ it("does not serialize arbitrary provider causes", () => {
 it("reports the innermost cause instead of the wrapper that only restates ids", () => {
   const failure = makeProviderFailure({
     cause: new ProviderAdapterTurnStartError({
-      driver: ProviderDriverKind.make("hermes"),
+      driver: ProviderDriverKind.make("opencode"),
       threadId: ThreadId.make("thread:provider-failure-cause"),
       providerThreadId: ProviderThreadId.make("provider-thread:provider-failure-cause"),
       runId: RunId.make("run:provider-failure-cause"),
       cause: new ProviderAdapterProtocolError({
-        driver: ProviderDriverKind.make("hermes"),
-        detail: "Hermes is still running an earlier prompt on this session",
+        driver: ProviderDriverKind.make("opencode"),
+        detail: "OpenCode is still running an earlier prompt on this session",
       }),
     }),
     class: "provider_error",
@@ -102,7 +102,7 @@ it("reports the innermost cause instead of the wrapper that only restates ids", 
 
   assert.equal(
     failure.message,
-    "hermes provider protocol error: Hermes is still running an earlier prompt on this session.",
+    "opencode provider protocol error: OpenCode is still running an earlier prompt on this session.",
   );
 });
 
@@ -124,28 +124,25 @@ it("reads a cause chain that lost its prototypes in transit", () => {
   const failure = makeProviderFailure({
     cause: {
       _tag: "ProviderAdapterTurnStartError",
-      message: "Failed to start run run:x on hermes provider thread provider-thread:x.",
+      message: "Failed to start run run:x on opencode provider thread provider-thread:x.",
       cause: {
         _tag: "ProviderAdapterProtocolError",
-        detail: "Hermes owner lease is no longer held",
+        detail: "Provider session lease is no longer held",
       },
     },
   });
 
-  assert.equal(failure.message, "Hermes owner lease is no longer held");
+  assert.equal(failure.message, "Provider session lease is no longer held");
 });
 
 it("reads a cause chain that ends in a bare sentence", () => {
   const failure = makeProviderFailure({
     cause: new Error("Failed to ensure the provider thread.", {
-      cause: "Hermes no longer stores session 20260817_141040 in profile default.",
+      cause: "The provider no longer stores session 20260817_141040.",
     }),
   });
 
-  assert.equal(
-    failure.message,
-    "Hermes no longer stores session 20260817_141040 in profile default.",
-  );
+  assert.equal(failure.message, "The provider no longer stores session 20260817_141040.");
 });
 
 it("falls back to the outermost readable message when the cause carries none", () => {

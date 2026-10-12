@@ -15,7 +15,7 @@ import { getTraitsSpeedDisplay } from "./TraitsSpeed";
 
 /**
  * Reasoning-option ids across the drivers that expose one: `reasoningEffort`
- * (Codex, Hermes), `effort` (Claude), `thinking` (ACP agents). Matching on the
+ * (Codex), `effort` (Claude), `thinking` (ACP agents). Matching on the
  * descriptor's "Reasoning" label first keeps a new driver working without a
  * code change here.
  */

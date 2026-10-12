@@ -1,6 +1,3 @@
-import { hermesWorkSetupServiceLayer } from "./hermes/HermesWorkSetupService.ts";
-import { hermesWorkInstallerLayer } from "./hermes/HermesWorkInstaller.ts";
-import { hermesWorkModelAuthLayer } from "./hermes/HermesWorkModelAuth.ts";
 import * as Cause from "effect/Cause";
 import { shouldRetryCloudLink } from "./cloud/relayResponse.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -16,12 +13,9 @@ import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -55,22 +49,6 @@ import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
-import {
-  HermesSessionBindingRepository,
-  layer as HermesSessionBindingRepositoryLayer,
-} from "./hermes/HermesSessionBindingRepository.ts";
-import {
-  HermesWorkSyncService,
-  hermesWorkSyncServiceLayer,
-} from "./hermes/HermesWorkSyncService.ts";
-import {
-  HermesWorkRunRepository,
-  hermesWorkRunRepositoryLayer,
-} from "./hermes/HermesWorkRunRepository.ts";
-import { hermesDashboardClientLayer } from "./hermes/HermesDashboardClient.ts";
-import { hermesWorkServiceLayer } from "./hermes/HermesWorkService.ts";
-import { hermesWorkConversationServiceLayer } from "./hermes/HermesWorkConversationService.ts";
-import { hermesWorkGroupsServiceLayer } from "./hermes/HermesWorkGroupsService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
 import * as OpenCodeServerLedger from "./provider/OpenCodeServerLedger.ts";
@@ -362,17 +340,6 @@ const PlatformServicesLive = Layer.unwrap(
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
-const HermesPersistenceLayerLive = Layer.mergeAll(
-  HermesSessionBindingRepositoryLayer,
-  hermesWorkRunRepositoryLayer,
-).pipe(Layer.provideMerge(PersistenceLayerLive)) satisfies Layer.Layer<
-  HermesSessionBindingRepository | HermesWorkRunRepository | SqlClient.SqlClient,
-  unknown,
-  ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path
->;
-const ProviderInstanceRegistryHydrationWithHermesLive = ProviderInstanceRegistryHydrationLive.pipe(
-  Layer.provide(HermesPersistenceLayerLive),
-);
 
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
@@ -558,24 +525,18 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.effectDiscard(ProjectProviderOverrideSweep.sweep).pipe(
     Layer.provide(ProjectionProjectRepositoryLive),
   ),
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      yield* (yield* HermesWorkSyncService).start();
-    }),
-  ).pipe(Layer.provide(hermesWorkSyncServiceLayer)),
 ).pipe(
   // Core Services
   // One per environment, so every shell subscription shares its thread shell reads.
   Layer.provideMerge(LiveThreadShells.layer),
-  Layer.provideMerge(hermesDashboardClientLayer),
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
-  // The repository and every other persistence consumer share one SqlClient.
-  Layer.provideMerge(HermesPersistenceLayerLive),
+  // Every persistence consumer shares one SqlClient.
+  Layer.provideMerge(PersistenceLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
   Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
@@ -585,21 +546,11 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
-  Layer.provideMerge(ProviderInstanceRegistryHydrationWithHermesLive),
+  Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
   Layer.provideMerge(AntigravityInstallation.layer),
 );
 
-const HermesWorkServicesLive = Layer.mergeAll(
-  hermesWorkSetupServiceLayer.pipe(
-    Layer.provide(hermesWorkInstallerLayer),
-    Layer.provide(hermesWorkModelAuthLayer),
-  ),
-  hermesWorkModelAuthLayer,
-  hermesWorkServiceLayer.pipe(Layer.provideMerge(hermesWorkConversationServiceLayer)),
-  hermesWorkGroupsServiceLayer,
-).pipe(Layer.provideMerge(RuntimeCoreDependenciesBaseLive));
-
-const RuntimeCoreDependenciesLive = HermesWorkServicesLive.pipe(
+const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   // Shared native/canonical NDJSON writers used by both the per-instance
   // V2 drivers and the orchestration runtime. Provide resource attribution so
   // the rewritten telemetry pipeline can account for logical NDJSON writes.

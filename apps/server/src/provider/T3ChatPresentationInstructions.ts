@@ -1,4 +1,4 @@
-/** Presentation capabilities shared by Code and Work, independent of MCP tools. */
+/** Presentation capabilities for T3 chat, independent of MCP tools. */
 export const T3_CHAT_PRESENTATION_INSTRUCTIONS = `
 ## Presenting answers in T3 chat
 

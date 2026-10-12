@@ -2,7 +2,6 @@ import type { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "
 import {
   orchestrationV2CommandExecutionIsLiveInBackground,
   ProviderDriverKind,
-  type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2ProjectedTurnItem,
@@ -61,12 +60,6 @@ export const PROVIDER_OPTIONS: Array<{
     pickerSidebarBadge: "new",
   },
   { value: ProviderDriverKind.make("grok"), label: "Grok", available: true },
-  {
-    value: ProviderDriverKind.make("hermes"),
-    label: "Hermes",
-    available: true,
-    pickerSidebarBadge: "new",
-  },
   {
     value: ProviderDriverKind.make("openclaw"),
     label: "OpenClaw",
@@ -366,8 +359,6 @@ export function hasActionableProposedPlan(plan: LatestProposedPlanState | null):
   return plan?.status === "active";
 }
 
-const PROVIDER_HYDRATED_MESSAGE_ID_PATTERN = /^message:provider:[^:]+:native-item:/;
-
 const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"]["type"]>([
   "approval_request",
   "compaction",
@@ -601,17 +592,10 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
  * Builds the web timeline in the exact order committed by `visibleTurnItems`.
  * Committed rows are presented directly from their projected item. Queued
  * input is absent by construction until dispatch creates its user turn item.
- * Durable provider messages without turn-item identities are merged
- * chronologically, then optimistic client-owned messages are appended.
+ * Optimistic client-owned messages are appended last.
  */
 export function deriveTimelineEntriesFromVisibleTurnItems(input: {
   readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
-  /**
-   * Provider-owned history can be materialized as durable messages before the
-   * provider has turn-item identities for it. Include those orphan messages
-   * without duplicating messages that already have visible turn items.
-   */
-  readonly projectionMessages?: ReadonlyArray<OrchestrationV2ConversationMessage>;
   readonly optimisticMessages: ReadonlyArray<ChatMessage>;
   readonly attachmentUrlById?: ReadonlyMap<string, string>;
   readonly attempts?: ReadonlyArray<OrchestrationV2RunAttempt>;
@@ -620,9 +604,6 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
 }): TimelineEntry[] {
   const committedMessageIds = new Set<string>();
   const entries: TimelineEntry[] = [];
-  const projectionMessageById = new Map(
-    (input.projectionMessages ?? []).map((message) => [message.id, message] as const),
-  );
   const attemptByRootNodeId = new Map(
     (input.attempts ?? []).map((attempt) => [attempt.rootNodeId, attempt] as const),
   );
@@ -639,12 +620,8 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
     const attempt = resolveAttempt(item);
     const attemptMetadata = attempt === undefined ? {} : { attempt };
     if (item.type === "user_message" || item.type === "assistant_message") {
-      // Assistant turn items carry no attachments; provider-produced media
-      // (e.g. Hermes MEDIA outputs) lives on the durable projection message.
-      const itemAttachments =
-        item.type === "user_message"
-          ? item.attachments
-          : (projectionMessageById.get(item.messageId)?.attachments ?? []);
+      // Assistant turn items carry no attachments.
+      const itemAttachments = item.type === "user_message" ? item.attachments : [];
       const message: ChatMessage = {
         id: item.messageId,
         role: item.type === "user_message" ? "user" : "assistant",
@@ -742,91 +719,6 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
       entry: projectedWorkEntry(row),
       ...attemptMetadata,
     });
-  }
-
-  // Provider-hydrated history rows carry digest-derived ids that never
-  // match the ids of app-created messages, so the same utterance can exist
-  // twice (web row + hydrated `native-item` row). Hydrated rows also carry
-  // synthetic timestamps (binding creation plus ordinal), so wall-clock
-  // proximity cannot identify echoes. Skip hydrated orphan rows whose role
-  // and text match a committed message, consuming one committed occurrence
-  // per skipped row so genuinely repeated identical messages still render.
-  const committedIndexesByText = new Map<string, Array<number>>();
-  entries.forEach((entry, index) => {
-    if (entry.kind !== "message") return;
-    const key = `${entry.message.role}\n${entry.message.text}`;
-    const bucket = committedIndexesByText.get(key) ?? [];
-    bucket.push(index);
-    committedIndexesByText.set(key, bucket);
-  });
-  const orphanProjectedMessages: Array<OrchestrationV2ConversationMessage> = [];
-  for (const projectedMessage of input.projectionMessages ?? []) {
-    if (committedMessageIds.has(projectedMessage.id) || projectedMessage.role === "system") {
-      continue;
-    }
-    if (PROVIDER_HYDRATED_MESSAGE_ID_PATTERN.test(projectedMessage.id)) {
-      const key = `${projectedMessage.role}\n${projectedMessage.text}`;
-      const committedIndex = committedIndexesByText.get(key)?.shift();
-      const committed = committedIndex === undefined ? undefined : entries[committedIndex];
-      if (committedIndex !== undefined && committed?.kind === "message") {
-        // An attachment-bearing echo still deduplicates; its attachments are
-        // merged onto the committed entry when that entry has none.
-        if (
-          projectedMessage.attachments.length > 0 &&
-          (committed.message.attachments === undefined ||
-            committed.message.attachments.length === 0)
-        ) {
-          entries[committedIndex] = {
-            ...committed,
-            message: {
-              ...committed.message,
-              attachments: projectedMessage.attachments.map((attachment) => {
-                const previewUrl = input.attachmentUrlById?.get(attachment.id);
-                return previewUrl ? { ...attachment, previewUrl } : attachment;
-              }),
-            },
-          };
-        }
-        continue;
-      }
-    }
-    orphanProjectedMessages.push(projectedMessage);
-  }
-  for (const projectedMessage of orphanProjectedMessages) {
-    const message: ChatMessage = {
-      id: projectedMessage.id,
-      role: projectedMessage.role,
-      text: projectedMessage.text,
-      ...(projectedMessage.attachments.length > 0
-        ? {
-            attachments: projectedMessage.attachments.map((attachment) => {
-              const previewUrl = input.attachmentUrlById?.get(attachment.id);
-              return previewUrl ? { ...attachment, previewUrl } : attachment;
-            }),
-          }
-        : {}),
-      runId: projectedMessage.runId,
-      streaming: projectedMessage.streaming,
-      createdBy: projectedMessage.createdBy,
-      creationSource: projectedMessage.creationSource,
-      createdAt: DateTime.formatIso(projectedMessage.createdAt),
-      updatedAt: DateTime.formatIso(projectedMessage.updatedAt),
-    };
-    const entry: TimelineEntry = {
-      id: message.id,
-      kind: "message",
-      createdAt: message.createdAt,
-      message,
-    };
-    const insertionIndex = entries.findIndex(
-      (candidate) => Date.parse(candidate.createdAt) > Date.parse(entry.createdAt),
-    );
-    if (insertionIndex === -1) {
-      entries.push(entry);
-    } else {
-      entries.splice(insertionIndex, 0, entry);
-    }
-    committedMessageIds.add(message.id);
   }
 
   for (const message of input.optimisticMessages) {

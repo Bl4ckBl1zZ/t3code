@@ -300,7 +300,7 @@ const REPLY_ENVELOPE_PATTERN =
   /^\s*\[Replying to(?: your previous message)?:\s*"([\s\S]*?)"\][ \t]*(?:\r?\n)+([\s\S]+)$/;
 
 /**
- * Hermes transports encode reply metadata in a leading text envelope. Keep
+ * Some transports encode reply metadata in a leading text envelope. Keep
  * this parser deliberately strict so an ordinary message that happens to
  * mention "Replying to" is not reformatted.
  */

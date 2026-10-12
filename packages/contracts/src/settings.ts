@@ -233,7 +233,7 @@ export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 /**
  * Per-provider-instance model visibility and ordering, keyed by
  * `ProviderInstanceId` (the default instance for a driver uses the driver kind
- * as its id, so `"hermes"`, `"codex"`, `"claudeAgent"`, …).
+ * as its id, so `"codex"`, `"claudeAgent"`, …).
  *
  * Server-authoritative, because every client renders the same picker: hiding a
  * model in the desktop app has to hide it in the browser and on mobile too.
@@ -1127,127 +1127,6 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
 );
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
 
-const HermesGatewayEndpoint = TrimmedString.check(
-  Schema.makeFilter((value) => {
-    if (value === "") return true;
-    let endpoint: URL;
-    try {
-      endpoint = new URL(value);
-    } catch {
-      return "Hermes endpoint must be a valid WebSocket URL.";
-    }
-    const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpoint.hostname);
-    const hasToken = hasSensitiveQueryKey(endpoint);
-    return (
-      (((endpoint.protocol === "ws:" && loopback) || endpoint.protocol === "wss:") &&
-        !endpoint.username &&
-        !endpoint.password &&
-        !endpoint.hash &&
-        (loopback || !endpoint.search) &&
-        !hasToken) ||
-      "Hermes endpoint must be credential-free ws:// on loopback or wss://; supply authentication through sensitive provider environment."
-    );
-  }),
-);
-
-const HermesProfileKey = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(128),
-  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
-);
-
-const HermesFeatureSwitch = (defaultValue: boolean, title: string, description: string) =>
-  Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(defaultValue)),
-    Schema.annotateKey({
-      title,
-      description,
-      providerSettingsForm: { control: "switch", clearWhenEmpty: "persist" },
-    }),
-  );
-
-export const HermesSettings = makeProviderSettingsSchema(
-  {
-    enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(false)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    endpoint: HermesGatewayEndpoint.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "Hermes connection",
-        description:
-          "Connect to the Hermes desktop backend. Leave blank for the local default; use wss:// for a remote backend.",
-        providerSettingsForm: {
-          placeholder: "ws://127.0.0.1:9119/api/ws",
-          clearWhenEmpty: "persist",
-        },
-      }),
-    ),
-    remoteAccessEnabled: HermesFeatureSwitch(
-      false,
-      "Remote gateway",
-      "Allow this instance to connect to a credential-free wss:// endpoint.",
-    ),
-    profileKey: HermesProfileKey.pipe(
-      Schema.withDecodingDefault(Effect.succeed("default")),
-      Schema.annotateKey({
-        title: "Default assistant",
-        description:
-          "The Hermes profile used for new conversations. Manage other assistants in Work.",
-        providerSettingsForm: { placeholder: "default", clearWhenEmpty: "persist" },
-      }),
-    ),
-    managedServerEnabled: HermesFeatureSwitch(
-      true,
-      "Start Hermes automatically",
-      "Start the local Hermes connection when needed. Scheduled tasks use the separate background service managed in Work.",
-    ),
-    customModels: Schema.Array(CustomModelSetting).pipe(
-      Schema.withDecodingDefault(Effect.succeed([])),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    importEnabled: HermesFeatureSwitch(
-      false,
-      "Profile import",
-      "Expose import controls only when the gateway advertises a compatible import API.",
-    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
-    mcpEnabled: HermesFeatureSwitch(
-      true,
-      "MCP",
-      "Allow MCP only when session-scoped registration and revocation are advertised.",
-    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
-    attachmentsEnabled: HermesFeatureSwitch(
-      true,
-      "Attachments",
-      "Allow attachment uploads supported by the connected gateway.",
-    ),
-    proactiveEnabled: HermesFeatureSwitch(
-      true,
-      "Proactive mode",
-      "Keep Hermes threads subscribed so gateway-side runs stream in on their own, and answer requests those runs raise. Off still shows that work — it arrives when the thread is opened instead.",
-    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
-    voiceEnabled: HermesFeatureSwitch(
-      false,
-      "Voice",
-      "Allow voice features only when explicitly supported by the gateway.",
-    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
-  },
-  {
-    order: [
-      "endpoint",
-      "profileKey",
-      "managedServerEnabled",
-      "remoteAccessEnabled",
-      "importEnabled",
-      "mcpEnabled",
-      "attachmentsEnabled",
-      "proactiveEnabled",
-      "voiceEnabled",
-    ],
-  },
-);
-export type HermesSettings = typeof HermesSettings.Type;
-
 export const UsageLimitSourceConfig = Schema.Struct({
   kind: Schema.Literal("cliproxy"),
   label: Schema.optional(TrimmedNonEmptyString),
@@ -1420,8 +1299,6 @@ export const ServerSettings = Schema.Struct({
   enableLegacyTokenStreaming: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  enableHermes: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  enableRemoteHermes: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
    * Whether agents may drive the in-app preview browser. Turning this off
@@ -1588,7 +1465,6 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-    hermes: HermesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     muse: MuseSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -1622,14 +1498,6 @@ export const ServerSettings = Schema.Struct({
   // Optional rather than defaulted, so settings that never touched GitHub encode exactly as they
   // did before it existed.
   github: Schema.optionalKey(GitHubSettings),
-  // Proactive mode shipped as opt-out, but every Hermes instance created
-  // before that has `proactiveEnabled: false` written into its config blob by
-  // the old default — a stored value a new schema default can never reach.
-  // The server rewrites those once and records it here, so a user who then
-  // turns the switch back off is not overruled on the next boot.
-  hermesProactiveDefaultApplied: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(false)),
-  ),
   // `t3.json` is the source of truth for a project's actions, so a project
   // whose actions only ever existed in the database needs the file written
   // once. Recorded here rather than inferred from a missing file: without a
@@ -1817,20 +1685,6 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
-const HermesSettingsPatch = Schema.Struct({
-  enabled: Schema.optionalKey(Schema.Boolean),
-  endpoint: Schema.optionalKey(HermesGatewayEndpoint),
-  remoteAccessEnabled: Schema.optionalKey(Schema.Boolean),
-  profileKey: Schema.optionalKey(HermesProfileKey),
-  managedServerEnabled: Schema.optionalKey(Schema.Boolean),
-  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
-  importEnabled: Schema.optionalKey(Schema.Boolean),
-  mcpEnabled: Schema.optionalKey(Schema.Boolean),
-  attachmentsEnabled: Schema.optionalKey(Schema.Boolean),
-  proactiveEnabled: Schema.optionalKey(Schema.Boolean),
-  voiceEnabled: Schema.optionalKey(Schema.Boolean),
-});
-
 export const ServerSettingsPatch = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
@@ -1840,8 +1694,6 @@ export const ServerSettingsPatch = Schema.Struct({
   autoDeleteSettledAfterDays: Schema.optionalKey(Schema.NullOr(AutoDeleteSettledAfterDays)),
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
-  enableHermes: Schema.optionalKey(Schema.Boolean),
-  enableRemoteHermes: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
@@ -1940,7 +1792,6 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
-      hermes: Schema.optionalKey(HermesSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
       muse: Schema.optionalKey(MuseSettingsPatch),
       pi: Schema.optionalKey(PiSettingsPatch),
@@ -1975,7 +1826,6 @@ export const ServerSettingsPatch = Schema.Struct({
   migrateModelPreferences: Schema.optionalKey(
     Schema.Struct({ favorites: Schema.optionalKey(ModelFavorites) }),
   ),
-  hermesProactiveDefaultApplied: Schema.optionalKey(Schema.Boolean),
   projectFileBackfillApplied: Schema.optionalKey(Schema.Boolean),
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),

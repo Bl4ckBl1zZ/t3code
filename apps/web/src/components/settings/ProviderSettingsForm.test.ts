@@ -10,10 +10,9 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
-  it("offers each provider driver once, including Hermes", () => {
+  it("offers each provider driver once", () => {
     const values = DRIVER_OPTIONS.map((option) => option.value);
     expect(new Set(values).size).toBe(values.length);
-    expect(values.filter((value) => value === "hermes")).toHaveLength(1);
   });
 
   it("derives visible provider config fields from the client definition schema", () => {
@@ -91,44 +90,9 @@ describe("ProviderSettingsForm helpers", () => {
     expect(fields[1]?.label).toBe("Executable");
   });
 
-  it("does not offer the removed Hermes in Code driver", () => {
+  it("does not offer the removed Hermes drivers", () => {
+    expect(DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("hermes")]).toBeUndefined();
     expect(DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("hermesAcp")]).toBeUndefined();
-  });
-
-  it("exposes Hermes as a built-in provider with its required settings and secret", () => {
-    const hermes = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("hermes")];
-
-    expect(hermes).toBeDefined();
-    expect(hermes?.hasDefaultInstance).not.toBe(false);
-    expect(hermes?.defaultInstance).toEqual({
-      driver: ProviderDriverKind.make("hermes"),
-      enabled: false,
-      config: {
-        endpoint: "",
-        remoteAccessEnabled: false,
-        profileKey: "default",
-        managedServerEnabled: true,
-        customModels: [],
-        attachmentsEnabled: true,
-      },
-    });
-    expect(deriveProviderSettingsFields(hermes!).map((field) => field.key)).toEqual([
-      "endpoint",
-      "profileKey",
-      "managedServerEnabled",
-      "remoteAccessEnabled",
-      "attachmentsEnabled",
-    ]);
-    expect(hermes?.environmentFields).toEqual([
-      {
-        name: "HERMES_GATEWAY_TOKEN",
-        label: "Hermes gateway token",
-        description:
-          "Shared only with the attached gateway or a Hermes Serve process launched by T3.",
-        placeholder: "Paste gateway token",
-        sensitive: true,
-      },
-    ]);
   });
 
   it("exposes OpenClaw as a disabled-by-default ACP provider", () => {

@@ -781,7 +781,6 @@ public actor T3Client {
         branch: String? = nil,
         worktreePath: String? = nil,
         worktreePreparation: ThreadWorktreePreparation? = nil,
-        prepareWorkspace: Bool? = nil,
         attachments: [UploadChatAttachment] = [],
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString
@@ -804,7 +803,6 @@ public actor T3Client {
                 branch: branch,
                 worktreePath: worktreePath,
                 worktreePreparation: worktreePreparation,
-                prepareWorkspace: prepareWorkspace,
                 attachments: persisted,
                 commandID: commandID,
                 messageID: messageID
@@ -1174,12 +1172,6 @@ public actor T3Client {
         )
     }
 
-    public func setWorkInboxRole(threadID: String, role: String?) async throws -> DispatchResult {
-        try await dispatch(
-            OrchestrationCommands.setWorkInboxRole(threadID: threadID, role: role)
-        )
-    }
-
     @discardableResult
     public func setRuntimeMode(
         threadID: String,
@@ -1452,48 +1444,6 @@ public actor T3Client {
             RPCMethod.scheduledTasksDelete.rawValue,
             payload: .object(["id": .string(id)])
         )
-    }
-
-    public func workGroupsQuery(_ input: JSONValue) async throws -> HermesWorkGroupsResult {
-        try await rpc.request("hermesWork.groupsQuery", payload: input, as: HermesWorkGroupsResult.self)
-    }
-    public func workGroupsMutate(_ input: JSONValue) async throws -> HermesWorkMutationResult {
-        try await rpc.request("hermesWork.groupsMutate", payload: input, as: HermesWorkMutationResult.self)
-    }
-    public func workSetupStart(instanceID: String) async throws -> HermesWorkSetupState {
-        try await rpc.request("hermesWork.setupStart", payload: .object(["providerInstanceId": .string(instanceID)]), as: HermesWorkSetupState.self)
-    }
-    public func workSetupStatus(instanceID: String) async throws -> HermesWorkSetupState {
-        try await rpc.request("hermesWork.setupStatus", payload: .object(["providerInstanceId": .string(instanceID)]), as: HermesWorkSetupState.self)
-    }
-    public func workModelStatus(_ input: JSONValue) async throws -> HermesWorkModelStatus {
-        try await rpc.request("hermesWork.modelStatus", payload: input, as: HermesWorkModelStatus.self)
-    }
-    public func workModelAuthStart(_ input: JSONValue) async throws -> HermesWorkModelAuthStart {
-        try await rpc.request("hermesWork.modelAuthStart", payload: input, as: HermesWorkModelAuthStart.self)
-    }
-    public func workModelAuthPoll(_ input: JSONValue) async throws -> HermesWorkModelAuthPoll {
-        try await rpc.request("hermesWork.modelAuthPoll", payload: input, as: HermesWorkModelAuthPoll.self)
-    }
-    public func workModelAuthCancel(_ input: JSONValue) async throws -> HermesWorkModelAuthCancel {
-        try await rpc.request("hermesWork.modelAuthCancel", payload: input, as: HermesWorkModelAuthCancel.self)
-    }
-    public func workModelSet(_ input: JSONValue) async throws -> HermesWorkModelSet {
-        try await rpc.request("hermesWork.modelSet", payload: input, as: HermesWorkModelSet.self)
-    }
-    public func workChanges(instanceID: String) async -> AsyncThrowingStream<HermesWorkChange, Error> {
-        await rpc.subscribe("hermesWork.subscribeChanges", payload: .object(["providerInstanceId": .string(instanceID)]), as: HermesWorkChange.self)
-    }
-    public func workConnections() async throws -> HermesWorkConnections {
-        try await rpc.request("hermesWork.connections", payload: .object([:]), as: HermesWorkConnections.self)
-    }
-
-    public func workQuery(_ input: JSONValue) async throws -> HermesWorkQueryResult {
-        try await rpc.request("hermesWork.query", payload: input, as: HermesWorkQueryResult.self)
-    }
-
-    public func workMutate(_ input: JSONValue) async throws -> HermesWorkMutationResult {
-        try await rpc.request("hermesWork.mutate", payload: input, as: HermesWorkMutationResult.self)
     }
 
     public func listProjectEntries(cwd: String) async throws -> ProjectEntriesResult {
@@ -3350,12 +3300,11 @@ public enum OrchestrationCommands {
         branch: String? = nil,
         worktreePath: String? = nil,
         worktreePreparation: ThreadWorktreePreparation? = nil,
-        prepareWorkspace: Bool? = nil,
         attachments: [JSONValue] = [],
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString
     ) throws -> JSONValue {
-        var input: [String: JSONValue] = [
+        .object([
             "commandId": .string(commandID),
             "creationSource": .string(creationSource),
             "threadId": .string(threadID),
@@ -3377,13 +3326,7 @@ public enum OrchestrationCommands {
                 "text": .string(text),
                 "attachments": .array(attachments),
             ]),
-        ]
-        // Only projectless conversation providers opt out; leaving the key off
-        // keeps the server's "prepare the workspace" default.
-        if let prepareWorkspace {
-            input["prepareWorkspace"] = .bool(prepareWorkspace)
-        }
-        return .object(input)
+        ])
     }
 
     /// `OrchestrationV2ThreadLaunchWorkspaceStrategy`. A worktree launch names
@@ -3853,21 +3796,6 @@ public enum OrchestrationCommands {
         var fields: [String: JSONValue] = ["pinned": .bool(pinned)]
         if pinned, let orderKey { fields["pinOrderKey"] = .string(orderKey) }
         return updateMetadata(threadID: threadID, commandID: commandID, fields: fields)
-    }
-
-    /// The Work-inbox role is a thread metadata field too. `"chat"` marks a
-    /// Hermes conversation as belonging to the Chat surface; nil clears the
-    /// role back to an ordinary thread.
-    public static func setWorkInboxRole(
-        threadID: String,
-        role: String?,
-        commandID: String = UUID().uuidString
-    ) -> JSONValue {
-        updateMetadata(
-            threadID: threadID,
-            commandID: commandID,
-            fields: ["workInboxRole": role.map(JSONValue.string) ?? .null]
-        )
     }
 
     public static func setRuntimeMode(

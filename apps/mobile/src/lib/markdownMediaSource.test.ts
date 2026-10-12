@@ -20,7 +20,7 @@ describe("resolveMarkdownMediaSource", () => {
     }
   });
 
-  it("routes a Hermes browser artifact to the artifact resource", () => {
+  it("routes a browser artifact to the artifact resource", () => {
     expect(resolveMarkdownMediaSource("/tmp/browser-artifacts/shot.png", threadId)).toEqual({
       _tag: "resource",
       resource: { _tag: "browser-artifact", fileName: "shot.png" },

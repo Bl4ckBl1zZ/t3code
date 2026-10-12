@@ -192,50 +192,6 @@ describe("mobile model options", () => {
   });
 });
 
-describe("model option provider scope", () => {
-  const config = {
-    providers: [
-      {
-        instanceId: "codex",
-        driver: "codex",
-        displayName: "Codex",
-        enabled: true,
-        installed: true,
-        auth: { status: "authenticated" },
-        models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null }],
-      },
-      {
-        instanceId: "hermes",
-        driver: "hermes",
-        displayName: "Hermes",
-        enabled: true,
-        installed: true,
-        auth: { status: "authenticated" },
-        models: [{ slug: "default", name: "Default", isCustom: false, capabilities: null }],
-      },
-    ],
-  } as unknown as ServerConfig;
-
-  it("offers a T3 Work picker Hermes models only", () => {
-    expect(buildModelOptions(config, null, "hermes-only").map((option) => option.key)).toEqual([
-      "hermes:default",
-    ]);
-  });
-
-  it("keeps Hermes out of a Code picker", () => {
-    expect(buildModelOptions(config, null, "exclude-hermes").map((option) => option.key)).toEqual([
-      "codex:gpt-5.6-sol",
-    ]);
-  });
-
-  it("leaves surfaces that are neither with the full list", () => {
-    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
-      "codex:gpt-5.6-sol",
-      "hermes:default",
-    ]);
-  });
-});
-
 describe("model visibility preferences", () => {
   const configWith = (
     providerModelPreferences: Record<string, { hiddenModels: string[]; modelOrder: string[] }>,
@@ -244,9 +200,9 @@ describe("model visibility preferences", () => {
       settings: { providerModelPreferences },
       providers: [
         {
-          instanceId: "hermes",
-          driver: "hermes",
-          displayName: "Hermes",
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
           enabled: true,
           installed: true,
           auth: { status: "authenticated" },
@@ -260,33 +216,33 @@ describe("model visibility preferences", () => {
     }) as unknown as ServerConfig;
 
   it("hides models the user hid on another client", () => {
-    const config = configWith({ hermes: { hiddenModels: ["beta"], modelOrder: [] } });
+    const config = configWith({ codex: { hiddenModels: ["beta"], modelOrder: [] } });
     expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
-      "hermes:alpha",
-      "hermes:mine",
+      "codex:alpha",
+      "codex:mine",
     ]);
   });
 
   it("never hides a custom model", () => {
-    const config = configWith({ hermes: { hiddenModels: ["mine"], modelOrder: [] } });
-    expect(buildModelOptions(config, null).map((option) => option.key)).toContain("hermes:mine");
+    const config = configWith({ codex: { hiddenModels: ["mine"], modelOrder: [] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toContain("codex:mine");
   });
 
   it("applies the user's ordering and leaves unordered models behind it", () => {
-    const config = configWith({ hermes: { hiddenModels: [], modelOrder: ["mine", "beta"] } });
+    const config = configWith({ codex: { hiddenModels: [], modelOrder: ["mine", "beta"] } });
     expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
-      "hermes:mine",
-      "hermes:beta",
-      "hermes:alpha",
+      "codex:mine",
+      "codex:beta",
+      "codex:alpha",
     ]);
   });
 
   it("leaves preferences for a different instance alone", () => {
-    const config = configWith({ codex: { hiddenModels: ["alpha"], modelOrder: [] } });
+    const config = configWith({ claude: { hiddenModels: ["alpha"], modelOrder: [] } });
     expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
-      "hermes:alpha",
-      "hermes:beta",
-      "hermes:mine",
+      "codex:alpha",
+      "codex:beta",
+      "codex:mine",
     ]);
   });
 });

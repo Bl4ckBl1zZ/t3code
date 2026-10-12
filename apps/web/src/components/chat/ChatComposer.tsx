@@ -271,19 +271,15 @@ import { toastManager } from "../ui/toast";
 import {
   BotIcon,
   CircleAlertIcon,
-  EraserIcon,
   ListTodoIcon,
   PencilRulerIcon,
-  EllipsisIcon,
   PaperclipIcon,
-  SquarePenIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderInteractionModeToggle } from "../../providerModels";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
-  filterProviderInstanceEntriesForScope,
   NO_PROVIDER_MODEL_SELECTION,
   resolveProviderDriverKindForInstanceSelection,
   resolveProviderCatalogAvailability,
@@ -323,7 +319,6 @@ import { partitionComposerAttachments } from "./composerAttachmentValidation";
 import { ComposerAttachmentChips } from "./ComposerAttachmentChips";
 import { isAttachmentLimitReached } from "./ComposerAttachmentChips.logic";
 import { resolvePastePolicy } from "./composerAttachmentIntake.logic";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { observeResize } from "~/lib/observeResize";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
@@ -657,14 +652,6 @@ export interface ChatComposerProps {
   activeThread: Thread | undefined;
   isServerThread: boolean;
   isLocalDraftThread: boolean;
-  isProjectlessConversation: boolean;
-  /**
-   * Which side of the picker this composer is on. Hermes is the T3 Work
-   * assistant and the only thing T3 Work runs on, and it is not a coding
-   * provider — so a T3 Work picker lists Hermes and nothing else, and every
-   * other picker lists everything else.
-   */
-  hermesProviderScope: "only" | "hidden";
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
 
@@ -769,8 +756,6 @@ export interface ChatComposerProps {
    */
   sendDisabledReason?: string | null;
   onSend: (e?: { preventDefault: () => void }, options?: ComposerSubmitOptions) => void;
-  onStartFreshChat: () => void;
-  onClearChat: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
@@ -821,8 +806,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThread,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
-    isProjectlessConversation,
-    hermesProviderScope,
     forceExpandedOnMobile,
     projectSelectionRequired,
     phase,
@@ -876,8 +859,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     shouldAutoScrollRef,
     scheduleStickToBottom,
     onSend,
-    onStartFreshChat,
-    onClearChat,
     onInterrupt,
     onImplementPlanInNewThread,
     onRespondToApproval,
@@ -1016,23 +997,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Instance-aware projection of the wire provider list. One entry per
   // configured instance (default built-in + any custom `providerInstances.*`),
   // sorted default-first per driver kind for a stable picker order.
-  // The Hermes/Code split is applied here rather than in the picker so every
-  // consumer of the list agrees: the picker rows, the model options map, and
-  // the selection fallbacks that decide what a thread dispatches to. T3 Work
-  // keeps only Hermes; everywhere else drops it.
   const providerInstanceEntries = useMemo<ReadonlyArray<ProviderInstanceEntry>>(
     () =>
-      filterProviderInstanceEntriesForScope(
-        sortProviderInstanceEntries(
-          applyProviderInstanceSettings(
-            deriveProviderInstanceEntries(providerStatuses),
-            settings,
-            activeProjectId,
-          ),
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(providerStatuses),
+          settings,
+          activeProjectId,
         ),
-        hermesProviderScope,
       ),
-    [activeProjectId, hermesProviderScope, providerStatuses, settings],
+    [activeProjectId, providerStatuses, settings],
   );
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
@@ -1314,18 +1288,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const composerProviderControls = useMemo(
     () => ({
-      // Plan mode targets a project's codebase; Hermes work conversations
-      // have none, so the provider-level flag doesn't apply there.
-      showInteractionModeToggle:
-        !isProjectlessConversation &&
-        getProviderInteractionModeToggle(providerStatuses, selectedProvider),
+      showInteractionModeToggle: getProviderInteractionModeToggle(
+        providerStatuses,
+        selectedProvider,
+      ),
     }),
-    [isProjectlessConversation, providerStatuses, selectedProvider],
+    [providerStatuses, selectedProvider],
   );
   const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
   const runtimeModePicker = useMemo(
-    () => resolveRuntimeModePicker(selectedProvider, runtimeMode, supportedRuntimeModes),
-    [runtimeMode, selectedProvider, supportedRuntimeModes],
+    () => resolveRuntimeModePicker(runtimeMode, supportedRuntimeModes),
+    [runtimeMode, supportedRuntimeModes],
   );
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
@@ -4243,11 +4216,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           ? "Choose a project above to start a thread"
                           : noProviderAvailable
                             ? providerAvailabilityCopy.placeholder
-                            : isProjectlessConversation
-                              ? "Message Hermes"
-                              : phase === "disconnected"
-                                ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                            : phase === "disconnected"
+                              ? DISCONNECTED_COMPOSER_PLACEHOLDER
+                              : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={
                   isConnecting ||
@@ -4386,38 +4357,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
-                {isProjectlessConversation ? (
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label="Chat actions"
-                        />
-                      }
-                      disabled={
-                        isConnecting ||
-                        isComposerApprovalState ||
-                        pendingUserInputs.length > 0 ||
-                        projectSelectionRequired
-                      }
-                    >
-                      <EllipsisIcon />
-                    </MenuTrigger>
-                    <MenuPopup side="top" align="end" className="w-44">
-                      <MenuItem onClick={onStartFreshChat}>
-                        <SquarePenIcon />
-                        New chat
-                      </MenuItem>
-                      <MenuItem onClick={onClearChat}>
-                        <EraserIcon />
-                        Clear chat
-                      </MenuItem>
-                    </MenuPopup>
-                  </Menu>
-                ) : null}
                 <Tooltip>
                   <TooltipTrigger
                     render={

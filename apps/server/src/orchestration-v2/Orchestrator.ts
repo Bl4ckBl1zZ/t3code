@@ -125,7 +125,6 @@ import {
   isForkableSourceRunStatus,
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
-import { selectMissingTurnItems } from "./TurnItemIdentity.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedErrorClass<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -262,15 +261,6 @@ export interface OrchestratorV2Shape {
   /** Startup pass that settles delegated-task results and deliveries runs left behind. */
   readonly recoverDelegatedTasks: Effect.Effect<void>;
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
-  /**
-   * Lazily materializes a provider-owned conversation snapshot into the durable
-   * T3 projection. Snapshot entities have provider-stable ids, so retries only
-   * append entities that are not already projected.
-   */
-  readonly hydrateProviderThreadSnapshot: (input: {
-    readonly threadId: ThreadId;
-    readonly providerInstanceId: ProviderInstanceId;
-  }) => Effect.Effect<void, OrchestratorV2Error>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
@@ -1695,7 +1685,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       settledAt: null,
       unsettledAt: null,
       pinnedAt: null,
-      workInboxRole: null,
       snoozedUntil: null,
       snoozedAt: null,
       lastVisitedAt: null,
@@ -1969,21 +1958,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     if (
-      thread.workInboxRole === "main" &&
-      (command.type === "thread.settle" || command.type === "thread.snooze")
-    ) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: `Thread ${command.threadId} is the Work inbox main thread and cannot be settled or snoozed.`,
-      });
-    }
-    if (
       command.type === "thread.metadata.update" &&
       command.pinned === true &&
-      // Promotion to the Work inbox main role clears settled/snoozed state as
-      // part of the same update, so the Main thread may always be pinned.
-      command.workInboxRole !== "main" &&
       (thread.settledOverride === "settled" || thread.snoozedUntil != null)
     ) {
       return yield* new OrchestratorDispatchError({
@@ -2318,13 +2294,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(command.pinned === undefined
               ? {}
               : {
-                  pinnedAt: command.pinned || thread.workInboxRole === "main" ? now : null,
+                  pinnedAt: command.pinned ? now : null,
                   // Unpinning drops the arranged position with the pin: a later
                   // re-pin is a fresh placement, not a resurrection of the old
                   // slot (which the rest of the run has since moved past).
-                  ...(command.pinned || thread.workInboxRole === "main"
-                    ? {}
-                    : { pinOrderKey: null }),
+                  ...(command.pinned ? {} : { pinOrderKey: null }),
                 }),
             ...(command.pinOrderKey === undefined ? {} : { pinOrderKey: command.pinOrderKey }),
             ...(command.activeOrderKey === undefined
@@ -2340,21 +2314,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(command.branchPullRequest === undefined
               ? {}
               : { branchPullRequest: command.branchPullRequest }),
-            ...(command.workInboxRole === undefined
-              ? {}
-              : {
-                  workInboxRole: command.workInboxRole,
-                  ...(command.workInboxRole === "main"
-                    ? {
-                        pinnedAt: thread.pinnedAt ?? now,
-                        settledOverride: null,
-                        settledAt: null,
-                        snoozedUntil: null,
-                        snoozedAt: null,
-                      }
-                    : {}),
-                }),
-            ...(command.clearTimeline === true ? { timelineClearedAt: now } : {}),
             // Only the automatic paths read this; manual settle keeps working.
             ...(command.autoSettle === undefined
               ? {}
@@ -9788,140 +9747,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-  const hydrateProviderThreadSnapshot = (input: {
-    readonly threadId: ThreadId;
-    readonly providerInstanceId: ProviderInstanceId;
-  }) =>
-    threadDispatch.withLock(
-      input.threadId,
-      Effect.gen(function* () {
-        const threadId = input.threadId;
-        const projection = yield* projectionStore.getThreadProjection(threadId);
-        const modelSelection = projection.thread.modelSelection;
-        // Archived and deleted threads must not resurrect provider sessions.
-        if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) {
-          return;
-        }
-        if (modelSelection.instanceId !== input.providerInstanceId) {
-          return;
-        }
-        const adapter = yield* providerAdapters.get(modelSelection.instanceId);
-        const existingProviderThread = rootProviderThreadsForProvider(
-          projection,
-          modelSelection.instanceId,
-        )[0];
-        const providerSessionId =
-          existingProviderThread?.providerSessionId ??
-          (yield* providerSessionIdFor({
-            adapter,
-            providerInstanceId: modelSelection.instanceId,
-            threadId,
-          }));
-        const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
-          thread: projection.thread,
-          modelSelection,
-        });
-        const session = yield* providerSessions.open({
-          threadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-        });
-        const providerThread = yield* session.ensureThread({
-          threadId,
-          modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-          ...(existingProviderThread === undefined ? {} : { existingProviderThread }),
-        });
-        const snapshot = yield* session.readThreadSnapshot({ providerThread });
-
-        // Opening the runtime persists its provider-session attachment, so
-        // compare against a fresh projection before appending snapshot rows.
-        const current = yield* projectionStore.getThreadProjection(threadId);
-        const projectedMessageIds = new Set(current.messages.map((message) => String(message.id)));
-        const missingMessages = snapshot.messages.filter(
-          (message) => !projectedMessageIds.has(String(message.id)),
-        );
-        // A snapshot restates work T3 already streamed live, and ids cannot
-        // settle that on their own — see `selectMissingTurnItems`.
-        const missingTurnItems = selectMissingTurnItems({
-          projected: current.turnItems,
-          snapshot: snapshot.turnItems ?? [],
-        });
-        const projectedProviderThread = current.providerThreads.find(
-          (candidate) => candidate.id === snapshot.providerThread.id,
-        );
-        if (
-          projectedProviderThread !== undefined &&
-          missingMessages.length === 0 &&
-          missingTurnItems.length === 0
-        ) {
-          return;
-        }
-
-        // Hydrated snapshots carry the provider's historical message
-        // timestamps; stamping hydration time here would mark imported
-        // threads as active "now".
-        const latestSnapshotAt = [...missingMessages, ...missingTurnItems].reduce<
-          DateTime.Utc | undefined
-        >(
-          (latest, entity) =>
-            latest === undefined ? entity.updatedAt : DateTime.max(latest, entity.updatedAt),
-          undefined,
-        );
-        const occurredAt = latestSnapshotAt ?? snapshot.providerThread.updatedAt;
-        const events: Array<OrchestrationV2DomainEvent> = [];
-        if (projectedProviderThread === undefined) {
-          events.push({
-            id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
-            type: "provider-thread.updated",
-            threadId,
-            providerInstanceId: modelSelection.instanceId,
-            driver: adapter.driver,
-            occurredAt,
-            payload: snapshot.providerThread,
-          });
-        }
-        for (const message of missingMessages) {
-          events.push({
-            id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
-            type: "message.updated",
-            threadId,
-            ...(message.runId === null ? {} : { runId: message.runId }),
-            ...(message.nodeId === null ? {} : { nodeId: message.nodeId }),
-            providerInstanceId: modelSelection.instanceId,
-            driver: adapter.driver,
-            occurredAt,
-            payload: message,
-          });
-        }
-        for (const turnItem of missingTurnItems) {
-          events.push({
-            id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
-            type: "turn-item.updated",
-            threadId,
-            ...(turnItem.runId === null ? {} : { runId: turnItem.runId }),
-            ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
-            providerInstanceId: modelSelection.instanceId,
-            driver: adapter.driver,
-            occurredAt,
-            payload: turnItem,
-          });
-        }
-        if (events.length > 0) {
-          yield* eventSink.write({ events });
-        }
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorProjectionError({
-              threadId: input.threadId,
-              cause,
-            }),
-        ),
-      ),
-    );
-
   // Historical terminal events are already represented by the projections
   // below. Replaying the full event table on every server start delays live
   // queue promotion in proportion to the lifetime size of the database.
@@ -10062,7 +9887,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   return OrchestratorV2.of({
     resumeQueuedRuns,
     recoverDelegatedTasks,
-    hydrateProviderThreadSnapshot,
     dispatch: dispatchWithReceipt,
     getMessageCount: (threadId) =>
       projectionStore
@@ -10189,13 +10013,6 @@ export const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
         cause: "Orchestration V2 live runtime is not configured.",
       }),
     ),
-    hydrateProviderThreadSnapshot: (input) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId: input.threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
     dispatch: (command) =>
       Effect.fail(
         new OrchestratorDispatchError({

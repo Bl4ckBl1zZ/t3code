@@ -8,7 +8,7 @@
  * paths named in older turns stay valid.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ChatAttachment, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import type { ChatAttachment, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -35,7 +35,6 @@ const TestLayer = Layer.empty.pipe(
 );
 
 const THREAD_ID = "thread:project-abc:01J8Z9QK3M4N5P6R7S8T9V0W1X" as ThreadId;
-const CLAUDE = "claudeAgent" as ProviderDriverKind;
 
 const PDF: ChatAttachment = {
   type: "pdf",
@@ -91,7 +90,6 @@ it.layer(TestLayer, { excludeTestServices: true })("uploads are invisible to git
 
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -109,7 +107,6 @@ it.layer(TestLayer, { excludeTestServices: true })("uploads are invisible to git
         yield* seedBlob(PDF, "HELLO");
         yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -130,7 +127,6 @@ it.layer(TestLayer, { excludeTestServices: true })("uploads are invisible to git
         yield* seedBlob(PDF, "HELLO");
         const result = yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
@@ -156,13 +152,11 @@ it.layer(TestLayer, { excludeTestServices: true })("uploads are invisible to git
 
         yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });
         yield* service.materialize({
           threadId: THREAD_ID,
-          driver: CLAUDE,
           cwd,
           attachments: [PDF],
         });

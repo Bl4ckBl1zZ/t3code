@@ -59,8 +59,7 @@ import { getProviderSummary } from "../settings/providerStatus";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { presentSavedCloudEnvironmentConnection } from "../cloud/cloudEnvironmentConnectionPresentation";
-import { HermesSetup } from "../HermesSetup";
-import { ClaudeAI, HermesIcon, OpenAI } from "../Icons";
+import { ClaudeAI, OpenAI } from "../Icons";
 import { T3Wordmark } from "../T3Wordmark";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -692,27 +691,6 @@ function ConnectedAgentsStep({
             }}
           />
         ))}
-      </div>
-      <div className="mt-3 rounded-lg border border-border bg-background px-3 py-3">
-        <div className="mb-3 flex items-center gap-3">
-          <HermesIcon className="size-5 shrink-0" />
-          <div>
-            <h3 className="text-sm font-medium">Hermes for T3 Work</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Assistants, scheduled tasks, and ongoing work.
-            </p>
-          </div>
-        </div>
-        <HermesSetup
-          key={`${environmentId}:${byDriver.get("hermes")?.instanceId ?? "hermes"}`}
-          environmentId={environmentId}
-          environmentLabel={machineLabel}
-          providerInstanceId={byDriver.get("hermes")?.instanceId ?? "hermes"}
-          compact
-          onConnected={() => {
-            void refreshProviders({ environmentId, input: {} });
-          }}
-        />
       </div>
       {serverConfig !== null &&
       serverConfig.environment.capabilities.providerTerminalEnvironment !== true ? (

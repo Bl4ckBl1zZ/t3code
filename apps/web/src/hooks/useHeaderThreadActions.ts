@@ -141,18 +141,10 @@ export function useHeaderThreadActions(input: {
         if (!thread) return;
         const now = new Date();
         const supports = {
-          settlement:
-            thread.workInboxRole !== "main" &&
-            readEnvironmentSupportsSettlement(threadRef.environmentId),
-          autoSettleOptOut:
-            thread.workInboxRole !== "main" &&
-            readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
-          snooze:
-            thread.workInboxRole !== "main" &&
-            readEnvironmentSupportsSnooze(threadRef.environmentId),
-          pinning:
-            thread.workInboxRole !== "main" &&
-            readEnvironmentSupportsPinning(threadRef.environmentId),
+          settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
+          autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
+          snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
+          pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
         };
         const snapshot = appAtomRegistry

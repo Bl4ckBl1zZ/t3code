@@ -1,4 +1,3 @@
-import { HermesSetup } from "../HermesSetup";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { SettingsRow } from "./settingsLayout";
@@ -443,8 +442,6 @@ interface ProviderInstanceCardProps {
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
   readonly liveProvider: ServerProvider | undefined;
-  /** Effective enabled state after any driver-wide rollout gate is applied. */
-  readonly effectiveEnabled?: boolean | undefined;
   readonly supportsCustomModelDefinitions?: boolean;
   readonly mode?: "list" | "editor";
   readonly selected?: boolean;
@@ -508,7 +505,6 @@ export function ProviderInstanceCard({
   instance,
   driverOption,
   liveProvider,
-  effectiveEnabled,
   isExpanded,
   onExpandedChange,
   mode,
@@ -529,8 +525,7 @@ export function ProviderInstanceCard({
   onInstallRecommended,
   isUpdating = false,
 }: ProviderInstanceCardProps) {
-  const [showAdvancedHermes, setShowAdvancedHermes] = useState(false);
-  const enabled = effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
+  const enabled = resolveProviderInstanceEnabled(instance);
   // The server-reported status wins when present; otherwise fall back to
   // "disabled"/"warning" based on the local `enabled` flag so the dot
   // reflects the persisted intent even before the first probe completes.
@@ -850,22 +845,12 @@ export function ProviderInstanceCard({
             ) : null}
           </span>
         </button>
-        {driverKind === "hermes" && environmentId && !enabled ? (
-          <HermesSetup
-            key={`${environmentId}:${instanceId}`}
-            environmentId={environmentId}
-            providerInstanceId={instanceId}
-            compact
-            readOnly={readOnly}
-          />
-        ) : (
-          <Switch
-            checked={enabled}
-            disabled={readOnly}
-            onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-            aria-label={`Enable ${displayName}`}
-          />
-        )}
+        <Switch
+          checked={enabled}
+          disabled={readOnly}
+          onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+          aria-label={`Enable ${displayName}`}
+        />
       </div>
     );
   }
@@ -1016,49 +1001,16 @@ export function ProviderInstanceCard({
                 />
               </Button>
             ) : null}
-            {driverKind === "hermes" && environmentId && !enabled ? null : (
-              <Switch
-                checked={enabled}
-                onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-                aria-label={`Enable ${displayName}`}
-              />
-            )}
+            <Switch
+              checked={enabled}
+              onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+              aria-label={`Enable ${displayName}`}
+            />
           </div>
         </div>
       </div>
 
-      {driverKind === "hermes" && environmentId ? (
-        <div className="grid gap-3 px-3 pb-4 sm:px-4">
-          <HermesSetup
-            key={`${environmentId}:${instanceId}`}
-            environmentId={environmentId}
-            environmentLabel={environmentLabel}
-            providerInstanceId={instanceId}
-            readOnly={readOnly}
-          />
-          <Button
-            size="xs"
-            variant="ghost"
-            className="w-fit"
-            aria-expanded={showAdvancedHermes}
-            onClick={() => setShowAdvancedHermes((value) => !value)}
-          >
-            Advanced Hermes settings
-          </Button>
-        </div>
-      ) : null}
-      <Collapsible
-        open={
-          driverKind === "hermes" && environmentId !== undefined
-            ? showAdvancedHermes
-            : mode === "editor" || isExpanded
-        }
-        onOpenChange={
-          driverKind === "hermes" && environmentId !== undefined
-            ? setShowAdvancedHermes
-            : onExpandedChange
-        }
-      >
+      <Collapsible open={mode === "editor" || isExpanded} onOpenChange={onExpandedChange}>
         <CollapsibleContent>
           <div className="space-y-5 px-3 pb-4 pt-2 sm:px-4">
             <div>

@@ -145,7 +145,7 @@ the bar at the bottom. Each action is available when it applies to at least one 
 Delete asks for confirmation; unpin follows your confirmation preference.
 Successful rows leave the selection. Failed rows stay selected so you can retry. Deleting thread
 history does not remove worktree files from the environment. Threads that cannot be snoozed,
-such as queued threads or Work's Main thread, stay selected when you snooze a selection.
+such as queued threads, stay selected when you snooze a selection.
 
 On iOS, **Snooze → Custom…** in a thread's menu or in the selection bar opens a sheet for a
 date and time in your device's time zone, or a duration in minutes, hours or days. Durations
@@ -160,14 +160,13 @@ with **Undo** for five seconds. Several of the same action in a row, such as a b
 together. Undo restores the thread's previous state, including its pinned position. Shaking the
 device, or pressing ⌘Z on an iPad keyboard, triggers the same Undo.
 
-Tap the magnifying glass on Home to search. Choose **Code**, **Work** or **Chat** under the search
-field to change what you search; it starts on the tab you are in. Home search also matches message
+Tap the magnifying glass on Home to search. Home search also matches message
 content on connected environments. Title, project and pull request matches come first; message
 matches follow in a **Messages** section with the matching line under the row.
 
 ## Arrange active threads on native iOS
 
-On supporting environments, choose **⋯ → Arrange Threads** on the Code or Work tab. Drag
+On supporting environments, choose **⋯ → Arrange Threads** on Home. Drag
 the handles, or use VoiceOver's **Move up** and **Move down** actions. The order is saved to the
 environment, so other connected devices see it too. Project filters leave other threads alone.
 New and reopened threads appear above arranged threads. **Reset to Newest First** removes the
@@ -184,7 +183,7 @@ The chat header also offers thread actions from its title menu. Double-click the
 Drag an active thread within its section to choose its position. On current servers, the order
 is saved to the environment and shared with native iOS. New and reopened threads appear above
 arranged active threads. Choose **Reset thread position** from a thread’s menu to return it to
-automatic ordering. Pinned threads have their own order, and Work’s main thread stays fixed.
+automatic ordering. Pinned threads have their own order.
 
 Older servers keep local-only drag ordering. If a section mixes older servers with threads that
 already have synced positions, update those servers before reordering the section.
@@ -194,7 +193,7 @@ already have synced positions, update those servers before reordering the sectio
 Turn on **Settings → General → Working section (beta)** to move active threads that are working,
 or waiting on subagents or monitors, into a collapsed **Working** section below the active
 list. A thread returns to the top of the active list when it finishes, fails, or needs an approval,
-an answer, or a decision on a plan. Pinned threads and Work's main thread stay where they are, and
+an answer, or a decision on a plan. Pinned threads stay where they are, and
 snoozed and settled threads keep their own sections. The Working section lists the thread you last
 sent work to first; agents finishing or picking work back up do not reorder it. The thread you have
 open stays visible even while the section is collapsed.
@@ -204,8 +203,7 @@ cannot drag them and **Reset thread position** is hidden. Pinned threads can sti
 saved order returns when you turn the setting off.
 
 On iPhone and iPad, turn on **Settings → Chat → Working Section** (under Beta). It works the same
-way on Home's Code and Work lists, applies to that device only, and hides **Arrange Threads** while
-it is on. Chat lists keep busy conversations in place.
+way on Home's lists, applies to that device only, and hides **Arrange Threads** while it is on.
 
 ## Drop files onto a native thread
 

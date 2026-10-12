@@ -23,7 +23,7 @@ struct ThreadHeaderSubtitle: Equatable {
     }
 
     let status: Status?
-    /// Branch (or "Chat") and environment, in that order.
+    /// Branch and environment, in that order.
     let details: [String]
 
     var isEmpty: Bool { status == nil && details.isEmpty }
@@ -49,9 +49,7 @@ struct ThreadHeaderSubtitle: Equatable {
         now: Date
     ) -> ThreadHeaderSubtitle {
         var details: [String] = []
-        if thread.workInboxRole == "chat" {
-            details.append("Chat")
-        } else if let branch = branchLabel(thread) {
+        if let branch = branchLabel(thread) {
             details.append(branch)
         }
         if let environmentName, !environmentName.isEmpty {

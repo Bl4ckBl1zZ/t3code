@@ -4,14 +4,13 @@ import Testing
 
 struct SharedServerSettingsTests {
     @Test func settingsRefreshPreservesTheEnvironmentEnvelope() throws {
-        var config = ServerConfigSnapshot(providers: [], t3WorkDirectory: "/work", threadSnapshotWindow: true)
+        var config = ServerConfigSnapshot(providers: [], threadSnapshotWindow: true)
         config.cwd = "/project"
         config.environment = try JSONDecoder().decode(EnvironmentDescriptor.self, from: Data(#"{"environmentId":"machine","label":"Machine","serverVersion":"1","platform":{"os":"darwin","arch":"arm64"},"capabilities":{"repositoryIdentity":true,"threadRestartContinuation":true}}"#.utf8))
         let refreshed = config.replacingSettings(.init(continueThreadsAfterServerUpdate: true))
         #expect(refreshed.environment == config.environment)
         #expect(refreshed.environment?.capabilities.threadRestartContinuation == true)
         #expect(refreshed.cwd == "/project")
-        #expect(refreshed.t3WorkDirectory == "/work")
         #expect(refreshed.threadSnapshotWindow == true)
         #expect(refreshed.settings?.continueThreadsAfterServerUpdate == true)
     }

@@ -43,7 +43,7 @@ The \`t3-code\` MCP server provides app-owned orchestration. Treat these concept
 - A delegated task/subagent is child work owned by the current thread. When the user asks for an agent, subagent, worker, delegation, or parallel help, use \`delegate_task\` once per child task. This remains true when targeting a different provider. Use \`orchestrator_capabilities\` to discover the current provider/model IDs from the same live catalog as the composer, including configured custom models; do not treat a native tool's model list as the full list of available subagent models. Retain each returned \`taskId\`, and use \`task_status\` or \`task_cancel\` to manage it. The returned \`childThreadId\` is backing storage for the subagent; do not replace delegation with ordinary thread creation.
 - For every T3 delegated review round, call \`delegate_task\` again. Include the original brief, prior findings, responses, and unresolved objections in each new task prompt. Track each round by its own \`taskId\`. Use a distinct \`clientRequestId\` per round, stable across retries of that round. Do not use \`t3_thread_send\` on \`childThreadId\` to continue a delegated review.
 - \`create_threads\` and \`t3_thread_launch\` create ordinary top-level T3 conversations. Use them only when the user explicitly asks for separate/new/top-level threads or conversations. Never use them merely because the user said "subagent" or requested parallel delegated work. \`create_threads\` makes a batch that shares this thread's checkout; \`t3_thread_launch\` makes one thread with its own workspace binding, which is what independent work or a PR stack needs. Do not ask the new agent to create its own worktree in its prompt: that leaves the thread bound elsewhere.
-- \`schedule_task\` creates persistent recurring work in the app scheduler. Pass \`schedule\` as a structured object, never as JSON text: \`{"type":"interval","everyMs":3600000}\` for an interval, \`{"type":"fixed_time","timeOfDay":"09:00","weekdays":[1,2,3,4,5]}\` for a wall-clock schedule, or \`{"type":"webhook"}\` to run per request to the returned \`webhookUrl\` (prompt placeholders like \`{{body.path}}\` are all the run sees). By default runs return to the current thread; set \`bindToCurrentThread=false\` only when the user wants a fresh thread for every run. After scheduling, report the returned cadence and next run time (for a webhook, its \`webhookUrl\`). Use this tool for requests such as "do this every hour" in T3, including Hermes threads. Provider-native cron jobs run outside this conversation and do not deliver messages back here; use those only when the user explicitly requests an independent native job.
+- \`schedule_task\` creates persistent recurring work in the app scheduler. Pass \`schedule\` as a structured object, never as JSON text: \`{"type":"interval","everyMs":3600000}\` for an interval, \`{"type":"fixed_time","timeOfDay":"09:00","weekdays":[1,2,3,4,5]}\` for a wall-clock schedule, or \`{"type":"webhook"}\` to run per request to the returned \`webhookUrl\` (prompt placeholders like \`{{body.path}}\` are all the run sees). By default runs return to the current thread; set \`bindToCurrentThread=false\` only when the user wants a fresh thread for every run. After scheduling, report the returned cadence and next run time (for a webhook, its \`webhookUrl\`). Use this tool for requests such as "do this every hour" in T3. Provider-native cron jobs run outside this conversation and do not deliver messages back here; use those only when the user explicitly requests an independent native job.
 - For a secret from the user, call \`request_secret\` (they enter it privately) and pass the returned one-use \`secretRef\` to the tool that needs it, e.g. a webhook's \`signature.secretRef\`. Never ask for secrets in chat.
 
 Tool names may include an MCP prefix (for example \`mcp__t3-code__delegate_task\`); the semantics are the same. Keep polling/wait loops bounded, do not duplicate active work, and use stable \`clientRequestId\` values when retrying mutations.
@@ -74,25 +74,4 @@ export function t3OrchestrationPromptForFirstRun(input: {
 
 export function t3OrchestrationSystemPrompt(hasT3Mcp: boolean): string | undefined {
   return hasT3Mcp ? T3_CODE_ORCHESTRATION_INSTRUCTIONS : undefined;
-}
-
-/** Hermes needs presentation guidance even without MCP and after importing older conversations. */
-export function t3OrchestrationPromptForHermesTurn(input: {
-  readonly prompt: string;
-  readonly runOrdinal: number;
-  readonly hasT3Mcp: boolean;
-}): string {
-  if (input.hasT3Mcp && input.runOrdinal === 1) {
-    return prependT3OrchestrationInstructions(input.prompt);
-  }
-  const instructions = [
-    T3_CHAT_PRESENTATION_INSTRUCTIONS.trim(),
-    input.runOrdinal === 1 ? T3_HTML_EMBED_INSTRUCTIONS.trim() : "",
-    input.hasT3Mcp
-      ? "For recurring work in this T3 conversation, use the t3-code MCP schedule_task tool with bindToCurrentThread=true. Native Hermes cron runs separately and does not deliver messages into this thread; use it only when explicitly requested. Report the tool's returned schedule and next run time before claiming scheduling succeeded."
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  return `<t3_chat_instructions>${instructions}</t3_chat_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }

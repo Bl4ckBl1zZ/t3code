@@ -61,7 +61,7 @@ extension ServerSettingsSnapshot {
     /// `defaultEnabledForDriver` in `packages/contracts`: the decoding default of
     /// each built-in driver's `enabled`. Unknown (fork) drivers default to on.
     static func defaultEnabledForDriver(_ driver: String) -> Bool {
-        !["cursor", "grok", "hermes", "antigravity", "muse", "pi", "opencode"].contains(driver)
+        !["cursor", "grok", "antigravity", "muse", "pi", "opencode"].contains(driver)
     }
 }
 

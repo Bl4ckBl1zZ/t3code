@@ -242,7 +242,6 @@ public enum ProviderUpdateRequiredNotice {
         "openclaw": "OpenClaw",
         "pi": "Pi",
         "opencode": "OpenCode",
-        "hermes": "Hermes",
     ]
 
     /// "Update Claude Code to v2.1.300 or newer to use Claude Opus 6." With a
@@ -531,7 +530,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let continueThreadsAfterServerUpdate: Bool
     public let sidebarAutoSettleOnMerge: Bool
     /// Keyed by provider instance id (the default instance for a driver uses
-    /// the driver kind, so `"hermes"`, `"codex"`, `"claudeAgent"`, …). Empty
+    /// the driver kind, so `"codex"`, `"claudeAgent"`, …). Empty
     /// against a server that predates the setting being server-authoritative.
     public let providerModelPreferences: [String: ProviderModelPreferencesSnapshot]
     /// Model favorites shared by every client of this environment
@@ -809,7 +808,6 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var environmentIcon: String??
     public var usageLimitSources: [String: UsageLimitSourceConfig?]?
     public var usagePriceOverrides: [String: UsageModelPriceOverride?]?
-    public var enableHermes: Bool?
     public var enableAgentBrowserAccess: Bool?
     /// Claude's auto-compaction threshold, as the string the server validates:
     /// an integer from 100000 to 1000000, or empty to fall back to Claude's own
@@ -904,7 +902,6 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
             fields["projectPullRequestMergeMethodOverrides"] = .object(projectPullRequestMergeMethodOverrides.mapValues { $0.map(JSONValue.string) ?? .null })
         }
         if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
-        if let enableHermes { fields["enableHermes"] = .bool(enableHermes) }
         if let enableAgentBrowserAccess {
             fields["enableAgentBrowserAccess"] = .bool(enableAgentBrowserAccess)
         }
@@ -957,11 +954,6 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public var cwd: String? = nil
     public let providers: [ServerProviderSnapshot]
     public var settings: ServerSettingsSnapshot?
-    /// The server's dedicated non-project workspace for projectless T3 Work
-    /// conversations. Matching it against a project's `workspaceRoot` is what
-    /// stops a Work launch attaching to an arbitrary project, so its absence
-    /// has to be distinguishable from an empty path.
-    public let t3WorkDirectory: String?
     /// Whether thread subscriptions honour `snapshotMaxVisibleItems` windowing.
     /// This fork's replacement for upstream's keyset `threadSnapshotPagination`.
     public let threadSnapshotWindow: Bool?
@@ -987,14 +979,12 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public init(
         providers: [ServerProviderSnapshot],
         settings: ServerSettingsSnapshot? = nil,
-        t3WorkDirectory: String? = nil,
         threadSnapshotWindow: Bool? = nil,
         threadResumeCompletionMarker: Bool? = nil,
         shellResumeCompletionMarker: Bool? = nil
     ) {
         self.providers = providers
         self.settings = settings
-        self.t3WorkDirectory = t3WorkDirectory
         self.threadSnapshotWindow = threadSnapshotWindow
         self.threadResumeCompletionMarker = threadResumeCompletionMarker
         self.shellResumeCompletionMarker = shellResumeCompletionMarker
@@ -1007,7 +997,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case providers, settings, t3WorkDirectory, cwd, environment
+        case providers, settings, cwd, environment
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
         case threadFind, threadFindProgressive
         case scratchWorkspaceRoot
@@ -1024,7 +1014,6 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             forKey: .providers
         ).compactMap(\.value)
         settings = try container.decodeIfPresent(ServerSettingsSnapshot.self, forKey: .settings)
-        t3WorkDirectory = try container.decodeIfPresent(String.self, forKey: .t3WorkDirectory)
         threadSnapshotWindow = try container.decodeIfPresent(
             Bool.self,
             forKey: .threadSnapshotWindow
@@ -1055,7 +1044,6 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         try container.encodeIfPresent(environment, forKey: .environment)
         try container.encode(providers, forKey: .providers)
         try container.encodeIfPresent(settings, forKey: .settings)
-        try container.encodeIfPresent(t3WorkDirectory, forKey: .t3WorkDirectory)
         try container.encodeIfPresent(threadSnapshotWindow, forKey: .threadSnapshotWindow)
         try container.encodeIfPresent(
             threadResumeCompletionMarker,

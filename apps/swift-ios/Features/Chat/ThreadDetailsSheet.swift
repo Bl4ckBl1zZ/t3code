@@ -84,19 +84,11 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     var onToggleArchive: (() -> Void)?
     var onRename: ((String) -> Void)?
     var onDelete: (() -> Void)?
-    /// Chat conversations subtract the workbench: no workspace tools, ports,
-    /// version control or automations — the environment row, background tasks,
-    /// lineage and thread actions remain.
-    var isChatConversation = false
-    var isHermesConversation = false
-    var activeProviderSessionID: String?
     /// Draws a workspace tool pushed from here.
     @ViewBuilder let toolView: (ThreadDetailsWorkspaceTool) -> ToolView
 
     @State private var path: [ThreadDetailsDestination] = []
     @State private var detent: PresentationDetent = .medium
-    @State private var workDetailsReloadID = 0
-    @State private var hermes: HermesThreadDetailsModel?
 
     @State private var sourceControl: FeatureSourceControlStatus?
     @State private var sourceControlError: String?
@@ -170,14 +162,11 @@ struct ThreadDetailsSheet<ToolView: View>: View {
             headerSection
             connectionBanner
             workspaceSection
-            if let hermes { HermesThreadDetailsSections(model: hermes) }
-            if !isHermesConversation { actionsSection }
-            if !isChatConversation { portsSection }
+            actionsSection
+            portsSection
             backgroundTasksSection
-            if !isChatConversation && !isHermesConversation {
-                versionControlSection
-                automationsSection
-            }
+            versionControlSection
+            automationsSection
             lineageSection
             threadActionsSection
             deleteSection
@@ -185,42 +174,21 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         .t3SheetList()
         .environment(\.defaultMinListRowHeight, T3Metrics.minimumTapTarget)
         .refreshable {
-            if let hermes {
-                hermes.retry()
-            } else {
-                await loadSourceControl()
-                await loadAutomations()
-            }
+            await loadSourceControl()
+            await loadAutomations()
         }
         .task { await loadSourceControl() }
         .task { await loadAutomations() }
         .task(id: thread.id) {
-            guard !scripts.isEmpty, !isHermesConversation else { return }
+            guard !scripts.isEmpty else { return }
             terminalIsReadOnly = await client.terminalIsReadOnly(threadID: thread.id)
             for await sessions in client.terminalSessions(threadID: thread.id) {
                 liveScriptIDs = Set(sessions.filter { $0.hasRunningSubprocess }.compactMap(\.activeScriptID))
             }
         }
         .task(id: relationships?.rows ?? []) { await trackLineageDecay() }
-        .onAppear(perform: makeHermesModelIfNeeded)
-        .task(id: "\(hermes == nil):\(workDetailsReloadID):\(hermes?.changeRevision ?? 0)") {
-            guard let hermes else { return }
-            await hermes.load(afterChange: hermes.changeRevision > 0)
-        }
-        .task(id: "\(hermes?.details?.providerInstanceId ?? ""):\(workDetailsReloadID):\(hermes?.updatesRetry ?? 0)") {
-            await hermes?.observeChanges()
-        }
-        .onChange(of: thread.updatedAt) { _, _ in
-            if isHermesConversation, thread.state != .working, thread.state != .queued { workDetailsReloadID += 1 }
-        }
-        .onChange(of: activeProviderSessionID) { _, _ in
-            if isHermesConversation { workDetailsReloadID += 1 }
-        }
         .onChange(of: thread.allLinkedPullRequests) { _, links in
             pullRequestOverlays = LinkedPullRequestOverlays.reconcile(pullRequestOverlays, threadID: thread.id, links: links)
-        }
-        .onChange(of: thread.state) { _, _ in
-            if isHermesConversation { workDetailsReloadID += 1 }
         }
         .alert(
             failure?.title ?? "",
@@ -280,7 +248,6 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         return gitStatus.map { ($0.insertions, $0.deletions) }
     }
 
-    /// Code uses its T3 checkout; Hermes reports its native workspace separately.
     private var workspacePath: String? {
         thread.worktreePath ?? project?.path
     }
@@ -382,7 +349,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
             }
             .accessibilityHint("Opens connection management")
 
-            if let workspacePath, !isChatConversation, !isHermesConversation {
+            if let workspacePath {
                 NavigationLink(value: ThreadDetailsDestination.tool(.sourceControl)) {
                     ThreadSheetRowLabel(
                         title: ThreadDetailsWorkspace.label(
@@ -421,7 +388,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     /// One tap runs, with no confirmation, matching the desktop.
     @ViewBuilder
     private var actionsSection: some View {
-        if !isChatConversation, !scripts.isEmpty {
+        if !scripts.isEmpty {
             Section {
                 ForEach(scripts) { script in
                     scriptRow(script)
@@ -889,8 +856,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     }
 
     private func loadAutomations() async {
-        guard !isChatConversation, !isHermesConversation,
-              let manager = client as? any FeatureScheduledTaskManaging,
+        guard let manager = client as? any FeatureScheduledTaskManaging,
               let environmentID = environment?.id ?? thread.environmentID else { return }
         do {
             automations = try await manager.loadScheduledTasks(environmentID: environmentID)
@@ -1317,19 +1283,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
 
     // MARK: - Loading and git actions
 
-    private func makeHermesModelIfNeeded() {
-        guard hermes == nil, isHermesConversation,
-              let manager = client as? any FeatureWorkManaging,
-              let environmentID = environment?.id ?? thread.environmentID else { return }
-        hermes = HermesThreadDetailsModel(
-            manager: manager,
-            environmentID: environmentID,
-            threadID: thread.wireID ?? thread.id
-        )
-    }
-
     private func loadSourceControl() async {
-        guard !isHermesConversation, !isChatConversation else { isLoadingStatus = false; return }
         isLoadingStatus = true
         defer { isLoadingStatus = false }
         do {

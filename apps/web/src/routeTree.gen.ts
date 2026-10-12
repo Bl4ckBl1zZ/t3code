@@ -24,8 +24,6 @@ import { Route as SettingsProvidersRouteImport } from './routes/settings.provide
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
-import { Route as SettingsHermesSkillsRouteImport } from './routes/settings.hermes-skills'
-import { Route as SettingsHermesCronRouteImport } from './routes/settings.hermes-cron'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
@@ -112,16 +110,6 @@ const SettingsIntegrationsRoute = SettingsIntegrationsRouteImport.update({
   path: '/integrations',
   getParentRoute: () => SettingsRoute,
 } as any)
-const SettingsHermesSkillsRoute = SettingsHermesSkillsRouteImport.update({
-  id: '/hermes-skills',
-  path: '/hermes-skills',
-  getParentRoute: () => SettingsRoute,
-} as any)
-const SettingsHermesCronRoute = SettingsHermesCronRouteImport.update({
-  id: '/hermes-cron',
-  path: '/hermes-cron',
-  getParentRoute: () => SettingsRoute,
-} as any)
 const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   id: '/general',
   path: '/general',
@@ -196,8 +184,6 @@ export interface FileRoutesByFullPath {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
-  '/settings/hermes-cron': typeof SettingsHermesCronRoute
-  '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -224,8 +210,6 @@ export interface FileRoutesByTo {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
-  '/settings/hermes-cron': typeof SettingsHermesCronRoute
-  '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -255,8 +239,6 @@ export interface FileRoutesById {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
-  '/settings/hermes-cron': typeof SettingsHermesCronRoute
-  '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -287,8 +269,6 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/general'
-    | '/settings/hermes-cron'
-    | '/settings/hermes-skills'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/projects'
@@ -315,8 +295,6 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/general'
-    | '/settings/hermes-cron'
-    | '/settings/hermes-skills'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/projects'
@@ -345,8 +323,6 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/general'
-    | '/settings/hermes-cron'
-    | '/settings/hermes-skills'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/projects'
@@ -479,20 +455,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIntegrationsRouteImport
       parentRoute: typeof SettingsRoute
     }
-    '/settings/hermes-skills': {
-      id: '/settings/hermes-skills'
-      path: '/hermes-skills'
-      fullPath: '/settings/hermes-skills'
-      preLoaderRoute: typeof SettingsHermesSkillsRouteImport
-      parentRoute: typeof SettingsRoute
-    }
-    '/settings/hermes-cron': {
-      id: '/settings/hermes-cron'
-      path: '/hermes-cron'
-      fullPath: '/settings/hermes-cron'
-      preLoaderRoute: typeof SettingsHermesCronRouteImport
-      parentRoute: typeof SettingsRoute
-    }
     '/settings/general': {
       id: '/settings/general'
       path: '/general'
@@ -595,8 +557,6 @@ interface SettingsRouteChildren {
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
-  SettingsHermesCronRoute: typeof SettingsHermesCronRoute
-  SettingsHermesSkillsRoute: typeof SettingsHermesSkillsRoute
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
@@ -613,8 +573,6 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
-  SettingsHermesCronRoute: SettingsHermesCronRoute,
-  SettingsHermesSkillsRoute: SettingsHermesSkillsRoute,
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,

@@ -117,11 +117,7 @@ export function isNonRetryableProviderTurnStartPrerequisiteFailure(
   return (
     (effectType === "provider-turn.start" || effectType === "provider-turn.restart") &&
     (/CheckpointBaselineCaptureError/iu.test(errorText) ||
-      /Failed to capture checkpoint baseline/iu.test(errorText) ||
-      // The gateway has answered that it no longer stores the session behind
-      // this thread. Asking again four more times reaches the same answer and
-      // only delays the failure the user has to see.
-      /HermesImportedSessionUnavailableError/u.test(errorText))
+      /Failed to capture checkpoint baseline/iu.test(errorText))
   );
 }
 

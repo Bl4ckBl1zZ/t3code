@@ -12,7 +12,6 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { HERMES_DRIVER_KIND } from "../../t3WorkProject";
 
 export type ProjectProviderChoice = "inherit" | "on" | "off";
 
@@ -37,10 +36,7 @@ export interface ProjectProviderTarget {
 const merge = <A>(current: A | "mixed" | undefined, next: A): A | "mixed" =>
   current === undefined || current === next ? next : "mixed";
 
-/**
- * One row per provider instance across a project's checkouts. Hermes stays
- * out: its rollout gate is machine-wide, so a project cannot turn it on.
- */
+/** One row per provider instance across a project's checkouts. */
 export function deriveProjectProviderRows(
   targets: ReadonlyArray<ProjectProviderTarget>,
 ): ReadonlyArray<ProjectProviderRow> {
@@ -54,7 +50,6 @@ export function deriveProjectProviderRows(
       ),
     );
     for (const entry of entries) {
-      if (entry.driverKind === HERMES_DRIVER_KIND) continue;
       let row = rows.get(entry.instanceId);
       for (const projectId of target.projectIds) {
         const override = projectProviderInstanceOverride(

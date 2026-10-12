@@ -218,40 +218,6 @@ export function resolveThreadListV2Status(
   return "ready";
 }
 
-/**
- * The lozenge a T3 Work row leads with, in place of the project name a Code
- * card carries there.
- *
- * Work is an inbox: every row is the same assistant on the same backing
- * checkout, so naming that is a constant and what differs between rows is
- * state. Approval and input collapse into one "Needs you" because the useful
- * distinction is that it is blocked on you at all — what it wants is the line
- * underneath. `null` for a resting thread, which leaves the row as title + age
- * rather than badging "Ready" on everything idle.
- */
-export type WorkInboxBadge = "needs-you" | "working" | "failed" | "limited" | "done";
-
-export function resolveWorkInboxBadge(input: {
-  readonly status: ThreadListV2Status;
-  readonly hasUnseenCompletion: boolean;
-}): WorkInboxBadge | null {
-  switch (input.status) {
-    case "approval":
-    case "input":
-      return "needs-you";
-    case "working":
-    // Background work reads as working in the inbox: the row is not yours yet.
-    case "background":
-      return "working";
-    case "failed":
-      return "failed";
-    case "limited":
-      return "limited";
-    case "ready":
-      return input.hasUnseenCompletion ? "done" : null;
-  }
-}
-
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
 function parseTimestampMs(isoDate: string): number {

@@ -215,7 +215,6 @@ struct SettingsUsageLimitsView: View {
         case "opencode": "OpenCode"
         case "grok": "Grok"
         case "antigravity": "Antigravity"
-        case "hermes": "Hermes"
         case "pi": "Pi"
         case "muse": "Muse Code"
         default: driver.prefix(1).uppercased() + driver.dropFirst()

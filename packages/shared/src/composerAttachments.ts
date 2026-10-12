@@ -3,7 +3,7 @@
  *
  * Web, desktop, and mobile all let a user attach files to a turn, and each used
  * to carry its own copy of the rules. They drifted: web refused non-image files
- * unless the provider was Hermes, mobile did not, so a mobile user on Claude
+ * unless the provider accepted them, mobile did not, so a mobile user on Claude
  * could attach a PDF that failed server-side at turn time.
  *
  * Uploads are now written into the workspace and handed to the agent as a path,

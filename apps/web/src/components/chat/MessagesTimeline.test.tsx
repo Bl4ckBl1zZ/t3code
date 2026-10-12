@@ -517,7 +517,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("rounded-2xl bg-accent");
   });
 
-  it("renders imported Hermes replies as a compact reference and separate message", () => {
+  it("renders imported replies as a compact reference and separate message", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -543,7 +543,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Show full message");
   });
 
-  it("renders a normalized imported Hermes screenshot as an attachment without transport text", () => {
+  it("renders a normalized imported screenshot as an attachment without transport text", () => {
     const entry = buildUserTimelineEntry("rewrite better");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -556,11 +556,11 @@ describe("MessagesTimeline", () => {
               attachments: [
                 {
                   type: "image",
-                  id: "hermes-screenshot-1",
+                  id: "screenshot-1",
                   name: "img_fixture.webp",
                   mimeType: "image/webp",
                   sizeBytes: 12,
-                  previewUrl: "/assets/hermes-screenshot",
+                  previewUrl: "/assets/screenshot",
                 },
               ],
             },
@@ -570,73 +570,11 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("rewrite better");
-    expect(markup).toContain('src="/assets/hermes-screenshot"');
+    expect(markup).toContain('src="/assets/screenshot"');
     expect(markup).toContain('alt="img_fixture.webp"');
     expect(markup).not.toContain("[maria]");
     expect(markup).not.toContain("[Image attached at:");
     expect(markup).not.toContain("[screenshot]");
-    expect(markup).not.toContain("/Users/maria/.hermes");
-  });
-
-  it("renders Hermes assistant output media as a named, downloadable gallery", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[
-          {
-            id: "entry-assistant-media",
-            kind: "message",
-            createdAt: MESSAGE_CREATED_AT,
-            message: {
-              id: MessageId.make("message-assistant-media"),
-              role: "assistant",
-              text: "Here are the renditions.",
-              runId: null,
-              createdAt: MESSAGE_CREATED_AT,
-              updatedAt: MESSAGE_CREATED_AT,
-              streaming: false,
-              attachments: [
-                {
-                  type: "image",
-                  id: "rendition-1",
-                  name: "wall-quote.jpg",
-                  mimeType: "image/jpeg",
-                  sizeBytes: 12,
-                  previewUrl: "/assets/wall-quote",
-                },
-                {
-                  type: "image",
-                  id: "rendition-2",
-                  name: "bottom-right.jpg",
-                  mimeType: "image/jpeg",
-                  sizeBytes: 13,
-                  previewUrl: "/assets/bottom-right",
-                },
-                {
-                  type: "file",
-                  id: "voice-note",
-                  name: "voice-note.mp3",
-                  mimeType: "audio/mpeg",
-                  sizeBytes: 14,
-                  previewUrl: "/assets/voice-note",
-                },
-              ],
-            },
-          },
-        ]}
-      />,
-    );
-
-    expect(markup).toContain("data-assistant-attachments");
-    expect(markup).toContain('src="/assets/wall-quote"');
-    expect(markup).toContain('aria-label="Preview wall-quote.jpg"');
-    expect(markup).toContain('href="/assets/wall-quote"');
-    expect(markup).toContain('download="wall-quote.jpg"');
-    expect(markup).toContain("bottom-right.jpg");
-    expect(markup).toContain("<audio");
-    expect(markup).toContain('src="/assets/voice-note"');
-    expect(markup).toContain('download="voice-note.mp3"');
-    expect(markup).not.toContain("MEDIA:");
   });
 
   it("identifies user-role messages sent by another agent", async () => {

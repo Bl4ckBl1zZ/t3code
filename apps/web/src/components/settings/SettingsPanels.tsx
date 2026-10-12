@@ -194,7 +194,6 @@ import {
   getChangedBrowserSettingLabels,
   getChangedTypographySettingLabels,
   hasChangedBackgroundActivitySettings,
-  hasEnabledHermesInstance,
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
   readLastEnabledProjectGroupingMode,
@@ -3910,13 +3909,8 @@ function EnvironmentProviderSettings(
   };
 
   const deleteProviderInstance = (id: ProviderInstanceId) => {
-    const deletedInstance = settings.providerInstances?.[id];
-    const providerInstances = withoutProviderInstanceKey(settings.providerInstances, id);
     updateSettings({
-      providerInstances,
-      ...(deletedInstance?.driver === "hermes"
-        ? { enableHermes: hasEnabledHermesInstance(providerInstances) }
-        : {}),
+      providerInstances: withoutProviderInstanceKey(settings.providerInstances, id),
       providerModelPreferences: withoutProviderInstanceKey(settings.providerModelPreferences, id),
       favorites: withoutProviderInstanceFavorites(settings.favorites ?? [], id),
     });
@@ -3946,9 +3940,6 @@ function EnvironmentProviderSettings(
           }
         : {}),
       providerInstances,
-      ...(driverKind === "hermes"
-        ? { enableHermes: hasEnabledHermesInstance(providerInstances) }
-        : {}),
       providerModelPreferences: withoutProviderInstanceKey(
         settings.providerModelPreferences,
         defaultInstanceId,
@@ -3998,11 +3989,6 @@ function EnvironmentProviderSettings(
         instance={row.instance}
         driverOption={driverOption}
         liveProvider={liveProvider}
-        effectiveEnabled={
-          row.driver === "hermes"
-            ? settings.enableHermes && row.instance.enabled === true
-            : undefined
-        }
         mode={mode}
         supportsCustomModelDefinitions={
           serverConfig?.environment.capabilities.customModelDefinitions === true

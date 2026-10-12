@@ -249,7 +249,6 @@ const seedSweepThreads = Effect.gen(function* () {
   yield* seed("settled-recently", { ...settledLongAgo, settledRecordedAt: sweepDaysAgo(1) });
   yield* seed("settled-pinned", { ...settledLongAgo, pinnedAt: sweepNow });
   yield* seed("kept-active", { autoSettleDisabledAt: sweepNow });
-  yield* seed("work-inbox", { workInboxRole: "main" });
   yield* seed("linked", {
     linkedPullRequest: {
       projectId: sweepProject,
@@ -318,7 +317,6 @@ const expectedSweepSelections = {
     "settled-long-ago",
     "settled-pinned",
     "settled-recently",
-    "work-inbox",
     "worktree",
   ],
   otherProject: ["worktree"],

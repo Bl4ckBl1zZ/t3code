@@ -7,7 +7,6 @@ function SettingsProvidersRoute() {
   const search = Route.useSearch();
   return (
     <ProviderSettingsPanel
-      includeDriver={(driver) => driver !== "hermes"}
       {...(search.environmentId
         ? { initialEnvironmentId: EnvironmentId.make(search.environmentId) }
         : {})}

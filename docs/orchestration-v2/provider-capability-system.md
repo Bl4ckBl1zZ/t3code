@@ -229,7 +229,7 @@ adapter accepts one.
   own execution. Codex, Claude, Cursor and OpenCode report this.
 - `client-boundary`: policy is applied only where T3 mediates the work — permission requests
   and the client filesystem and terminal handlers. Provider-owned execution is unconfined, so
-  the sandbox guarantee is weaker. The ACP family and Hermes report this.
+  the sandbox guarantee is weaker. The ACP family reports this.
 
 Events persisted before the field existed decode to `client-boundary`, so replay never
 overclaims enforcement.

@@ -1,5 +1,4 @@
 import type { StaticScreenProps } from "@react-navigation/native";
-import { ProviderInstanceId } from "@t3tools/contracts";
 import { useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 
@@ -11,9 +10,6 @@ type NewTaskDraftRouteParams = {
   readonly title?: string | string[];
   readonly pendingTaskId?: string | string[];
   readonly incomingShareId?: string | string[];
-  readonly workspace?: string | string[];
-  readonly providerInstanceId?: string | string[];
-  readonly model?: string | string[];
 };
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
@@ -36,12 +32,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     <>
       <NativeStackScreenOptions
         options={{
-          title:
-            (Array.isArray(params.workspace) ? params.workspace[0] : params.workspace) === "work"
-              ? "New conversation"
-              : Array.isArray(params.title)
-                ? params.title[0]
-                : (params.title ?? "New task"),
+          title: Array.isArray(params.title) ? params.title[0] : (params.title ?? "New task"),
         }}
       />
       <NewTaskDraftScreen
@@ -51,26 +42,6 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
         }
         pendingTaskId={
           Array.isArray(params.pendingTaskId) ? params.pendingTaskId[0] : params.pendingTaskId
-        }
-        workspace={
-          (Array.isArray(params.workspace) ? params.workspace[0] : params.workspace) === "work"
-            ? "work"
-            : "code"
-        }
-        initialModelSelection={
-          (Array.isArray(params.providerInstanceId)
-            ? params.providerInstanceId[0]
-            : params.providerInstanceId) &&
-          (Array.isArray(params.model) ? params.model[0] : params.model)
-            ? {
-                instanceId: ProviderInstanceId.make(
-                  (Array.isArray(params.providerInstanceId)
-                    ? params.providerInstanceId[0]
-                    : params.providerInstanceId)!,
-                ),
-                model: (Array.isArray(params.model) ? params.model[0] : params.model)!,
-              }
-            : undefined
         }
       />
     </>

@@ -136,8 +136,6 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly pinned?: boolean;
   readonly pinOrderKey?: string;
   readonly activeOrderKey?: string | null;
-  readonly workInboxRole?: "main" | "chat" | null;
-  readonly clearTimeline?: true;
   /** Absent leaves the link alone; null unlinks. */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
   readonly linkPullRequest?: ThreadLinkedPullRequest;
@@ -171,7 +169,6 @@ interface StartThreadBootstrap {
     readonly branch?: string;
     readonly startFromOrigin?: boolean;
   };
-  readonly prepareWorkspace?: boolean;
   readonly runSetupScript?: boolean;
 }
 
@@ -562,8 +559,6 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.pinned !== undefined ||
       input.pinOrderKey !== undefined ||
       input.activeOrderKey !== undefined ||
-      input.workInboxRole !== undefined ||
-      input.clearTimeline !== undefined ||
       input.linkedPullRequest !== undefined ||
       input.linkPullRequest !== undefined ||
       input.unlinkPullRequest !== undefined ||
@@ -582,8 +577,6 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
         ...(input.pinOrderKey === undefined ? {} : { pinOrderKey: input.pinOrderKey }),
         ...(input.activeOrderKey === undefined ? {} : { activeOrderKey: input.activeOrderKey }),
-        ...(input.workInboxRole === undefined ? {} : { workInboxRole: input.workInboxRole }),
-        ...(input.clearTimeline === undefined ? {} : { clearTimeline: input.clearTimeline }),
         ...(input.linkedPullRequest === undefined
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
@@ -681,9 +674,6 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
       workspaceStrategy,
-      ...(input.bootstrap?.prepareWorkspace === undefined
-        ? {}
-        : { prepareWorkspace: input.bootstrap.prepareWorkspace }),
       initialMessage: {
         messageId: input.message.messageId,
         text: input.message.text,

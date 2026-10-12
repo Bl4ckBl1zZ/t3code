@@ -32,13 +32,11 @@ struct ThreadReadStateTests {
         let unseen = thread(completedAt: now, visitedAt: now.addingTimeInterval(-60))
         #expect(unseen.hasUnseenCompletion)
         #expect(unseen.homeStatus(at: now) == .done)
-        #expect(unseen.workInboxBadge == .done)
         #expect(!unseen.homeRecedes(at: now))
 
         let seen = thread(completedAt: now, visitedAt: now)
         #expect(!seen.hasUnseenCompletion)
         #expect(seen.homeStatus(at: now) == .ready)
-        #expect(seen.workInboxBadge == nil)
         #expect(seen.homeRecedes(at: now))
 
         // A never-visited thread (fresh environment, older server) reads as read.
@@ -66,7 +64,6 @@ struct ThreadReadStateTests {
         limited.lastErrorClass = "usage_limit"
         #expect(limited.homeStatus(at: now) == .limited)
         #expect(limited.homeStatusLabel == "Limited")
-        #expect(limited.workInboxBadge == .limited)
 
         var broken = thread(state: .failed)
         broken.lastErrorClass = "provider_error"
@@ -110,7 +107,6 @@ struct ThreadReadStateTests {
         #expect(woke.wokeAt(now: now) == now.addingTimeInterval(-30))
         // Woke outranks the plain Done it also is.
         #expect(woke.homeStatus(at: now) == .woke)
-        #expect(woke.workInboxBadge == .done)
     }
 
     @Test

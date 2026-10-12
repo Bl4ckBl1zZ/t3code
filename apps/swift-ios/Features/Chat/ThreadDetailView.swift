@@ -61,7 +61,6 @@ public struct ThreadDetailView: View {
     /// which is the only handle the reader has for quoting it later.
     @State private var feedbackReceipt: String?
     @State private var feedbackFailure: String?
-    @State private var workConversationFailure: String?
     @State private var didRestoreDraft = false
     /// This thread was entered while its creation was still in the outbox, so
     /// its optimistic transcript is already on screen and the load that follows
@@ -120,9 +119,8 @@ public struct ThreadDetailView: View {
             context: markdownTranscript,
             client: model.client,
             threadID: thread.id,
-            skills: threadProviders.first { $0.id == currentSelection?.providerID }?.inWorkspace(threadWorkspaceRoot).skills ?? [],
-            canRunCommands: !isChatConversation && threadWorkspaceRoot != nil && !isEnvironmentOffline
-                && !ModelOptions.isHermesProvider(currentThread.providerID, in: environmentProviders),
+            skills: environmentProviders.first { $0.id == currentSelection?.providerID }?.inWorkspace(threadWorkspaceRoot).skills ?? [],
+            canRunCommands: threadWorkspaceRoot != nil && !isEnvironmentOffline,
             onTerminalStarted: { toolSurface = .terminal(terminalID: $0) }
         ))
         .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
@@ -359,9 +357,6 @@ public struct ThreadDetailView: View {
                             if await model.deleteThread(thread.id) { onNavigateBack() }
                         }
                     },
-                    isChatConversation: currentThread.workInboxRole == "chat",
-                    isHermesConversation: ModelOptions.isHermesProvider(currentThread.providerID, in: environmentProviders),
-                    activeProviderSessionID: detail?.workflow.providerSession?.id,
                     toolView: workspaceToolView
                 )
             }
@@ -393,9 +388,6 @@ public struct ThreadDetailView: View {
         } message: {
             Text(feedbackFailure ?? "")
         }
-        .alert("Couldn't Start Conversation", isPresented: Binding(get: { workConversationFailure != nil }, set: { if !$0 { workConversationFailure = nil } })) {
-            Button("OK") { workConversationFailure = nil }
-        } message: { Text(workConversationFailure ?? "") }
     }
 
     private var detail: FeatureThreadDetail? {
@@ -433,7 +425,7 @@ public struct ThreadDetailView: View {
     private var currentSelection: FeatureSelection? {
         guard let providerID = detail?.thread.providerID ?? thread.providerID,
               let modelID = detail?.thread.modelID ?? thread.modelID else { return nil }
-        let provider = threadProviders.first { $0.id == providerID }
+        let provider = environmentProviders.first { $0.id == providerID }
         let featureModel = provider?.models.first { $0.id == modelID }
         let savedOptions = detail?.thread.modelOptions ?? thread.modelOptions
         return FeatureSelection(
@@ -480,10 +472,6 @@ public struct ThreadDetailView: View {
         threadConnectionState == .disconnected
     }
 
-    private var isChatConversation: Bool {
-        currentThread.workInboxRole == "chat"
-    }
-
     /// The thread actions a reader reaches for most, one tap from the bar.
     /// Details keeps the full picture behind the info button.
     private var threadActionsMenu: some View {
@@ -513,13 +501,11 @@ public struct ThreadDetailView: View {
                     Button("Plan", systemImage: "list.bullet.clipboard") { isShowingPlan = true }
                 }
             }
-            if !isChatConversation {
-                Section {
-                    Button("Files", systemImage: "folder") { toolSurface = .files(path: nil, line: nil) }
-                    Button("Review Changes", systemImage: "doc.text.magnifyingglass") { toolSurface = .review(filePath: nil) }
-                    Button("Source Control", systemImage: "arrow.triangle.branch") { toolSurface = .sourceControl }
-                    Button("Terminal", systemImage: "terminal") { toolSurface = .terminal(terminalID: nil) }
-                }
+            Section {
+                Button("Files", systemImage: "folder") { toolSurface = .files(path: nil, line: nil) }
+                Button("Review Changes", systemImage: "doc.text.magnifyingglass") { toolSurface = .review(filePath: nil) }
+                Button("Source Control", systemImage: "arrow.triangle.branch") { toolSurface = .sourceControl }
+                Button("Terminal", systemImage: "terminal") { toolSurface = .terminal(terminalID: nil) }
             }
             if pullRequestContext != nil, !linkedPullRequestTargets.isEmpty {
                 Section {
@@ -536,7 +522,7 @@ public struct ThreadDetailView: View {
                 ThreadChatLifecycleActions(
                     thread: currentThread,
                     model: model,
-                    offersParking: !isChatConversation,
+                    offersParking: true,
                     onCustomSnooze: { isPickingCustomSnooze = true }
                 )
             }
@@ -577,7 +563,7 @@ public struct ThreadDetailView: View {
     private func openFind() {
         guard isFindAvailable, let finder = model.client as? any FeatureThreadFinding else { return }
         let threadID = thread.id
-        find.skills = (threadProviders.first { $0.id == currentSelection?.providerID }?
+        find.skills = (environmentProviders.first { $0.id == currentSelection?.providerID }?
             .inWorkspace(threadWorkspaceRoot).skills ?? [])
             .map { ThreadFindSkillLabel(name: $0.name, displayName: $0.displayName) }
         find.open(
@@ -862,7 +848,7 @@ public struct ThreadDetailView: View {
                 dynamicTypeSize: dynamicTypeSize,
                 topContentInset: bannerHeight,
                 bottomContentInset: composerHeight,
-                canLoadEarlier: ThreadTimelineClear.canLoadEarlier(detail),
+                canLoadEarlier: detail.page?.hasMore == true,
                 isLoadingEarlier: detail.page?.isLoading == true,
                 workspaceRoot: threadWorkspaceRoot,
                 alwaysExpandActivity: model.snapshot.settings.alwaysExpandActivity,
@@ -1189,7 +1175,7 @@ public struct ThreadDetailView: View {
             get: { currentSelection },
             set: { next in
                 guard let next else { return }
-                let providers = ProviderModelCatalogNormalizer.normalized(threadProviders)
+                let providers = ProviderModelCatalogNormalizer.normalized(environmentProviders)
                 let current =
                     ProviderModelSelectionResolver.validated(currentSelection, in: providers)
                     ?? currentSelection
@@ -1218,7 +1204,7 @@ public struct ThreadDetailView: View {
             selection: composerSelection,
             attachments: $attachments,
             interactionMode: composerInteractionMode,
-            providers: threadProviders,
+            providers: environmentProviders,
             providerSetup: ProviderSetupContext(client: model.client, environmentID: thread.environmentID),
             threadSelection: currentSelection,
             materializesDefaultSelection: false,
@@ -1295,7 +1281,7 @@ public struct ThreadDetailView: View {
         }
         let selection = reported ?? currentSelection
         let provider = selection.flatMap { selection in
-            threadProviders.first { $0.id == selection.providerID }
+            environmentProviders.first { $0.id == selection.providerID }
         }
         let model = selection.flatMap { selection in
             provider?.models.first { $0.id == selection.modelID }
@@ -1341,7 +1327,7 @@ public struct ThreadDetailView: View {
 
     private var composerPowerFeatures: FeatureComposerPowerFeatures {
         let selectedProviderID = currentSelection?.providerID
-        let provider = threadProviders.first { $0.id == selectedProviderID }?.inWorkspace(threadWorkspaceRoot)
+        let provider = environmentProviders.first { $0.id == selectedProviderID }?.inWorkspace(threadWorkspaceRoot)
         return FeatureComposerPowerFeatures(
             slashCommands: provider?.slashCommands ?? [],
             skills: provider?.skills ?? [],
@@ -1360,20 +1346,6 @@ public struct ThreadDetailView: View {
                 }
             }
         )
-    }
-
-    /// A Hermes thread — T3 Work or T3 Chat — offers Hermes models only. Which
-    /// side the thread is on comes from the thread's own provider instance,
-    /// never from the picker, so the scope cannot be resolved through
-    /// ``currentSelection`` (which resolves against this list in turn).
-    private var threadProviders: [FeatureProvider] {
-        let providers = environmentProviders
-        // Same fallback chain as `currentSelection`: a detail that has not
-        // resolved its provider yet must not demote the thread out of Hermes.
-        let providerID = detail?.thread.providerID ?? thread.providerID
-        return ModelOptions.isHermesProvider(providerID, in: providers)
-            ? ModelOptions.scoped(providers, to: .hermesOnly)
-            : providers
     }
 
     private var environmentProviders: [FeatureProvider] {
@@ -1408,7 +1380,7 @@ public struct ThreadDetailView: View {
     /// provider's availability, or its stored scan of that cwd changes.
     private var workspaceScanKey: String {
         let instanceID = currentSelection?.providerID ?? ""
-        let provider = threadProviders.first { $0.id == instanceID }
+        let provider = environmentProviders.first { $0.id == instanceID }
         let state = "\(provider?.isAvailable == true):\(provider?.hasCompleteWorkspace(threadWorkspaceRoot) == true)"
         return "\(currentThread.projectID):\(instanceID):\(threadWorkspaceRoot ?? ""):\(state)"
     }
@@ -1764,31 +1736,6 @@ public struct ThreadDetailView: View {
         }
     }
 
-    private func startFreshWorkConversation(providerID: String) {
-        guard let manager = model.client as? any FeatureWorkManaging,
-              let environmentID = threadEnvironment?.id ?? currentThread.environmentID else {
-            workConversationFailure = "This environment does not support starting Work conversations."
-            return
-        }
-        isSending = true
-        let sourceThreadID = currentThread.wireID ?? currentThread.id
-        let surface = currentThread.workInboxRole == "chat" ? "chat" : "work"
-        Task {
-            defer { isSending = false }
-            do {
-                let response = try await manager.workMutate(environmentID: environmentID, input: .object([
-                    "providerInstanceId": .string(providerID), "profile": .string("default"),
-                    "command": .object(["type": .string("conversation.open"), "sourceThreadId": .string(sourceThreadID), "surface": .string(surface)])
-                ]))
-                guard let threadID = response.threadId else { throw FeatureCapabilityUnavailable("Starting a Work conversation") }
-                draftSaveTask?.cancel()
-                draft = ""
-                try? await draftStore.removeDraft(for: draftKey)
-                NotificationCenter.default.post(name: .platformRouteReceived, object: nil, userInfo: ["route": PlatformRoute.thread(environmentID: environmentID, threadID: threadID)])
-            } catch { workConversationFailure = error.localizedDescription }
-        }
-    }
-
     /// Sends what is in the composer, then opens a new task in the same
     /// project while the message is delivered. Nothing to send does nothing.
     private func sendAndStartNewThread() {
@@ -1802,7 +1749,7 @@ public struct ThreadDetailView: View {
     /// The tokens a stale Claude session would re-read on its next turn, while
     /// Send should compact first. See ``ClaudeResumeCompaction``.
     private func resumeCompactionTokens(_ detail: FeatureThreadDetail) -> Int? {
-        let provider = threadProviders.first { $0.id == currentSelection?.providerID }
+        let provider = environmentProviders.first { $0.id == currentSelection?.providerID }
         let state = detail.thread.state
         return ClaudeResumeCompaction.tokens(.init(
             driver: provider?.driver,
@@ -1821,7 +1768,7 @@ public struct ThreadDetailView: View {
     private func contextMeter(_ detail: FeatureThreadDetail) -> ComposerContextMeter? {
         guard let window = detail.workflow.contextWindow else { return nil }
         let selection = currentSelection
-        let provider = threadProviders.first { $0.id == selection?.providerID }
+        let provider = environmentProviders.first { $0.id == selection?.providerID }
         let modelName = provider?.models.first { $0.id == selection?.modelID }?.name ?? selection?.modelID
         guard provider?.driver == "claudeAgent" else {
             return ComposerContextMeter(window: window, modelName: modelName, compaction: nil)
@@ -1872,13 +1819,6 @@ public struct ThreadDetailView: View {
         let compactFirst = !keepFullHistory && steer == nil
             && detail.flatMap(resumeCompactionTokens) != nil
             && !ClaudeResumeCompaction.isCompactCommand(message)
-        if pendingAttachments.isEmpty,
-           ["/new", "/reset"].contains(message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()),
-           let providerID = currentThread.providerID,
-           ModelOptions.isHermesProvider(providerID, in: environmentProviders) {
-            startFreshWorkConversation(providerID: providerID)
-            return
-        }
         // `/feedback` goes to the provider, not the agent. Only when the thread
         // actually offers it, and only on its own: attachments make it a real
         // message the reader meant to send.
@@ -2225,21 +2165,14 @@ enum ThreadTimelineFeed {
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
         let activeRunID = detail.workflow.queueState.activeRun?.id
-        let clearedAt = detail.thread.timelineClearedAt
-        let visible = ThreadTimelineClear.visible(
+        var result = entries(
             timelineItems: detail.timelineItems,
             messages: detail.messages,
-            clearedAt: clearedAt
-        )
-        var result = entries(
-            timelineItems: visible.timelineItems,
-            messages: visible.messages,
             runs: detail.timelineRuns,
             support: detail.itemSupport,
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
             subagentMetadata: detail.subagentMetadata,
             liveRun: ThreadWorkLogLiveRun(threadState: detail.thread.state, activeRunID: activeRunID),
-            chatClearedAt: clearedAt,
             calendar: calendar
         )
         if detail.thread.state == .working, case var .workLog(work)? = result.last {
@@ -2257,7 +2190,6 @@ enum ThreadTimelineFeed {
         subagentChildThreadIDs: [String: String] = [:],
         subagentMetadata: [String: SubagentRowMetadata] = [:],
         liveRun: ThreadWorkLogLiveRun = .unscoped,
-        chatClearedAt: Date? = nil,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
         var messagesByID: [String: FeatureMessage] = [:]
@@ -2431,9 +2363,6 @@ enum ThreadTimelineFeed {
         var seenIDs = Set<String>()
         entries = entries.filter { seenIDs.insert($0.id).inserted }
         entries = ThreadAgentUpdateGrouping.merge(entries)
-        if let chatClearedAt {
-            entries.insert(.structural(.chatCleared(at: chatClearedAt)), at: 0)
-        }
 
         return insertingDayDividers(entries, calendar: calendar)
     }

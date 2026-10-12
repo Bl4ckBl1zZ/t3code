@@ -168,22 +168,8 @@ enum DailyUXCreationContext {
     }
 
     /// The projects a task can be started in.
-    ///
-    /// `serverConfigs` is required rather than defaulted because it is the only
-    /// thing that identifies each server's T3 Work checkout, and a caller that
-    /// forgot it would silently offer that checkout as somewhere to start a
-    /// coding task.
-    static func projects(
-        in snapshot: FeatureSnapshot,
-        serverConfigs: [MobileWorkspaceEnvironmentConfig]
-    ) -> [FeatureProject] {
-        let creatable = snapshot.projects.filter { project in
-            !MobileWorkspaceRouting.isWorkBackingProject(
-                environmentID: project.environmentID,
-                workspaceRoot: project.path,
-                serverConfigs: serverConfigs
-            )
-        }
+    static func projects(in snapshot: FeatureSnapshot) -> [FeatureProject] {
+        let creatable = snapshot.projects
         guard !snapshot.environments.isEmpty else { return creatable }
         let availableEnvironmentIDs = Set(
             snapshot.environments.compactMap { environment in
@@ -351,11 +337,11 @@ struct DailyUXSidebarIndex {
             .filter { $0.pinnedAt != nil && !isSettled($0) }
             .sorted(by: Self.pinnedOrder)
 
-        // Working beta: only inbox threads fold away. Pins and Work's Main
-        // thread stay put; snoozed and settled threads keep their shelves.
+        // Working beta: only inbox threads fold away. Pins stay put; snoozed
+        // and settled threads keep their shelves.
         let unpinned = available.filter { $0.pinnedAt == nil && !isSettled($0) }
         let foldsIntoWorking = { (thread: FeatureThread) in
-            workingSectionEnabled && thread.workInboxRole != "main" && thread.isHomeWorking
+            workingSectionEnabled && thread.isHomeWorking
         }
         active = unpinned
             .filter { !foldsIntoWorking($0) }
@@ -648,32 +634,6 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     case ready
 }
 
-/// The T3 Work inbox row's leading status pill. See ``FeatureThread/workInboxBadge``.
-enum WorkInboxBadge: String, Sendable, Equatable, CaseIterable {
-    case needsYou
-    case working
-    case failed
-    case limited
-    case done
-
-    var label: String {
-        switch self {
-        case .needsYou: "Needs you"
-        case .working: "Working"
-        case .failed: "Failed"
-        case .limited: "Limited"
-        case .done: "Done"
-        }
-    }
-
-    /// Whether the row earns the leading attention dot. Only work that is
-    /// blocked on the user does: a dot on every row is a dot on none, and the
-    /// point is that the inbox can be triaged in one pass.
-    var wantsAttentionRail: Bool {
-        self == .needsYou
-    }
-}
-
 enum HomeWorkingDuration {
     static func compact(since date: Date, now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
@@ -728,17 +688,6 @@ extension FeatureThread {
         }
     }
 
-    /// The lozenge a T3 Work inbox row leads with, in place of the project name
-    /// a Code card carries there.
-    ///
-    /// Work is an inbox: every row is the same assistant on the same backing
-    /// checkout, so naming that is a constant, and what actually differs between
-    /// rows is state. Approval and input collapse into one "Needs you" because
-    /// the useful distinction is that it is blocked on you at all — *what* it
-    /// wants is the line underneath.
-    ///
-    /// `nil` for a thread with nothing to report, which leaves the row's meta
-    /// line as just its age rather than badging "Ready" on everything idle.
     /// Busy with work that does not need the user: a turn in flight, or one
     /// stopped with background work that will wake it. A plan waiting for a
     /// decision outranks lingering background work. Approvals, questions,
@@ -752,20 +701,6 @@ extension FeatureThread {
             !(interactionMode == .plan && hasActionableProposedPlan == true)
         case .approval, .input, .failed, .limited, .woke, .done, .ready:
             false
-        }
-    }
-
-    var workInboxBadge: WorkInboxBadge? {
-        switch homeStatus {
-        case .approval, .input: .needsYou
-        // Background work reads as working in the inbox: the row is not yours yet.
-        case .working, .background: .working
-        case .failed: .failed
-        case .limited: .limited
-        case .done: .done
-        // Web's inbox has no Woke lozenge; an unseen result under it still counts.
-        case .woke: hasUnseenCompletion ? .done : nil
-        case .ready: nil
         }
     }
 
@@ -1182,5 +1117,27 @@ enum ThreadActiveOrder {
             while reserved.contains(key(value)) { value += stride }
             return (thread.id, key(value))
         }
+    }
+}
+
+/// The Code list's project filter. Every machine's Scratch project is one
+/// "No Project" choice rather than a row per machine, as on web.
+enum HomeProjectFilter {
+    /// The selection that stands for "No Project".
+    static let noProjectID = "t3:no-project"
+    /// Where the selection is kept between launches.
+    static let storageKey = "workspace.project-filter"
+
+    /// The projects a selection keeps, or nil for all of them.
+    static func projectIDs(selected: String?, scratchProjectIDs: Set<String>) -> Set<String>? {
+        guard let selected else { return nil }
+        return selected == noProjectID ? scratchProjectIDs : [selected]
+    }
+
+    /// Whether the filter still offers `selected`; a remembered choice it no
+    /// longer offers is cleared.
+    static func isAvailable(selected: String?, projectIDs: Set<String>, scratchProjectIDs: Set<String>) -> Bool {
+        guard let selected else { return true }
+        return selected == noProjectID ? !scratchProjectIDs.isEmpty : projectIDs.contains(selected)
     }
 }

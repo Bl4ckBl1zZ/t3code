@@ -57,7 +57,6 @@ import {
   LinkIcon,
   MessageSquareDashedIcon,
   MessageSquareIcon,
-  MessagesSquareIcon,
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
@@ -83,7 +82,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useHermesChat } from "../hooks/useHermesChat";
 import { useNewProject } from "../hooks/useNewProject";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useClientSettings } from "../hooks/useSettings";
@@ -192,7 +190,6 @@ import {
   type ProviderInstanceEntry,
 } from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
-import { HERMES_DRIVER_KIND, isT3WorkBackingProject } from "../t3WorkProject";
 import {
   Command,
   CommandDialog,
@@ -707,7 +704,6 @@ function OpenCommandPaletteDialog(props: {
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const hermesChat = useHermesChat();
   const providerEntryByEnvironmentAndInstanceId = useMemo(() => {
     const map = new Map<string, ProviderInstanceEntry>();
     for (const environment of environments) {
@@ -784,10 +780,6 @@ function OpenCommandPaletteDialog(props: {
       ),
     [environments],
   );
-  const visibleProjects = useMemo(
-    () => projects.filter((project) => !isT3WorkBackingProject(project, serverConfigs)),
-    [projects, serverConfigs],
-  );
   const projectEnvironmentLocationById = useMemo(
     () =>
       new Map(
@@ -812,7 +804,7 @@ function OpenCommandPaletteDialog(props: {
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
-        items: visibleProjects,
+        items: projects,
         preferredIds: projectOrder,
         getId: getProjectOrderKey,
         getPreferenceIds: (project) => [
@@ -820,13 +812,12 @@ function OpenCommandPaletteDialog(props: {
           legacyProjectCwdPreferenceKey(project.workspaceRoot),
         ],
       }),
-    [projectOrder, visibleProjects],
+    [projectOrder, projects],
   );
   const unsortedProjectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
-        projects:
-          clientSettings.sidebarProjectSortOrder === "manual" ? orderedProjects : visibleProjects,
+        projects: clientSettings.sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
@@ -837,7 +828,7 @@ function OpenCommandPaletteDialog(props: {
       orderedProjects,
       primaryEnvironmentId,
       projectGroupingSettings,
-      visibleProjects,
+      projects,
     ],
   );
   const projectGroups = useMemo(
@@ -1199,29 +1190,6 @@ function OpenCommandPaletteDialog(props: {
       projectEnvironmentLocationById,
       projectGroupByTargetKey,
     ],
-  );
-
-  const startFreshHermesChat = useCallback(async () => {
-    const outcome = await hermesChat.start();
-    if (outcome === "unavailable") {
-      toastManager.add({
-        type: "warning",
-        title: "Hermes is not ready",
-        description: "Enable and configure Hermes before starting a new chat.",
-      });
-    }
-  }, [hermesChat]);
-
-  const newChatItem = useMemo<CommandPaletteActionItem>(
-    () => ({
-      kind: "action",
-      value: "new-thread:new-chat",
-      searchTerms: ["new chat", "hermes", "conversation", "fresh"],
-      title: "New chat",
-      icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
-      run: startFreshHermesChat,
-    }),
-    [startFreshHermesChat],
   );
 
   const projectThreadItems = useMemo(() => {
@@ -1748,18 +1716,9 @@ function OpenCommandPaletteDialog(props: {
     // projectThreadItems already lists the current project first.
     pushPaletteView({
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
-      groups: [
-        { value: "projects", label: "Projects", items: [newChatItem, ...projectThreadItems] },
-      ],
+      groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
-  }, [
-    clearOpenIntent,
-    browseNavigation,
-    newChatItem,
-    openIntent,
-    projectThreadItems,
-    pushPaletteView,
-  ]);
+  }, [clearOpenIntent, browseNavigation, openIntent, projectThreadItems, pushPaletteView]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
@@ -1818,7 +1777,7 @@ function OpenCommandPaletteDialog(props: {
         {
           value: "projects",
           label: "Projects",
-          items: [newChatItem, ...projectThreadItems],
+          items: projectThreadItems,
         },
       ],
     });
@@ -2164,13 +2123,10 @@ function OpenCommandPaletteDialog(props: {
       }
 
       const projectId = newProjectId();
-      // Hermes drives T3 Work, not code: a new Code project must never adopt
-      // it as its default model just because it sorts first.
-      const targetEnvironmentProviders = (
+      const targetEnvironmentProviders =
         environments.find((environment) => environment.environmentId === input.environmentId)
           ?.serverConfig?.providers ??
-        (input.environmentId === primaryEnvironmentId ? providers : [])
-      ).filter((provider) => provider.driver !== HERMES_DRIVER_KIND);
+        (input.environmentId === primaryEnvironmentId ? providers : []);
       const createResult = await createProject({
         environmentId: input.environmentId,
         input: {

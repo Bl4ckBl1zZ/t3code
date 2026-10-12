@@ -47,7 +47,6 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useT3ProjectFilePreviewUrl } from "../../state/use-t3-project-file";
-import { useStartHermesConversation } from "./use-start-hermes-conversation";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { threadEnvironment } from "../../state/threads";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
@@ -182,21 +181,7 @@ function ThreadRouteContent(
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
   const { selectedThreadCwd } = useSelectedThreadWorktree();
-  const startHermesConversation = useStartHermesConversation({
-    requiredEnvironmentId: selectedThread?.environmentId ?? null,
-    ...(selectedThread
-      ? {
-          sourceThreadId: selectedThread.id,
-          providerInstanceId:
-            selectedThread.runtime?.providerInstanceId ??
-            selectedThread.providerInstanceId ??
-            selectedThread.modelSelection.instanceId,
-        }
-      : {}),
-  });
-  const composer = useThreadComposerState({
-    onRequestFreshHermesChat: startHermesConversation,
-  });
+  const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
