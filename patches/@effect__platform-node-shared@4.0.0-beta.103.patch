@@ -1,0 +1,84 @@
+diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+index 29b02311c2101b01e5ad991f2e9375e699f2340c..c921735a872709ab3a2dacdbf3b0f8518a82fdae 100644
+--- a/dist/NodeChildProcessSpawner.js
++++ b/dist/NodeChildProcessSpawner.js
+@@ -253,9 +253,12 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+       handle.kill("SIGTERM");
+     });
+   });
++  // Once Node observes the leader's exit, taskkill /T cannot reclaim orphaned
++  // descendants through its PID, which may be reused. Skip stale-PID cleanup.
++  const hasExited = childProcess => childProcess.exitCode !== null || childProcess.signalCode !== null;
+   const killProcessGroup = (command, childProcess, signal) => {
+     if (globalThis.process.platform === "win32") {
+-      return Effect.callback(resume => {
++      return Effect.suspend(() => hasExited(childProcess) ? Effect.void : Effect.callback(resume => {
+         NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, error => {
+           if (error) {
+             resume(Effect.fail(toPlatformError("kill", toError(error), command)));
+@@ -263,7 +266,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+             resume(Effect.void);
+           }
+         });
+-      });
++      }));
+     }
+     return Effect.try({
+       try: () => {
+@@ -274,6 +277,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+   };
+   const killProcessGroupOnExit = (childProcess, signal) => {
+     if (globalThis.process.platform === "win32") {
++      if (hasExited(childProcess)) return;
+       NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, () => {
+         // ignore errors during best-effort cleanup
+       });
+diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
+index bf6f007c4a29597fad5eb1367dd145fde2688851..a334e3115482ca81ac565491978affc619129902 100644
+--- a/src/NodeChildProcessSpawner.ts
++++ b/src/NodeChildProcessSpawner.ts
+@@ -347,21 +347,28 @@ const make = Effect.gen(function*() {
+       })
+     })
+ 
++  // Once Node observes the leader's exit, taskkill /T cannot reclaim orphaned
++  // descendants through its PID, which may be reused. Skip stale-PID cleanup.
++  const hasExited = (childProcess: NodeChildProcess.ChildProcess) =>
++    childProcess.exitCode !== null || childProcess.signalCode !== null
++
+   const killProcessGroup = (
+     command: ChildProcess.StandardCommand,
+     childProcess: NodeChildProcess.ChildProcess,
+     signal: NodeJS.Signals
+   ) => {
+     if (globalThis.process.platform === "win32") {
+-      return Effect.callback<void, PlatformError.PlatformError>((resume) => {
+-        NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, (error) => {
+-          if (error) {
+-            resume(Effect.fail(toPlatformError("kill", toError(error), command)))
+-          } else {
+-            resume(Effect.void)
+-          }
++      return Effect.suspend(() =>
++        hasExited(childProcess) ? Effect.void : Effect.callback<void, PlatformError.PlatformError>((resume) => {
++          NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, (error) => {
++            if (error) {
++              resume(Effect.fail(toPlatformError("kill", toError(error), command)))
++            } else {
++              resume(Effect.void)
++            }
++          })
+         })
+-      })
++      )
+     }
+     return Effect.try({
+       try: () => {
+@@ -376,6 +383,7 @@ const make = Effect.gen(function*() {
+     signal: NodeJS.Signals
+   ): void => {
+     if (globalThis.process.platform === "win32") {
++      if (hasExited(childProcess)) return
+       NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, () => {
+         // ignore errors during best-effort cleanup
+       })
