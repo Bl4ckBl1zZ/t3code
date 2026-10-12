@@ -36,6 +36,9 @@ type SidebarContextProps = {
   open: boolean;
   setOpen: (open: boolean) => void;
   openMobile: boolean;
+  /** The mobile sheet stays mounted through its closing transition. */
+  mobileSheetMounted: boolean;
+  setMobileSheetElement: (element: HTMLDivElement | null) => void;
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
   toggleSidebar: () => void;
@@ -108,6 +111,10 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
+  const [mobileSheetMounted, setMobileSheetMounted] = React.useState(false);
+  const setMobileSheetElement = React.useCallback((element: HTMLDivElement | null) => {
+    setMobileSheetMounted(element !== null);
+  }, []);
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -147,12 +154,23 @@ function SidebarProvider({
       isMobile,
       open,
       openMobile,
+      mobileSheetMounted,
+      setMobileSheetElement,
       setOpen,
       setOpenMobile,
       state,
       toggleSidebar,
     }),
-    [state, open, setOpen, isMobile, openMobile, toggleSidebar],
+    [
+      state,
+      open,
+      setOpen,
+      isMobile,
+      openMobile,
+      mobileSheetMounted,
+      setMobileSheetElement,
+      toggleSidebar,
+    ],
   );
 
   return (
@@ -193,7 +211,7 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+  const { isMobile, state, openMobile, setOpenMobile, setMobileSheetElement } = useSidebar();
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(() => {
     if (isMobile || collapsible === "none" || !resizable) {
       return null;
@@ -235,6 +253,7 @@ function Sidebar({
       <SidebarInstanceContext value={instanceContextValue}>
         <Sheet onOpenChange={setOpenMobile} open={openMobile}>
           <SheetPopup
+            ref={setMobileSheetElement}
             className={cn(
               "w-(--sidebar-width) max-w-none bg-sidebar surface-grain p-0 text-sidebar-foreground",
               className,
