@@ -2671,6 +2671,63 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each([
+    { model: "claude-opus-5-5", shown: true },
+    { model: "claude-fable-5-1", shown: true },
+    { model: "claude-opus-5", shown: false },
+    { model: "claude-sonnet-4-6", shown: false },
+  ] as const)(
+    "shows $model thinking right before a tool call as text: $shown",
+    ({ model, shown }) =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("thinking-before-tool-attempt"),
+            text: "Check the memory file",
+            attachments: [],
+          }),
+        );
+        const snapshot = (uuid: string, content: ReadonlyArray<unknown>) =>
+          claudeSdkFrame({
+            type: "assistant",
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+            parent_tool_use_id: null,
+            message: { id: "reply-message", model, content },
+          });
+        const frames = [
+          snapshot("reasoning-snapshot", [
+            { type: "thinking", thinking: "Planning the check", signature: "sig" },
+          ]),
+          snapshot("reply-snapshot", [
+            {
+              type: "thinking",
+              thinking: "Found it: the memory file is the cause.",
+              signature: "sig",
+            },
+          ]),
+          snapshot("tool-snapshot", [
+            { type: "tool_use", id: "tool-1", name: "Bash", input: { command: "ls" } },
+          ]),
+          makeResultFrame({ uuid: "thinking-before-tool-result", result: "" }),
+        ];
+        for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "thinking turn terminal");
+        const texts = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
+            ? [event.turnItem.text]
+            : [],
+        );
+        // Only the thinking right before the call is an update; earlier
+        // thinking stays unprojected.
+        assert.deepEqual(texts, shown ? ["Found it: the memory file is the cause."] : []);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
   it.effect("keeps the measured context when a usage limit ends the turn", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;

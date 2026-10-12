@@ -1139,6 +1139,15 @@ function textFromClaudeContent(content: SDKAssistantMessage["message"]["content"
   return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
 
+// Claude 5.1 and later return the text written ahead of a tool call as a
+// thinking block, at most one per call, instead of a text block.
+function claudeWritesUpdatesAsThinking(model: string): boolean {
+  const match = /claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?!\d)/u.exec(model);
+  if (match === null) return false;
+  const major = Number(match[1]);
+  return major > 5 || (major === 5 && Number(match[2] ?? 0) >= 1);
+}
+
 // In SDK mode Claude reports `/goal` only through the transcript (its
 // `active_goal` event is remote-only): synthetic command output names the
 // goal, and each unmet evaluator check returns as Stop hook feedback.
@@ -2806,6 +2815,12 @@ interface ActiveClaudeTurnContext {
   readonly rejectedRateLimitTypes: Set<string>;
   readonly rateLimitResetTimes: Map<string, string | null>;
   latestAssistantRateLimited: boolean;
+  // The latest root snapshot block, when it was non-empty thinking.
+  lastRootThinking: {
+    readonly messageId: string;
+    readonly nativeItemId: string;
+    readonly text: string;
+  } | null;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
@@ -6499,6 +6514,39 @@ export function makeClaudeAdapterV2(
             }
           }
 
+          // The SDK emits one root snapshot per completed content block. Root
+          // thinking is not projected, but on models that write their update
+          // ahead of a tool call as thinking, that block is the assistant's text.
+          if (message.type === "assistant" && message.parent_tool_use_id === null) {
+            for (const block of message.message.content) {
+              if (block.type === "thinking") {
+                const text = block.thinking.trim();
+                context.lastRootThinking =
+                  text.length === 0
+                    ? null
+                    : {
+                        messageId: message.message.id,
+                        nativeItemId: `${message.uuid}:thinking`,
+                        text,
+                      };
+                continue;
+              }
+              const update = context.lastRootThinking;
+              context.lastRootThinking = null;
+              if (
+                block.type === "tool_use" &&
+                update?.messageId === message.message.id &&
+                claudeWritesUpdatesAsThinking(message.message.model)
+              ) {
+                yield* emitAssistantTextArtifacts({
+                  context,
+                  nativeItemId: update.nativeItemId,
+                  text: update.text,
+                });
+              }
+            }
+          }
+
           const toolPresentations = claudeToolPresentationsFromAssistantMessage(message);
           for (const toolUse of claudeToolUseBlocksFromAssistantMessage(message)) {
             const nativeToolInput = claudeNativeToolInputFromUnknown(toolUse.input);
@@ -7573,6 +7621,7 @@ export function makeClaudeAdapterV2(
               rejectedRateLimitTypes: new Set(),
               rateLimitResetTimes: new Map(),
               latestAssistantRateLimited: false,
+              lastRootThinking: null,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),
