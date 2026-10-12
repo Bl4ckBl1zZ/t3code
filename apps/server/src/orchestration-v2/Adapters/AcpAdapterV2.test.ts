@@ -1638,6 +1638,105 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("reapplies a selection after a switch away from it failed partway", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-partial-selection-reapply");
+      const threadId = ThreadId.make("thread-acp-partial-selection-reapply");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            // The model switch lands, then the agent rejects the mode step.
+            environment: {
+              T3_ACP_MODE_CONFIG_OPTION_ID: "mode",
+              T3_ACP_FAIL_SET_MODE_CONFIG_OPTION: "1",
+            },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const selectionA = { instanceId, model: "grok-mock-alt" } satisfies ModelSelection;
+      const selectionB = {
+        instanceId,
+        model: "grok-build",
+        options: [{ id: "mode", value: "code" }],
+      } satisfies ModelSelection;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-partial-selection"),
+        modelSelection: selectionA,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection: selectionA,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      const turnInput = (ordinal: number, modelSelection: ModelSelection) =>
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now,
+          ordinal,
+          modelSelection,
+        });
+
+      const switchToB = yield* Effect.exit(runtime.startTurn(turnInput(1, selectionB)));
+      assert.isTrue(Exit.isFailure(switchToB), "the agent rejected B's mode step");
+      yield* Queue.clear(protocolEvents);
+
+      yield* runtime.startTurn(turnInput(2, selectionA));
+      yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+      );
+      const modelSetsBeforePrompt: Array<unknown> = [];
+      for (const event of yield* Queue.takeAll(protocolEvents)) {
+        if (event.direction !== "outgoing") continue;
+        const method = rawProtocolMethod(event);
+        if (method === "session/prompt") break;
+        if (method === "session/set_model") {
+          const params = rawProtocolRequest(event)?.params;
+          modelSetsBeforePrompt.push(
+            typeof params === "object" && params !== null && "modelId" in params
+              ? params.modelId
+              : undefined,
+          );
+        }
+      }
+      assert.deepEqual(
+        modelSetsBeforePrompt,
+        ["grok-mock-alt"],
+        "the native config was left partly on B, so the turn on A must set it back first",
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("selects plan mode on agents that name or advertise their mode differently", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
