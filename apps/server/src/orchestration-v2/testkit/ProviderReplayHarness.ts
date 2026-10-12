@@ -426,7 +426,11 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         runtimeRequestServiceProvided,
         backgroundWorkSettleLayer.pipe(Layer.provide(orchestratorProvided)),
         delegatedTasksStopLayer.pipe(
-          Layer.provide(threadManagementServiceLayer.pipe(Layer.provide(orchestratorProvided))),
+          Layer.provide(
+            threadManagementServiceLayer.pipe(
+              Layer.provide(Layer.merge(orchestratorProvided, providerSessionManagerProvided)),
+            ),
+          ),
         ),
       ),
     ),
@@ -440,7 +444,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
           Layer.provide(
             Layer.mergeAll(
               continuationRequestsLayer,
-              threadManagementServiceLayer.pipe(Layer.provide(orchestratorProvided)),
+              threadManagementServiceLayer.pipe(
+                Layer.provide(Layer.merge(orchestratorProvided, providerSessionManagerProvided)),
+              ),
               idAllocatorLayer,
             ),
           ),

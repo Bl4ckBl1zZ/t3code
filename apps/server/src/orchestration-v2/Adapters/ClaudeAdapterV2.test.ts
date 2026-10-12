@@ -1599,6 +1599,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     // A CLI process opened after the first streams from its own queue, so the
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
+    readonly environment?: NodeJS.ProcessEnv;
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1608,6 +1609,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       });
       const sdkMessages = yield* Queue.unbounded<SDKMessage>();
       const processQueues: Array<Queue.Queue<SDKMessage>> = [];
+      // Resolves once the adapter has finished handling an offered frame.
+      const processedMessages = new WeakMap<SDKMessage, Deferred.Deferred<void>>();
+      const offerAndWait = Effect.fnUntraced(function* (message: SDKMessage) {
+        const processed = yield* Deferred.make<void>();
+        processedMessages.set(message, processed);
+        yield* Queue.offer(sdkMessages, message);
+        yield* Deferred.await(processed);
+      });
       const offeredMessages: Array<SDKUserMessage> = [];
       const permissionModeChanges: Array<string> = [];
       const continuationRequests: Array<ProviderContinuationRequest> = [];
@@ -1616,7 +1625,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         ...(options?.usageLimitListener ? { usageLimitListener: options.usageLimitListener } : {}),
         instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
         settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
-        environment: {},
+        environment: options?.environment ?? {},
         attachmentsDir,
         fileSystem,
         idAllocator,
@@ -1648,7 +1657,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }
               processQueues.push(sdkMessages);
               return {
-                messages: Stream.fromQueue(sdkMessages),
+                messages: Stream.fromQueue(sdkMessages).pipe(
+                  Stream.flatMap((message) =>
+                    Stream.make(message).pipe(
+                      // The next pull happens after the adapter finishes this frame.
+                      Stream.concat(
+                        Stream.fromEffect(
+                          Effect.suspend(() => {
+                            const processed = processedMessages.get(message);
+                            return processed === undefined
+                              ? Effect.void
+                              : Deferred.succeed(processed, undefined);
+                          }),
+                        ).pipe(Stream.drain),
+                      ),
+                    ),
+                  ),
+                ),
                 offer: (message) =>
                   Effect.sync(() => {
                     offeredMessages.push(message);
@@ -1703,6 +1728,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         providerThread,
         threadId,
         sdkMessages,
+        offerAndWait,
         processQueues,
         offeredMessages,
         // The uuid Claude echoes on the turn answering the nth offered prompt.
@@ -8829,6 +8855,513 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
+
+  describe("Claude workflows", () => {
+    const WORKFLOW_TASK_ID = "task-workflow-run";
+    const WORKFLOW_TOOL_USE_ID = "toolu-workflow-run";
+    const makeWorkflowHarnessWithOptions = (
+      options?: Parameters<typeof makeWakeHarnessWithOptions>[0],
+    ) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const configDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-wf-" });
+        const transcriptDir = path.join(configDir, "projects", "workflow");
+        yield* fileSystem.makeDirectory(transcriptDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(transcriptDir, "agent-a1.jsonl"),
+          '{"type":"assistant","message":{"role":"assistant","id":"msg_a1","content":[{"type":"text","text":"A1 from the transcript"}]}}\n',
+        );
+        const harness = yield* makeWakeHarnessWithOptions({
+          ...options,
+          environment: { ...options?.environment, CLAUDE_CONFIG_DIR: configDir },
+        });
+        return { ...harness, transcriptDir };
+      });
+    const makeWorkflowHarness = makeWorkflowHarnessWithOptions();
+
+    const workflowToolUse = (toolName = "Workflow") =>
+      claudeSdkFrame({
+        type: "assistant",
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            {
+              type: "tool_use",
+              id: WORKFLOW_TOOL_USE_ID,
+              name: toolName,
+              input: { script: "alpha.js" },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid: "00000000-0000-4000-8000-000000001001",
+        session_id: WAKE_NATIVE_SESSION,
+      });
+    const workflowTaskStarted = claudeSdkFrame({
+      type: "system",
+      subtype: "task_started",
+      task_id: WORKFLOW_TASK_ID,
+      tool_use_id: WORKFLOW_TOOL_USE_ID,
+      description: "Run the alpha workflow",
+      task_type: "local_workflow",
+      workflow_name: "probe-wf",
+      uuid: "00000000-0000-4000-8000-000000001002",
+      session_id: WAKE_NATIVE_SESSION,
+    });
+    const workflowLaunchAck = (transcriptDir: string) =>
+      claudeSdkFrame({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: WORKFLOW_TOOL_USE_ID,
+              content: [{ type: "text", text: "Workflow launched." }],
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid: "00000000-0000-4000-8000-000000001003",
+        session_id: WAKE_NATIVE_SESSION,
+        tool_use_result: { taskType: "local_workflow", runId: "wf_probe", transcriptDir },
+      });
+    const workflowSnapshot = (input: {
+      readonly uuid: string;
+      readonly state: "queued" | "start" | "done";
+      readonly secondState?: "queued" | "start" | "done";
+    }) =>
+      claudeSdkFrame({
+        type: "system",
+        subtype: "task_progress",
+        task_id: WORKFLOW_TASK_ID,
+        tool_use_id: WORKFLOW_TOOL_USE_ID,
+        description: "Alpha: alpha:one",
+        workflow_progress: [
+          { type: "workflow_phase", index: 1, title: "Alpha" },
+          {
+            type: "workflow_agent",
+            index: 1,
+            label: "alpha:one",
+            agentId: "a1",
+            state: input.state,
+            phaseIndex: 1,
+            phaseTitle: "Alpha",
+            model: "claude-opus-5[1m]",
+            promptPreview: "Reply with exactly: A1",
+            ...(input.state === "done" ? { resultPreview: "A1 excerpt" } : {}),
+          },
+          {
+            type: "workflow_agent",
+            index: 2,
+            label: "alpha:two",
+            agentId: "a2",
+            state: input.secondState ?? input.state,
+            phaseIndex: 1,
+            phaseTitle: "Alpha",
+            promptPreview: "Reply with exactly: A2",
+            ...((input.secondState ?? input.state) === "done"
+              ? { resultPreview: "A2 excerpt" }
+              : {}),
+          },
+        ],
+        uuid: input.uuid,
+        session_id: WAKE_NATIVE_SESSION,
+      });
+    const workflowNotification = (input: {
+      readonly uuid: string;
+      readonly status: "completed" | "failed" | "stopped";
+    }) =>
+      claudeSdkFrame({
+        type: "system",
+        subtype: "task_notification",
+        task_id: WORKFLOW_TASK_ID,
+        tool_use_id: WORKFLOW_TOOL_USE_ID,
+        status: input.status,
+        summary: "Workflow finished.",
+        output_file: "/tmp/workflow.output",
+        uuid: input.uuid,
+        session_id: WAKE_NATIVE_SESSION,
+      });
+    type SubagentUpdated = Extract<ProviderAdapterV2Event, { type: "subagent.updated" }>;
+    const workflowCoordinatorEvents = (events: ReadonlyArray<ProviderAdapterV2Event>) =>
+      events.filter(
+        (event): event is SubagentUpdated =>
+          event.type === "subagent.updated" &&
+          event.subagent.nativeTaskRef?.nativeId === WORKFLOW_TASK_ID,
+      );
+    const workflowMemberEvents = (events: ReadonlyArray<ProviderAdapterV2Event>, index: number) =>
+      events.filter(
+        (event): event is SubagentUpdated =>
+          event.type === "subagent.updated" &&
+          event.subagent.nativeTaskRef?.nativeId?.endsWith(`:agent:${index}`) === true,
+      );
+    const threadMessages = (
+      events: ReadonlyArray<ProviderAdapterV2Event>,
+      threadId: ThreadId | null | undefined,
+    ) =>
+      events.filter(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
+          event.type === "message.updated" && event.message.threadId === threadId,
+      );
+    const appThreadTitle = (
+      events: ReadonlyArray<ProviderAdapterV2Event>,
+      threadId: ThreadId | null | undefined,
+    ) =>
+      events.findLast(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "app_thread.created" }> =>
+          event.type === "app_thread.created" && event.appThread.id === threadId,
+      )?.appThread.title;
+
+    const launchWorkflow = Effect.fnUntraced(function* (input: {
+      readonly harness: Effect.Success<typeof makeWorkflowHarness>;
+      readonly snapshotUuid: string;
+      readonly state?: "queued" | "start";
+      readonly toolName?: string;
+    }) {
+      yield* input.harness.offerAndWait(workflowToolUse(input.toolName));
+      yield* input.harness.offerAndWait(workflowTaskStarted);
+      yield* input.harness.offerAndWait(workflowLaunchAck(input.harness.transcriptDir));
+      yield* input.harness.offerAndWait(
+        workflowSnapshot({ uuid: input.snapshotUuid, state: input.state ?? "start" }),
+      );
+      yield* awaitUntil(
+        () => workflowMemberEvents(input.harness.events, 2).length === 1,
+        "workflow members projected",
+      );
+    });
+
+    it.effect.each(["Agent", "Workflow"] as const)(
+      "keeps a workflow running after its %s launch reply",
+      (toolName) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const harness = yield* makeWorkflowHarness;
+            const now = yield* DateTime.now;
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now,
+                attemptId: RunAttemptId.make(`attempt-workflow-launch-${toolName}`),
+                text: "Run the workflow.",
+                attachments: [],
+              }),
+            );
+            yield* launchWorkflow({
+              harness,
+              snapshotUuid: "00000000-0000-4000-8000-000000001200",
+              toolName,
+            });
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000001201",
+                result: "Launched.",
+              }),
+            );
+            yield* awaitUntil(() => harness.terminalEvents().length === 1, "launch turn terminal");
+            assert.equal(
+              workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+              "running",
+            );
+            assert.equal(
+              workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status,
+              "running",
+            );
+            assert.isTrue(yield* harness.hasPendingBackgroundWork);
+
+            yield* harness.offerAndWait(
+              workflowNotification({
+                uuid: "00000000-0000-4000-8000-000000001202",
+                status: "completed",
+              }),
+            );
+            yield* awaitUntil(
+              () => harness.continuationRequests.length === 1,
+              "workflow continuation request",
+            );
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now,
+                attemptId: RunAttemptId.make(`attempt-workflow-complete-${toolName}`),
+                text: "Workflow finished.",
+                attachments: [],
+                providerTurnOrdinal: 2,
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            );
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000001205",
+                result: "Finished.",
+                origin: { kind: "task-notification" },
+              }),
+            );
+            yield* awaitUntil(() => harness.terminalEvents().length === 2, "wake turn terminal");
+            assert.equal(
+              workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+              "completed",
+            );
+            assert.equal(
+              workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status,
+              "completed",
+            );
+            assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+        ),
+    );
+
+    it.effect("projects each workflow member as its own subagent thread", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarness;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-workflow-members"),
+              text: "Run the alpha workflow.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({
+            harness,
+            snapshotUuid: "00000000-0000-4000-8000-000000001004",
+            state: "queued",
+          });
+
+          const coordinator = workflowCoordinatorEvents(harness.events).at(-1)?.subagent;
+          const first = workflowMemberEvents(harness.events, 1).at(-1)?.subagent;
+          const second = workflowMemberEvents(harness.events, 2).at(-1)?.subagent;
+          assert.equal(first?.status, "pending");
+          assert.isNull(first?.startedAt);
+          assert.equal(second?.status, "pending");
+          assert.equal(
+            appThreadTitle(harness.events, coordinator?.childThreadId),
+            "Workflow · probe-wf",
+          );
+          assert.deepEqual(
+            coordinator?.workflow?.agents?.map((agent) => [
+              agent.label,
+              agent.state,
+              agent.childThreadId,
+            ]),
+            [
+              ["alpha:one", "queued", first?.childThreadId],
+              ["alpha:two", "queued", second?.childThreadId],
+            ],
+          );
+          assert.equal(first?.title, "alpha:one");
+          assert.equal(first?.prompt, "Reply with exactly: A1");
+          assert.equal(first?.model, "claude-opus-5[1m]");
+          // Members hang off the coordinator's own thread, not the launching run's.
+          assert.equal(first?.threadId, coordinator?.childThreadId);
+          assert.equal(second?.threadId, coordinator?.childThreadId);
+          assert.isNull(first?.runId);
+          assert.notEqual(first?.childThreadId, second?.childThreadId);
+          assert.equal(appThreadTitle(harness.events, first?.childThreadId), "alpha:one");
+          assert.deepEqual(
+            threadMessages(harness.events, first?.childThreadId).map((event) => event.message.text),
+            ["Reply with exactly: A1"],
+          );
+          assert.deepEqual(
+            threadMessages(harness.events, second?.childThreadId).map(
+              (event) => event.message.text,
+            ),
+            ["Reply with exactly: A2"],
+          );
+
+          // A repeated roster republishes neither member. The coordinator's
+          // turn item follows its members, so a re-emitted member would
+          // already be in `events`.
+          const coordinatorTurnItems = () =>
+            harness.events.filter(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "subagent" &&
+                event.turnItem.nativeItemRef?.nativeId === WORKFLOW_TASK_ID,
+            ).length;
+          const turnItemsBeforeRepeat = coordinatorTurnItems();
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001005", state: "queued" }),
+          );
+          yield* awaitUntil(
+            () => coordinatorTurnItems() > turnItemsBeforeRepeat,
+            "repeated workflow snapshot",
+          );
+          assert.lengthOf(workflowMemberEvents(harness.events, 1), 1);
+          assert.lengthOf(workflowMemberEvents(harness.events, 2), 1);
+
+          yield* harness.offerAndWait(
+            workflowSnapshot({
+              uuid: "00000000-0000-4000-8000-000000001006",
+              state: "start",
+              secondState: "queued",
+            }),
+          );
+          yield* awaitUntil(
+            () => workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status === "running",
+            "first workflow member running",
+          );
+          assert.lengthOf(workflowMemberEvents(harness.events, 2), 1);
+
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000001007",
+              status: "stopped",
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000001008",
+              result: "Launched the workflow.",
+            }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "workflow turn terminal");
+          assert.equal(
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+            "cancelled",
+          );
+          for (const index of [1, 2]) {
+            assert.equal(
+              workflowMemberEvents(harness.events, index).at(-1)?.subagent.status,
+              "cancelled",
+            );
+          }
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+
+    it.effect("answers settled workflow members from a transcript, or the snapshot excerpt", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarness;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-workflow-settled"),
+              text: "Run the alpha workflow in the background.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({ harness, snapshotUuid: "00000000-0000-4000-8000-000000001010" });
+          const firstThreadId = workflowMemberEvents(harness.events, 1)[0]?.subagent.childThreadId;
+          const secondThreadId = workflowMemberEvents(harness.events, 2)[0]?.subagent.childThreadId;
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000001011",
+              result: "Launched the workflow.",
+            }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "launch turn terminal");
+
+          // The run outlives the turn that launched it, so this snapshot arrives
+          // with no turn context at all.
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001012", state: "done" }),
+          );
+          yield* awaitUntil(
+            () => threadMessages(harness.events, secondThreadId).length === 2,
+            "settled workflow member answers",
+          );
+          assert.deepEqual(
+            workflowCoordinatorEvents(harness.events)
+              .at(-1)
+              ?.subagent.workflow?.agents?.map((member) => member.state),
+            ["completed", "completed"],
+          );
+          assert.equal(
+            workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status,
+            "completed",
+          );
+          assert.deepEqual(
+            threadMessages(harness.events, firstThreadId).map((event) => event.message.text),
+            ["Reply with exactly: A1", "A1 from the transcript"],
+          );
+          assert.deepEqual(
+            threadMessages(harness.events, secondThreadId).map((event) => event.message.text),
+            ["Reply with exactly: A2", "Partial answer from workflow progress:\n\nA2 excerpt"],
+          );
+
+          // A transcript that lands later replaces the excerpt, without a new member event.
+          const memberEventsBefore = workflowMemberEvents(harness.events, 2).length;
+          yield* fileSystem.writeFileString(
+            path.join(harness.transcriptDir, "agent-a2.jsonl"),
+            '{"type":"assistant","message":{"role":"assistant","id":"msg_a2","content":[{"type":"text","text":"A2 from the transcript"}]}}\n',
+          );
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001013", state: "done" }),
+          );
+          yield* awaitUntil(
+            () =>
+              threadMessages(harness.events, secondThreadId).at(-1)?.message.text ===
+              "A2 from the transcript",
+            "late workflow transcript answer",
+          );
+          assert.lengthOf(workflowMemberEvents(harness.events, 2), memberEventsBefore);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+
+    it.effect("stops the run's live workflow after its root turn fails", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const stoppedTasks: Array<string> = [];
+          const harness = yield* makeWorkflowHarnessWithOptions({
+            stopTask: (taskId) => Effect.sync(() => void stoppedTasks.push(taskId)),
+          });
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-workflow-root-failure"),
+              text: "Run the workflow.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({
+            harness,
+            snapshotUuid: "00000000-0000-4000-8000-000000001050",
+          });
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000001053",
+              result: "Root turn ended.",
+              terminalReason: "api_error",
+              isError: true,
+            }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+          assert.equal(harness.terminalEvents()[0]?.status, "failed");
+          yield* awaitUntil(() => stoppedTasks.length === 1, "workflow stop");
+          // The run stops following the workflow, so it is stopped instead of
+          // left running out of sight.
+          assert.deepEqual(stoppedTasks, [WORKFLOW_TASK_ID]);
+          yield* awaitUntil(
+            () => workflowMemberEvents(harness.events, 2).at(-1)?.subagent.status === "failed",
+            "workflow members settled",
+          );
+          assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, "failed");
+          assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "failed");
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+  });
 
   describe("native goals", () => {
     const syntheticFrame = (uuid: string, text: string) =>

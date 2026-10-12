@@ -25,6 +25,7 @@ const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.generateHandoffScript]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: "orchestration",

@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   deriveThreadRelationshipGraph,
@@ -36,21 +37,25 @@ import {
   SquareIcon,
   UnplugIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
-import { AgentOrb, type AgentOrbState } from "./AgentOrb";
+import { AgentOrb } from "./AgentOrb";
 import { AgentElapsed, hasAgentElapsed, type AgentElapsedTiming } from "./AgentElapsed";
 import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { shouldShowInstanceBadge } from "../../providerInstances";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { resolveSubagentModelTraits, resolveThreadModelBadge } from "./threadModelBadge";
 import { WorkflowScriptDialog } from "../WorkflowScriptDialog";
+import { ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
+import { deriveWorkflowGroup, type WorkflowGroup } from "./ThreadLineageWorkflowRow.logic";
+import { relationshipOrbState, relationshipStatusLabel } from "./threadRelationshipStatus";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { readLocalApi } from "../../localApi";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useProjects, useThreadProjection, useThreadShells } from "../../state/entities";
 import { useProviderEntryByInstanceId } from "../../state/providerEntries";
+import { orchestrationEnvironment } from "../../state/orchestration";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
@@ -83,52 +88,6 @@ function statusDotClass(status: string | null): string {
   if (status === "failed" || status === "error") return "bg-destructive";
   if (status === "completed") return "bg-success";
   return "bg-muted-foreground/45";
-}
-
-function relationshipStatusLabel(status: string | null): string {
-  switch (status) {
-    case "preparing":
-    case "starting":
-      return "Starting";
-    case "running":
-    case "in_progress":
-      return "Running";
-    case "pending":
-    case "queued":
-      return "Queued";
-    case "waiting":
-    case "blocked":
-      return "Waiting";
-    case "completed":
-      return "Done";
-    case "failed":
-    case "error":
-      return "Failed";
-    case "cancelled":
-    case "interrupted":
-      return "Stopped";
-    case "rolled_back":
-      return "Reverted";
-    case "resolved_native":
-      return "Resolved (native)";
-    case "resolved_portable":
-      return "Resolved (portable)";
-    case "consumed":
-      return "Consumed";
-    case "superseded":
-      return "Superseded";
-    case "idle":
-      return "Idle";
-    default:
-      return "Unknown";
-  }
-}
-
-function relationshipOrbState(status: string | null): AgentOrbState {
-  if (status === "running" || status === "in_progress") return "active";
-  if (status === "failed" || status === "error") return "failed";
-  if (status === "completed") return "done";
-  return "idle";
 }
 
 function subagentTiming(subagent: OrchestrationV2Subagent): AgentElapsedTiming {
@@ -182,8 +141,9 @@ const STOPPABLE_SUBAGENT_STATUSES: ReadonlySet<OrchestrationV2Subagent["status"]
 
 /**
  * A T3-owned subagent with a started run has a child turn that Stop can
- * interrupt. A Claude-native one is stopped through its owning session while
- * its recorded task is still live.
+ * interrupt. A Claude-native one is stopped through its owning run while its
+ * recorded task is still live; a workflow member has no run of its own, so
+ * only the workflow's Stop reaches it.
  */
 function canStopSubagent(
   subagent: OrchestrationV2Subagent | undefined,
@@ -194,6 +154,7 @@ function canStopSubagent(
     subagent.origin === "app_owned" ||
     (subagent.origin === "provider_native" &&
       subagent.driver === "claudeAgent" &&
+      recorded.runId !== null &&
       subagent.nativeTaskRef?.strength === "strong" &&
       subagent.nativeTaskRef.nativeId !== null &&
       STOPPABLE_SUBAGENT_STATUSES.has(recorded.status));
@@ -244,15 +205,43 @@ export function ThreadRelationshipsPanel(props: {
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
   const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn);
+  const stopWorkflowCommand = useAtomCommand(orchestrationEnvironment.v2.stopWorkflow);
+  const canOperateWorkflow = useAtomValue(
+    orchestrationEnvironment.v2.stopWorkflow.permissionAtom(props.environmentId),
+  );
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
   const [stoppingThreadId, setStoppingThreadId] = useState<ThreadId | null>(null);
   const latestMergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
   const mergeTargetThreadId = resolveMergeBackTargetThreadId(projection);
+  // A workflow coordinator that reported its roster unfolds into the phases and
+  // members it ran, keyed by the child thread its row points at.
+  const workflowsByChildThreadId = useMemo(() => {
+    const workflows = new Map<
+      ThreadId,
+      { readonly coordinator: OrchestrationV2Subagent; readonly group: WorkflowGroup }
+    >();
+    for (const coordinator of projection?.subagents ?? []) {
+      if (coordinator.childThreadId === null) continue;
+      const group = deriveWorkflowGroup(coordinator);
+      if (group !== null) workflows.set(coordinator.childThreadId, { coordinator, group });
+    }
+    return workflows;
+  }, [projection?.subagents]);
   const relationshipRows = orderWebThreadLineageRows({
     graph,
     rows: immediateThreadRelationships(graph, props.threadId),
     currentThreadId: props.threadId,
     mergeTargetThreadId,
+  }).map((row) => {
+    // A workflow's row follows the run, not its coordinator chat, which can sit
+    // idle while members still work.
+    const workflow =
+      row.edge.kind === "subagent" && !isParentThreadRelationship(row.edge, props.threadId)
+        ? workflowsByChildThreadId.get(row.threadId)
+        : undefined;
+    return workflow === undefined
+      ? row
+      : { ...row, edge: { ...row.edge, status: workflow.coordinator.status } };
   });
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
@@ -338,6 +327,20 @@ export function ThreadRelationshipsPanel(props: {
     }
   };
 
+  // Stops the whole run: the coordinator and every member it still has going.
+  const stopWorkflow = async (childThreadId: ThreadId, coordinator: OrchestrationV2Subagent) => {
+    if (stoppingThreadId !== null) return;
+    setStoppingThreadId(childThreadId);
+    const result = await stopWorkflowCommand({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId, subagentId: coordinator.id },
+    });
+    setStoppingThreadId(null);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not stop workflow" });
+    }
+  };
+
   const parentTitle =
     mergeTargetThreadId === null
       ? null
@@ -393,20 +396,32 @@ export function ThreadRelationshipsPanel(props: {
           const showOrb = isSubagent && !isParent;
           const RelationshipIcon = isParent ? CornerLeftUpIcon : GitForkIcon;
           const relationship = relationshipLabel(edge, props.threadId);
+          const recordedSubagent = showOrb ? subagentByChildThreadId.get(threadId) : undefined;
+          const workflow = showOrb ? workflowsByChildThreadId.get(threadId) : undefined;
           const threadTitle = relationshipThreadTitle({
-            title: node?.thread?.title ?? threadId,
+            // A workflow's name is shorter than its coordinator chat's title.
+            title: recordedSubagent?.workflow?.name ?? node?.thread?.title ?? threadId,
             isSubagent,
           });
-          const recordedSubagent = showOrb ? subagentByChildThreadId.get(threadId) : undefined;
-          const subagent = currentSubagent(recordedSubagent, node?.thread);
+          // A workflow row follows the run, not newer work in its coordinator chat.
+          const subagent = workflow
+            ? recordedSubagent
+            : currentSubagent(recordedSubagent, node?.thread);
           const phase = workflowPhaseProgress(subagent?.workflow);
           const runScriptPath = subagent?.runHandles?.scriptPath;
           const runSessionUrl = subagent?.runHandles?.sessionUrl;
           const hasRunHandles = runScriptPath !== undefined || runSessionUrl !== undefined;
-          const canStop = canStopSubagent(subagent, recordedSubagent);
+          // A workflow stops as a whole; its coordinator has no Stop of its own.
+          const canStop = !workflow && canStopSubagent(subagent, recordedSubagent);
+          const canStopWorkflow =
+            workflow !== undefined &&
+            canOperateWorkflow &&
+            workflow.coordinator.status === "running" &&
+            workflow.coordinator.origin === "provider_native" &&
+            workflow.coordinator.driver === "claudeAgent";
           // Stop appears on hover in place of the trailing time; rows with a run
           // menu or a merge action keep Stop in those controls instead.
-          const hoverStop = canStop && !hasRunHandles && !isMergeTarget;
+          const hoverStop = (canStop || canStopWorkflow) && !hasRunHandles && !isMergeTarget;
           const trailingVisibilityClass = hoverStop
             ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0"
             : undefined;
@@ -532,6 +547,108 @@ export function ThreadRelationshipsPanel(props: {
               )}
             </>
           );
+          // The row link as the leading half of a split row, beside a run menu
+          // or a workflow's disclosure.
+          const splitPrimaryLink = (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
+                    disabled={node?.missing === true}
+                    onClick={() => openThread(threadId)}
+                  />
+                }
+              >
+                {relationshipContent}
+              </TooltipTrigger>
+              <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
+            </Tooltip>
+          );
+          // Run handles render only when the task reported them: a plain
+          // subagent has none and should not show dead affordances.
+          const runMenu = hasRunHandles ? (
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
+                    aria-label={`Workflow run for ${threadTitle}`}
+                  />
+                }
+              >
+                <MoreHorizontalIcon className="size-3" />
+              </MenuTrigger>
+              <MenuPopup align="end" className={THREAD_DETAILS_PANEL_MENU_POPUP_CLASS}>
+                {canStop ? (
+                  <MenuItem
+                    variant="destructive"
+                    disabled={stoppingThreadId !== null}
+                    onClick={() => void stopSubagent(threadId, subagent)}
+                  >
+                    <SquareIcon className="size-3.5 fill-current" />
+                    Stop subagent
+                  </MenuItem>
+                ) : null}
+                {canStopWorkflow ? (
+                  <MenuItem
+                    variant="destructive"
+                    disabled={stoppingThreadId !== null}
+                    onClick={() => void stopWorkflow(threadId, workflow.coordinator)}
+                  >
+                    <SquareIcon className="size-3.5 fill-current" />
+                    Stop entire workflow
+                  </MenuItem>
+                ) : null}
+                {runScriptPath !== undefined ? (
+                  <MenuItem onClick={() => setScriptPath(runScriptPath)}>
+                    <FileCode2Icon className="size-3.5" />
+                    View workflow script
+                  </MenuItem>
+                ) : null}
+                {runSessionUrl !== undefined ? (
+                  <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(runSessionUrl)}>
+                    <ExternalLinkIcon className="size-3.5" />
+                    Open run session
+                  </MenuItem>
+                ) : null}
+              </MenuPopup>
+            </Menu>
+          ) : null;
+          if (workflow) {
+            return (
+              <ThreadLineageWorkflowRow
+                key={threadId}
+                label={threadTitle}
+                group={workflow.group}
+                coordinatorId={workflow.coordinator.id}
+                header={splitPrimaryLink}
+                menu={runMenu}
+                provider={{
+                  driver: providerEntry?.driverKind ?? workflow.coordinator.driver,
+                  providerDisplayName: providerEntry?.displayName,
+                  providerAccentColor: providerEntry?.accentColor,
+                  showInstanceBadge:
+                    providerEntry !== null &&
+                    shouldShowInstanceBadge(providerEntry, providerEntryByInstanceId.values()),
+                }}
+                onOpenThread={openThread}
+                // A member's chat opens only once its thread exists in this environment.
+                isThreadAvailable={(memberThreadId) =>
+                  graph.nodes.get(memberThreadId)?.missing === false
+                }
+                onStop={
+                  hoverStop ? () => void stopWorkflow(threadId, workflow.coordinator) : undefined
+                }
+                stopping={stopping}
+                stopDisabled={stoppingThreadId !== null}
+              />
+            );
+          }
           return (
             <li
               key={threadId}
@@ -591,67 +708,11 @@ export function ThreadRelationshipsPanel(props: {
                     </TooltipPopup>
                   </Tooltip>
                 </div>
-              ) : hasRunHandles ? (
+              ) : runMenu ? (
                 <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
-                          disabled={node?.missing === true}
-                          onClick={() => openThread(threadId)}
-                        />
-                      }
-                    >
-                      {relationshipContent}
-                    </TooltipTrigger>
-                    <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
-                  </Tooltip>
+                  {splitPrimaryLink}
                   <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-                  {/* Run handles render only when the task reported them: a plain
-                      subagent has none and should not show dead affordances. */}
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
-                          aria-label={`Workflow run for ${threadTitle}`}
-                        />
-                      }
-                    >
-                      <MoreHorizontalIcon className="size-3" />
-                    </MenuTrigger>
-                    <MenuPopup align="end" className={THREAD_DETAILS_PANEL_MENU_POPUP_CLASS}>
-                      {canStop ? (
-                        <MenuItem
-                          variant="destructive"
-                          disabled={stoppingThreadId !== null}
-                          onClick={() => void stopSubagent(threadId, subagent)}
-                        >
-                          <SquareIcon className="size-3.5 fill-current" />
-                          Stop subagent
-                        </MenuItem>
-                      ) : null}
-                      {runScriptPath !== undefined ? (
-                        <MenuItem onClick={() => setScriptPath(runScriptPath)}>
-                          <FileCode2Icon className="size-3.5" />
-                          View workflow script
-                        </MenuItem>
-                      ) : null}
-                      {runSessionUrl !== undefined ? (
-                        <MenuItem
-                          onClick={() => void readLocalApi()?.shell.openExternal(runSessionUrl)}
-                        >
-                          <ExternalLinkIcon className="size-3.5" />
-                          Open run session
-                        </MenuItem>
-                      ) : null}
-                    </MenuPopup>
-                  </Menu>
+                  {runMenu}
                 </div>
               ) : (
                 <Tooltip>
