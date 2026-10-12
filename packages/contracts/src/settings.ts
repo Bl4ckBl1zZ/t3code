@@ -1390,6 +1390,12 @@ export const UsageModelPriceOverride = Schema.Struct({
 });
 export type UsageModelPriceOverride = typeof UsageModelPriceOverride.Type;
 
+/** One project's override of a provider instance. Only `enabled` is overridable today. */
+export const ProjectProviderInstanceOverride = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+});
+export type ProjectProviderInstanceOverride = typeof ProjectProviderInstanceOverride.Type;
+
 export const ServerSettings = Schema.Struct({
   // On by default so restarts resume the work they interrupted; recovery stops
   // after three automatic continuations in a row.
@@ -1462,6 +1468,16 @@ export const ServerSettings = Schema.Struct({
   projectRemoveAgentCreditsOnMergeOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * Per-project provider instance switches. An instance absent here inherits the machine's
+   * enablement, and a present `enabled` wins in either direction: a project can turn on an
+   * instance the machine disabled, or turn off one the machine enabled. See
+   * `resolveProjectProviderInstanceEnabled` in `@t3tools/shared/serverSettings`.
+   */
+  projectProviderInstanceOverrides: Schema.Record(
+    ProjectId,
+    Schema.Record(ProviderInstanceId, ProjectProviderInstanceOverride),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -1848,6 +1864,18 @@ export const ServerSettingsPatch = Schema.Struct({
   /** Sparse: `null` removes that project's override. */
   projectRemoveAgentCreditsOnMergeOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
+  ),
+  /**
+   * Sparse per project and per instance: `null` for a project removes all of its provider
+   * overrides; `null` for an instance returns that instance to the machine's enablement.
+   */
+  projectProviderInstanceOverrides: Schema.optionalKey(
+    Schema.Record(
+      ProjectId,
+      Schema.NullOr(
+        Schema.Record(ProviderInstanceId, Schema.NullOr(ProjectProviderInstanceOverride)),
+      ),
+    ),
   ),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({

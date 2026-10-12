@@ -195,6 +195,12 @@ export function runOrchestratorV2ProviderReplayScenario<
     readonly runEffectWorker?: boolean;
     /** Replays a provider wake turn as a continuation run, as the live runtime does. */
     readonly runContinuationWorker?: boolean;
+    /**
+     * Shares the caller's settings with the runtime. Layer memoization hands
+     * every consumer one instance of each service, so a test that edits
+     * settings must pass the same layer it reads them through.
+     */
+    readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
@@ -227,6 +233,12 @@ export function makeOrchestratorV2ProviderReplayLayer<
     readonly runEffectWorker?: boolean;
     /** Replays a provider wake turn as a continuation run, as the live runtime does. */
     readonly runContinuationWorker?: boolean;
+    /**
+     * Shares the caller's settings with the runtime. Layer memoization hands
+     * every consumer one instance of each service, so a test that edits
+     * settings must pass the same layer it reads them through.
+     */
+    readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
   } = {},
 ): Layer.Layer<
   OrchestratorV2 | OrchestrationEffectWorkerV2,
@@ -248,6 +260,12 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     readonly runEffectWorker?: boolean;
     /** Replays a provider wake turn as a continuation run, as the live runtime does. */
     readonly runContinuationWorker?: boolean;
+    /**
+     * Shares the caller's settings with the runtime. Layer memoization hands
+     * every consumer one instance of each service, so a test that edits
+     * settings must pass the same layer it reads them through.
+     */
+    readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
   } = {},
 ): Layer.Layer<
   OrchestratorV2 | OrchestrationEffectWorkerV2 | EventSinkV2 | ProviderSessionManagerV2,
@@ -269,9 +287,11 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const continuationRequestsLayer =
     options.runContinuationWorker === true ? providerContinuationRequestsLayer : Layer.empty;
   const registryLayer = providedRegistryLayer.pipe(Layer.provide(continuationRequestsLayer));
-  const serverSettingsLayer = ServerSettingsService.layerTest({
-    enableLegacyTokenStreaming: options.enableLegacyTokenStreaming ?? false,
-  }).pipe(Layer.orDie);
+  const serverSettingsLayer =
+    options.serverSettingsLayer ??
+    ServerSettingsService.layerTest({
+      enableLegacyTokenStreaming: options.enableLegacyTokenStreaming ?? false,
+    }).pipe(Layer.orDie);
   const storesLayer = Layer.mergeAll(
     eventStoreLayer,
     projectionStoreLayer,
@@ -411,7 +431,18 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         providerSessionManagerProvided,
         providerSwitchServiceProvided,
         runExecutionServiceProvided,
+        serverSettingsLayer,
         threadForkServiceLayer,
+      ),
+    ),
+  );
+  const threadManagementProvided = threadManagementServiceLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        orchestratorProvided,
+        providerSessionManagerProvided,
+        serverSettingsLayer,
+        commandReceiptStoreProvided,
       ),
     ),
   );
@@ -425,13 +456,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         providerTurnStartServiceProvided,
         runtimeRequestServiceProvided,
         backgroundWorkSettleLayer.pipe(Layer.provide(orchestratorProvided)),
-        delegatedTasksStopLayer.pipe(
-          Layer.provide(
-            threadManagementServiceLayer.pipe(
-              Layer.provide(Layer.merge(orchestratorProvided, providerSessionManagerProvided)),
-            ),
-          ),
-        ),
+        delegatedTasksStopLayer.pipe(Layer.provide(threadManagementProvided)),
       ),
     ),
   );
@@ -442,13 +467,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     options.runContinuationWorker === true
       ? providerContinuationWorkerLayer.pipe(
           Layer.provide(
-            Layer.mergeAll(
-              continuationRequestsLayer,
-              threadManagementServiceLayer.pipe(
-                Layer.provide(Layer.merge(orchestratorProvided, providerSessionManagerProvided)),
-              ),
-              idAllocatorLayer,
-            ),
+            Layer.mergeAll(continuationRequestsLayer, threadManagementProvided, idAllocatorLayer),
           ),
         )
       : Layer.empty;

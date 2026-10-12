@@ -247,14 +247,21 @@ export function ScheduledTasksSettings(props: {
   const runTaskNow = useAtomCommand(serverEnvironment.runScheduledTaskNow, {
     label: "scheduled task run now",
   });
+  const [draft, setDraft] = useState<DraftState>(() => EMPTY_DRAFT);
+  // The task runs in the draft's project, so its picker follows that
+  // project's provider switches, not just the machine's.
+  const draftProjectId = draft.projectId === "" ? null : (draft.projectId as ProjectId);
   const instanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(providers),
+          settings,
+          draftProjectId,
+        ),
       ),
-    [providers, settings],
+    [providers, settings, draftProjectId],
   );
-  const [draft, setDraft] = useState<DraftState>(() => EMPTY_DRAFT);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deliveriesTask, setDeliveriesTask] = useState<ScheduledTask | null>(null);
@@ -264,8 +271,9 @@ export function ScheduledTasksSettings(props: {
     draft.editingId === null ? null : (tasks.find((task) => task.id === draft.editingId) ?? null);
   const selectedProjectTitle = projects.find((project) => project.id === draft.projectId)?.title;
 
-  const firstInstanceId = instanceEntries[0]?.instanceId;
-  const firstModelSlug = instanceEntries[0]?.models[0]?.slug;
+  const firstEntry = instanceEntries.find((entry) => entry.enabled) ?? instanceEntries[0];
+  const firstInstanceId = firstEntry?.instanceId;
+  const firstModelSlug = firstEntry?.models[0]?.slug;
   const defaultModelSelection = useMemo(
     () =>
       firstInstanceId && firstModelSlug
@@ -273,7 +281,14 @@ export function ScheduledTasksSettings(props: {
         : null,
     [firstInstanceId, firstModelSlug],
   );
-  const activeSelection = draft.modelSelection ?? defaultModelSelection;
+  // A saved choice on an instance the project turned off falls back to the default.
+  const activeSelection =
+    draft.modelSelection &&
+    instanceEntries.some(
+      (entry) => entry.instanceId === draft.modelSelection?.instanceId && entry.enabled,
+    )
+      ? draft.modelSelection
+      : defaultModelSelection;
   const activeEntry = instanceEntries.find(
     (entry) => entry.instanceId === activeSelection?.instanceId,
   );
@@ -323,7 +338,7 @@ export function ScheduledTasksSettings(props: {
 
   const submit = useCallback(async () => {
     if (!environment || saving) return;
-    const modelSelection = draft.modelSelection ?? defaultModelSelection;
+    const modelSelection = activeSelection;
     if (
       !draft.title.trim() ||
       !draft.prompt.trim() ||
@@ -381,7 +396,7 @@ export function ScheduledTasksSettings(props: {
       return;
     }
     setDialogOpen(false);
-  }, [defaultModelSelection, draft, editingTask, environment, saving, upsertTask]);
+  }, [activeSelection, draft, editingTask, environment, saving, upsertTask]);
 
   const handleDelete = useCallback(
     async (task: ScheduledTask) => {

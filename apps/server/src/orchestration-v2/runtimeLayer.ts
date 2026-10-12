@@ -243,6 +243,7 @@ const threadManagementProvided = threadManagementServiceLayer.pipe(
     Layer.mergeAll(
       orchestratorProvided,
       legacyV1ThreadImporterProvided,
+      commandReceiptStoreProvided,
       providerSessionManagerProvided,
     ),
   ),

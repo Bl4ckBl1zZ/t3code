@@ -35,11 +35,14 @@ import {
   type VcsStatusRemoteResult,
   VcsStatusResult,
   ModelSelection,
+  type ProjectId,
   SourceControlProviderError,
   type SourceControlProviderKind,
   type SourceControlWritingStyleSettings,
+  type ThreadId,
   type ThreadPullRequestKey,
 } from "@t3tools/contracts";
+import { resolveProjectTextGenerationModelSelection } from "@t3tools/shared/serverSettings";
 import {
   detectSourceControlProviderFromGitRemoteUrl,
   mergeGitStatusParts,
@@ -72,6 +75,8 @@ import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -720,6 +725,22 @@ export const make = Effect.gen(function* () {
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
+  const threadShells = yield* ProjectionStore.ProjectionStoreV2;
+  const projects = yield* ProjectService.ProjectService;
+  /** The acting project, so its provider switches apply. Best effort: `null` reads the machine. */
+  const actingProjectId = (input: {
+    readonly cwd: string;
+    readonly threadId?: ThreadId | undefined;
+  }) =>
+    input.threadId !== undefined
+      ? threadShells.getThreadShell(input.threadId).pipe(
+          Effect.map((thread): ProjectId | null => thread?.projectId ?? null),
+          Effect.orElseSucceed(() => null),
+        )
+      : projects.getByWorkspaceRoot(input.cwd).pipe(
+          Effect.map((project): ProjectId | null => Option.getOrNull(project)?.id ?? null),
+          Effect.orElseSucceed(() => null),
+        );
   const createWorktree: GitManager["Service"]["createWorktree"] = Effect.fn(
     "GitManager.createWorktree",
   )(function* (input) {
@@ -2880,11 +2901,12 @@ export const make = Effect.gen(function* () {
         let commitMessageForStep = input.commitMessage;
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
+        const projectId = yield* actingProjectId(input);
         const textGenerationSettings = yield* serverSettingsService.getSettings.pipe(
           Effect.flatMap((settings) =>
             settings.sourceControlWriterModelSelection === null
               ? Effect.succeed({
-                  modelSelection: settings.textGenerationModelSelection,
+                  modelSelection: resolveProjectTextGenerationModelSelection(settings, projectId),
                   style: settings.sourceControlWritingStyle,
                 })
               : providerRegistry.getProviders.pipe(
@@ -2892,6 +2914,7 @@ export const make = Effect.gen(function* () {
                     modelSelection: ServerSettings.resolveSourceControlWriterModelSelection(
                       settings,
                       providers,
+                      projectId,
                     ),
                     style: settings.sourceControlWritingStyle,
                   })),

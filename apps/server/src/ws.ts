@@ -1609,7 +1609,8 @@ const makeWsRpcLayer = (
                       // Attachment and folder failures say why.
                       message:
                         cause._tag === "AttachmentClaimError" ||
-                        cause._tag === "ProjectProvisionError"
+                        cause._tag === "ProjectProvisionError" ||
+                        cause._tag === "ThreadManagementProviderInstanceDisabledError"
                           ? cause.message
                           : "Failed to launch thread",
                       cause,

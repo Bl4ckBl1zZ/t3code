@@ -10,6 +10,7 @@ import {
   ProjectBrowserAccessSettings,
 } from "./ProjectBooleanSettings";
 import { PullRequestMergeMethodSettings } from "./PullRequestMergeMethodSettings";
+import { ProjectProviderSettings } from "./ProjectProviderSettings";
 import type { ProjectIconOverride } from "@t3tools/contracts";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
@@ -470,9 +471,13 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const instanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(serverProviders),
+          settings,
+          representative.id,
+        ),
       ),
-    [serverProviders, settings],
+    [representative.id, serverProviders, settings],
   );
   const modelOptionsByInstance = useMemo(
     () => getCustomModelOptionsByInstance(settings, serverProviders),
@@ -491,6 +496,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             applyProviderInstanceSettings(
               deriveProviderInstanceEntries(config.providers),
               config.settings,
+              member.id,
             ).find((candidate) => candidate.instanceId === selection.instanceId);
           const options =
             config &&
@@ -938,6 +944,8 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             }
           />
         </SettingsSection>
+
+        <ProjectProviderSettings projects={group.memberProjects} />
 
         <SettingsSection
           title="Checkout"

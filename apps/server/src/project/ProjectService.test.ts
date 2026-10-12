@@ -24,6 +24,7 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as ProjectService from "./ProjectService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
 const workspacePathsLayer = Layer.succeed(WorkspacePaths.WorkspacePaths, {
@@ -60,6 +61,7 @@ const makeTestLayer = (
     Layer.provideMerge(ProjectEnrichmentService.layer),
     Layer.provideMerge(workspacePathsLayer),
     Layer.provideMerge(projectMetadataLayer),
+    Layer.provideMerge(ServerSettings.layerTest()),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-test-" })),
     Layer.provide(NodeServices.layer),
@@ -189,11 +191,25 @@ it.layer(TestLayer)("ProjectService", (it) => {
         [projectId],
       );
 
+      // Deleting a project drops its provider switches, so a machine-disabled
+      // instance it turned on does not stay alive for a project that is gone.
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const keptProjectId = ProjectId.make("project:kept");
+      yield* settings.updateSettings({
+        projectProviderInstanceOverrides: {
+          [projectId]: { [ProviderInstanceId.make("codex")]: { enabled: true } },
+          [keptProjectId]: { [ProviderInstanceId.make("codex")]: { enabled: false } },
+        },
+      });
+
       const deleted = yield* service.delete({
         commandId: CommandId.make("command:project:delete"),
         projectId,
       });
       assert.isNotNull(deleted.deletedAt);
+      assert.deepEqual((yield* settings.getSettings).projectProviderInstanceOverrides, {
+        [keptProjectId]: { [ProviderInstanceId.make("codex")]: { enabled: false } },
+      });
       assert.isTrue(Option.isNone(yield* service.getById(projectId)));
       assert.isTrue(Option.isSome(yield* service.getById(projectId, { includeDeleted: true })));
       assert.deepEqual((yield* service.snapshot).projects, []);

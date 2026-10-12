@@ -36,6 +36,8 @@ import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
@@ -135,7 +137,15 @@ it.effect("task_cancel ends a delegated child's background native subagent", () 
       );
       const layerOrchestration = Layer.merge(
         layerOrchestrator,
-        ThreadManagementService.layer.pipe(Layer.provide(layerOrchestrator)),
+        ThreadManagementService.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              layerOrchestrator,
+              ServerSettings.layerTest(),
+              CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
+            ),
+          ),
+        ),
       );
       const layerTest = OrchestratorMcpService.layer.pipe(
         Layer.provideMerge(layerOrchestration),

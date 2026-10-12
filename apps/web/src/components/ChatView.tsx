@@ -5,6 +5,7 @@ import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSki
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
+import { resolveProjectProviderInstanceEnabled } from "@t3tools/shared/serverSettings";
 import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { resolveRestingComposerInset } from "./chat/composerRestingState";
@@ -3451,6 +3452,7 @@ function ChatViewContent(props: ChatViewProps) {
         providers: applyProviderInstanceSettings(
           deriveProviderInstanceEntries(providerStatuses),
           settings,
+          activeProject?.id ?? null,
         ),
         instanceId: activeProviderInstanceId,
         lockedInstanceId: lockedProvider
@@ -3464,6 +3466,7 @@ function ChatViewContent(props: ChatViewProps) {
       lockedProvider,
       providerStatuses,
       settings,
+      activeProject?.id,
     ],
   );
   // Answering Claude's own resume prompt with "Don't ask again" also stops
@@ -3665,7 +3668,14 @@ function ChatViewContent(props: ChatViewProps) {
                     (activeProviderInstanceId === null ||
                       provider.instanceId === activeProviderInstanceId) &&
                     provider.driver === selectedProvider &&
-                    provider.enabled &&
+                    // The destination project may override the machine switch.
+                    (environment.serverConfig?.settings
+                      ? resolveProjectProviderInstanceEnabled(
+                          environment.serverConfig.settings,
+                          candidate.projectId,
+                          provider.instanceId,
+                        )
+                      : provider.enabled) &&
                     provider.installed &&
                     provider.status !== "error" &&
                     provider.auth.status !== "unauthenticated" &&
@@ -9586,6 +9596,7 @@ function ChatViewContent(props: ChatViewProps) {
                                 activeProject?.defaultModelSelection
                               }
                               activeThreadModelSelection={activeThread?.modelSelection}
+                              activeProjectId={activeProject?.id ?? null}
                               onThreadModelOptionsChange={onThreadModelOptionsChange}
                               threadDetailLoading={isServerThread && serverProjection === null}
                               activeContextWindow={activeContextWindow}

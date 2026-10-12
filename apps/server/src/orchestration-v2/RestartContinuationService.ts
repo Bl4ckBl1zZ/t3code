@@ -130,6 +130,20 @@ export const make = Effect.gen(function* () {
                 dispatchMode: { type: "start_immediately" },
               })
               .pipe(
+                // The project turned this instance off since the restart: no
+                // turn resumes, and that is expected rather than a failure.
+                Effect.catchTags({
+                  ThreadManagementProviderInstanceDisabledError: (error) =>
+                    clear([marker]).pipe(
+                      Effect.andThen(
+                        Effect.logInfo("restart continuation skipped: provider off for project", {
+                          threadId: shell.id,
+                          projectId: error.projectId,
+                          instanceId: error.instanceId,
+                        }),
+                      ),
+                    ),
+                }),
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
                     ? Effect.interrupt

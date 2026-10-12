@@ -32,6 +32,7 @@ import {
 import type {
   EnvironmentId,
   ModelSelection,
+  ProjectId,
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -719,6 +720,8 @@ export interface ChatComposerProps {
   providerStatuses: ServerProvider[];
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
+  /** The active project, so the picker can fold in its provider switches. */
+  activeProjectId: ProjectId | null;
   /**
    * Persists a model-option change (effort, context window, …) onto a server
    * thread. Supplied only on the server route; draft routes fall through to the
@@ -851,6 +854,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerStatuses,
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
+    activeProjectId,
     onThreadModelOptionsChange,
     activeContextWindow,
     onCompactContext,
@@ -1020,11 +1024,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () =>
       filterProviderInstanceEntriesForScope(
         sortProviderInstanceEntries(
-          applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+          applyProviderInstanceSettings(
+            deriveProviderInstanceEntries(providerStatuses),
+            settings,
+            activeProjectId,
+          ),
         ),
         hermesProviderScope,
       ),
-    [hermesProviderScope, providerStatuses, settings],
+    [activeProjectId, hermesProviderScope, providerStatuses, settings],
   );
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =

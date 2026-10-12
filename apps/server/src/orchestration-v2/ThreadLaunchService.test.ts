@@ -80,13 +80,16 @@ interface HarnessOptions {
 function makeHarness(options: HarnessOptions = {}) {
   const database = SqlitePersistenceMemory;
   const registry = ProviderAdapterRegistry.makeLayer([adapter]);
+  const settings = ServerSettings.layerTest(options.serverSettings).pipe(Layer.orDie);
   const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
     { name: "thread-launch" },
     registry,
-    { databaseLayer: database, runEffectWorker: false },
+    { databaseLayer: database, runEffectWorker: false, serverSettingsLayer: settings },
   );
-  const threadManagement = ThreadManagement.layer.pipe(Layer.provide(orchestrator));
   const receipts = CommandReceiptStore.layer.pipe(Layer.provide(database));
+  const threadManagement = ThreadManagement.layer.pipe(
+    Layer.provide(Layer.mergeAll(orchestrator, settings, receipts)),
+  );
   const outbox = EffectOutbox.layer.pipe(Layer.provide(database));
   const createWorktree = vi.fn(
     options.createWorktree ??
@@ -137,14 +140,14 @@ function makeHarness(options: HarnessOptions = {}) {
       generateThreadTitle,
       generateBranchName,
     }),
-    ServerSettings.layerTest(options.serverSettings),
+    settings,
     makeProviderRegistryLayer(options.providers),
   );
   const launch = ThreadLaunch.layer.pipe(
     Layer.provide(Layer.mergeAll(externalServices, threadManagement, receipts, IdAllocator.layer)),
   );
   return {
-    layer: Layer.mergeAll(launch, threadManagement, outbox, database),
+    layer: Layer.mergeAll(launch, threadManagement, outbox, database, settings),
     createWorktree,
     renameBranch,
     generateBranchName,
@@ -908,6 +911,9 @@ it.effect("rejects skipping workspace preparation for a worktree strategy", () =
         prepareWorkspace: false,
       });
       const failure = yield* launches.launch(input).pipe(Effect.flip);
+      if (failure._tag !== "ThreadLaunchError") {
+        assert.fail(`expected ThreadLaunchError, got ${failure._tag}`);
+      }
       assert.equal(failure.operation, "provision-worktree");
       assert.match(
         String(failure.cause),
@@ -1519,3 +1525,65 @@ it.effect.each([
     }).pipe(Effect.provide(harness.layer));
   }),
 );
+
+it.effect("refuses a launch when the project turned the model's provider instance off", () => {
+  const harness = makeHarness({
+    serverSettings: {
+      projectProviderInstanceOverrides: {
+        [projectId]: { [modelSelection.instanceId]: { enabled: false } },
+      },
+    },
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const failed = yield* launches
+      .launch(
+        launchInput({
+          command: "command:launch:project-disabled-instance",
+          thread: "thread:launch:project-disabled-instance",
+          message: "Hello",
+        }),
+      )
+      .pipe(Effect.flip);
+    if (failed._tag !== "ThreadManagementProviderInstanceDisabledError") {
+      assert.fail(`expected ThreadManagementProviderInstanceDisabledError, got ${failed._tag}`);
+    }
+    assert.equal(failed.projectId, projectId);
+    assert.equal(failed.instanceId, modelSelection.instanceId);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("replays an accepted launch after the project turns the instance off", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const input = launchInput({
+      command: "command:launch:retry-after-disable",
+      thread: "thread:launch:retry-after-disable",
+      message: "Hello",
+    });
+    const first = yield* launches.launch(input);
+
+    yield* settings.updateSettings({
+      projectProviderInstanceOverrides: {
+        [projectId]: { [modelSelection.instanceId]: { enabled: false } },
+      },
+    });
+
+    const retry = yield* launches.launch(input);
+    assert.equal(retry.threadId, first.threadId);
+    assert.isTrue(retry.resumed);
+
+    const fresh = yield* launches
+      .launch(
+        launchInput({
+          command: "command:launch:fresh-after-disable",
+          thread: "thread:launch:fresh-after-disable",
+          message: "Hello",
+        }),
+      )
+      .pipe(Effect.flip);
+    assert.equal(fresh._tag, "ThreadManagementProviderInstanceDisabledError");
+  }).pipe(Effect.provide(harness.layer));
+});

@@ -5317,3 +5317,101 @@ it.layer(TestLayer)("V2 pull request watch", (it) => {
     }),
   );
 });
+
+const queueDisabledProjectId = ProjectId.make("runtime-layer-queue-disabled-project");
+
+const ProjectDisabledInstanceTestLayer = Layer.merge(
+  OrchestrationV2LayerLive,
+  OrchestrationV2EventSinkLayerLive,
+).pipe(
+  Layer.provide(mcpSessionRegistryTestLayer),
+  Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provide(CheckpointStoreTestLayer),
+  Layer.provide(ServerConfigLayer),
+  Layer.provide(
+    ServerSettingsService.layerTest({
+      projectProviderInstanceOverrides: {
+        [queueDisabledProjectId]: { [modelSelection.instanceId]: { enabled: false } },
+      },
+    }),
+  ),
+  Layer.provide(TestProviderInstanceRegistry),
+  Layer.provide(textGenerationUnavailableLayer),
+  Layer.provide(NodeServices.layer),
+);
+
+it.layer(ProjectDisabledInstanceTestLayer)("queue on a project-disabled instance", (it) => {
+  it.effect("holds a queued run instead of starting it on an instance the project turned off", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-queue-disabled-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queue-disabled-create"),
+        threadId,
+        projectId: queueDisabledProjectId,
+        title: "Queue on a disabled instance",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-queue-disabled",
+      });
+      // Both messages were accepted before the project turned the provider
+      // off; dispatching on the orchestrator directly skips the chokepoint.
+      for (const [suffix, dispatchMode] of [
+        ["active", { type: "start_immediately" }],
+        ["queued", { type: "queue_after_active" }],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`runtime-layer-queue-disabled-${suffix}`),
+          threadId,
+          messageId: MessageId.make(`runtime-layer-queue-disabled-${suffix}`),
+          text: suffix,
+          attachments: [],
+          modelSelection,
+          dispatchMode,
+        });
+      }
+
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const queuedRun = before.runs.find((run) => run.status === "queued");
+      assert.isDefined(queuedRun);
+      const activeRun = before.runs.find((run) => run.id !== queuedRun.id);
+      assert.isDefined(activeRun);
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-queue-disabled-active-completed"),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            ...(activeRun.rootNodeId === null ? {} : { nodeId: activeRun.rootNodeId }),
+            providerInstanceId: activeRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...activeRun, status: "completed", completedAt: now },
+          },
+        ],
+      });
+
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("runtime-layer-queue-disabled-resume"),
+        threadId,
+      });
+
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      const held = after.runs.find((run) => run.id === queuedRun.id);
+      assert.equal(held?.status, "queued");
+      assert.isTrue(held?.queueHeld);
+    }),
+  );
+});

@@ -19,6 +19,7 @@ import { createNewProject } from "./NewProject.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as ProjectService from "./ProjectService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
 const enrichmentLayer = ProjectEnrichmentService.layer.pipe(
@@ -39,6 +40,7 @@ const TestLayer = Layer.mergeAll(
   ProjectServiceLayerLive.pipe(
     Layer.provide(enrichmentLayer),
     Layer.provide(WorkspacePaths.layer),
+    Layer.provide(ServerSettings.layerTest()),
     Layer.provide(SqlitePersistenceMemory),
   ),
   GitVcsDriver.layer.pipe(Layer.provide(VcsProcess.layer)),

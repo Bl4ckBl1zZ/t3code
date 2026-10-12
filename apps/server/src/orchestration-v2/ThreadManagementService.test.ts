@@ -1,4 +1,4 @@
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
@@ -31,6 +31,8 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerSettings from "../serverSettings.ts";
+import { CommandReceiptStoreV2, type CommandReceiptV2 } from "./CommandReceiptStore.ts";
 import { DispatchModeLimit, type DispatchModeRefusal } from "./DispatchModeLimit.ts";
 import { OrchestratorProjectionError, OrchestratorV2 } from "./Orchestrator.ts";
 import {
@@ -51,11 +53,29 @@ import {
   ThreadManagementThreadNotInterruptibleError,
   ThreadManagementThreadArchivedError,
   ThreadManagementNoSteerableRunError,
+  ThreadManagementProviderInstanceDisabledError,
   withCreationProvenance,
 } from "./ThreadManagementService.ts";
 
+const layerReceiptsTest = Layer.sync(CommandReceiptStoreV2, () => {
+  const receipts = new Map<CommandId, CommandReceiptV2>();
+  return CommandReceiptStoreV2.of({
+    insertIfAbsent: (receipt) =>
+      Effect.sync(() => {
+        if (receipts.has(receipt.commandId)) return false;
+        receipts.set(receipt.commandId, receipt);
+        return true;
+      }),
+    upsert: (receipt) => Effect.sync(() => void receipts.set(receipt.commandId, receipt)),
+    getByCommandId: (commandId) => Effect.sync(() => Option.fromNullishOr(receipts.get(commandId))),
+  });
+});
+
+const layerWithSettings = (settingsLayer = ServerSettings.layerTest()) =>
+  threadManagementLayer.pipe(Layer.provide(settingsLayer), Layer.provideMerge(layerReceiptsTest));
+
 // Only stopWorkflow reaches provider sessions.
-const layer = threadManagementLayer.pipe(Layer.provide(Layer.mock(ProviderSessionManagerV2)({})));
+const layer = layerWithSettings().pipe(Layer.provide(Layer.mock(ProviderSessionManagerV2)({})));
 
 it("stamps authoritative provenance on commands that create threads or messages", () => {
   const command: OrchestrationV2Command = {
@@ -286,6 +306,174 @@ it("derives thread management messages from structural error attributes", () => 
   expect(durableProjectionFailure.message).toBe(
     `Message ${messageId} was accepted on thread ${threadId} without a durable run projection.`,
   );
+});
+
+describe("per-project provider instance switches", () => {
+  const projectId = ProjectId.make("project:thread-management:chokepoint");
+  const threadId = ThreadId.make("thread:thread-management:chokepoint");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const codex = ProviderDriverKind.make("codex");
+  const layerChokepoint = (
+    settings: Parameters<typeof ServerSettings.layerTest>[0],
+    dispatched: Array<string> = [],
+  ) =>
+    layerWithSettings(ServerSettings.layerTest(settings)).pipe(
+      Layer.provide(Layer.mock(ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(OrchestratorV2)({
+          getThreadRecords: () =>
+            Effect.succeed({
+              thread: {
+                id: threadId,
+                projectId,
+                deletedAt: null,
+                modelSelection: { instanceId, model: "test" },
+              },
+            } as unknown as OrchestrationV2ThreadProjection),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command.type);
+              return { sequence: 1, storedEvents: [] } as never;
+            }),
+        }),
+      ),
+    );
+  const message = (commandId: CommandId): OrchestrationV2ServerCommand => ({
+    type: "message.dispatch",
+    commandId,
+    threadId,
+    messageId: MessageId.make(`message:${commandId}`),
+    text: "Background task completed.",
+    attachments: [],
+    dispatchMode: { type: "queue_after_active" },
+    createdBy: "agent",
+    creationSource: "server",
+  });
+
+  it.effect("refuses a new turn when the project turned the instance off", () => {
+    const dispatched: Array<string> = [];
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagementService;
+      const error = yield* Effect.flip(
+        threads.dispatch(message(CommandId.make("command:chokepoint-disabled"))),
+      );
+      expect(error).toBeInstanceOf(ThreadManagementProviderInstanceDisabledError);
+      expect(error).toMatchObject({ projectId, instanceId });
+      expect(error.message).toBe(
+        `Provider instance "${instanceId}" is disabled for project ${projectId}.`,
+      );
+      expect(dispatched).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layerChokepoint(
+          {
+            providerInstances: { [instanceId]: { driver: codex, enabled: true } },
+            projectProviderInstanceOverrides: {
+              [projectId]: { [instanceId]: { enabled: false } },
+            },
+          },
+          dispatched,
+        ),
+      ),
+    );
+  });
+
+  it.effect("lets a project start a turn on an instance the machine turned off", () => {
+    const dispatched: Array<string> = [];
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagementService;
+      yield* threads.dispatch(message(CommandId.make("command:chokepoint-enabled")));
+      expect(dispatched).toEqual(["message.dispatch"]);
+    }).pipe(
+      Effect.provide(
+        layerChokepoint(
+          {
+            providerInstances: { [instanceId]: { driver: codex, enabled: false } },
+            projectProviderInstanceOverrides: {
+              [projectId]: { [instanceId]: { enabled: true } },
+            },
+          },
+          dispatched,
+        ),
+      ),
+    );
+  });
+
+  it.effect("inherits the machine value when the project has no override", () =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService;
+      const error = yield* Effect.flip(
+        threads.assertProviderInstanceEnabled({
+          projectId,
+          commandId: CommandId.make("command:chokepoint-inherit"),
+          instanceId,
+        }),
+      );
+      expect(error).toBeInstanceOf(ThreadManagementProviderInstanceDisabledError);
+    }).pipe(
+      Effect.provide(
+        layerChokepoint({
+          providerInstances: { [instanceId]: { driver: codex, enabled: false } },
+        }),
+      ),
+    ),
+  );
+
+  it.effect("replays an already-accepted command even though the instance is now off", () => {
+    const dispatched: Array<string> = [];
+    const commandId = CommandId.make("command:chokepoint-replay");
+    return Effect.gen(function* () {
+      const receipts = yield* CommandReceiptStoreV2;
+      yield* receipts.insertIfAbsent({
+        commandId,
+        threadId,
+        commandType: "message.dispatch",
+        acceptedAt: yield* DateTime.now,
+        resultSequence: 1,
+        status: "accepted",
+        error: null,
+      });
+      const threads = yield* ThreadManagementService;
+      yield* threads.dispatch(message(commandId));
+      expect(dispatched).toEqual(["message.dispatch"]);
+    }).pipe(
+      Effect.provide(
+        layerChokepoint(
+          {
+            providerInstances: { [instanceId]: { driver: codex, enabled: true } },
+            projectProviderInstanceOverrides: {
+              [projectId]: { [instanceId]: { enabled: false } },
+            },
+          },
+          dispatched,
+        ),
+      ),
+    );
+  });
+
+  it.effect("never gates commands that cannot start provider work", () => {
+    const dispatched: Array<string> = [];
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagementService;
+      yield* threads.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("command:chokepoint-settle"),
+        threadId,
+      });
+      expect(dispatched).toEqual(["thread.settle"]);
+    }).pipe(
+      Effect.provide(
+        layerChokepoint(
+          {
+            projectProviderInstanceOverrides: {
+              [projectId]: { [instanceId]: { enabled: false } },
+            },
+          },
+          dispatched,
+        ),
+      ),
+    );
+  });
 });
 
 it.effect("classifies projection infrastructure failures separately from a missing thread", () => {
@@ -548,7 +736,7 @@ it.effect.each([
                     }),
           }),
     } as unknown as ProviderAdapterV2SessionRuntime;
-    const layerTest = threadManagementLayer.pipe(
+    const layerTest = layerWithSettings().pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(OrchestratorV2)({

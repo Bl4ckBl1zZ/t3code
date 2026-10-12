@@ -38,7 +38,10 @@ import {
   ThreadLaunchBaseRefError,
   ThreadLaunchService,
 } from "../orchestration-v2/ThreadLaunchService.ts";
-import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import {
+  ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementService,
+} from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectService } from "../project/ProjectService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
@@ -1111,6 +1114,8 @@ describe("OrchestratorMcpService provider resolution", () => {
         NodeServices.layer,
         noGitWorktrees,
         Layer.mock(ThreadManagementService)({
+          hasReceipt: () => Effect.succeed(false),
+          isProviderInstanceEnabledForProject: () => Effect.succeed(true),
           getThreadProjection: (threadId) =>
             Effect.succeed(
               threadId === parentThreadId
@@ -1312,6 +1317,9 @@ describe("OrchestratorMcpService provider resolution", () => {
             NodeServices.layer,
             noGitWorktrees,
             Layer.mock(ThreadManagementService)({
+              hasReceipt: () => Effect.succeed(false),
+              isProviderInstanceEnabledForProject: () => Effect.succeed(true),
+              assertProviderInstanceEnabled: () => Effect.void,
               getThreadProjection: (threadId) =>
                 Effect.succeed(
                   threadId === parentThreadId
@@ -1431,6 +1439,143 @@ describe("OrchestratorMcpService provider resolution", () => {
           }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
         }
       }),
+  );
+  it.effect("refuses delegation to a provider the project turned off", () =>
+    Effect.gen(function* () {
+      const dependencies = Layer.mergeAll(
+        NodeServices.layer,
+        noGitWorktrees,
+        Layer.mock(ThreadManagementService)({
+          hasReceipt: () => Effect.succeed(false),
+          isProviderInstanceEnabledForProject: () => Effect.succeed(true),
+          getThreadProjection: () => Effect.succeed(parentProjection([])),
+          // ThreadManagementService.dispatch is the chokepoint that refuses.
+          dispatch: () =>
+            Effect.fail(
+              new ThreadManagementProviderInstanceDisabledError({
+                projectId,
+                instanceId: codexInstanceId,
+              }),
+            ),
+        }),
+        providerRegistryLayer([
+          providerSnapshot({
+            instanceId: codexInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            model: "gpt-5.4",
+          }),
+        ]),
+        adapterRegistryLayer([codexInstanceId]),
+        ServerSettings.layerTest(),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService)({}),
+        Layer.mock(ProjectService)({}),
+        Layer.mock(ThreadLaunchService)({}),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const error = yield* service
+          .delegateTask(scope, {
+            task: "Summarize the diff.",
+            target: { providerInstanceId: codexInstanceId },
+            mode: "async",
+            clientRequestId: "delegate-project-disabled",
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.code, "invalid_request");
+        assert.include(error.message, "is disabled for project");
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+    }),
+  );
+
+  it.effect("driver-only delegation skips an instance the project turned off", () =>
+    Effect.gen(function* () {
+      const altInstanceId = ProviderInstanceId.make("codex-alt");
+      const driver = ProviderDriverKind.make("codex");
+      const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const task = {
+        id: taskId,
+        threadId: parentThreadId,
+        runId: parentRunId,
+        parentNodeId,
+        origin: "app_owned",
+        createdBy: "agent",
+        driver,
+        providerInstanceId: altInstanceId,
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Summarize the diff.",
+        title: null,
+        model: "codex-alt-model",
+        status: "running",
+        result: null,
+        startedAt: null,
+        completedAt: null,
+      };
+      let delegated = false;
+      const dependencies = Layer.mergeAll(
+        NodeServices.layer,
+        noGitWorktrees,
+        Layer.mock(ThreadManagementService)({
+          hasReceipt: () => Effect.succeed(false),
+          // The parent's own instance is off for this project; its peer is on.
+          isProviderInstanceEnabledForProject: ({ instanceId }) =>
+            Effect.succeed(instanceId !== codexInstanceId),
+          getThreadProjection: (threadId) =>
+            Effect.succeed(
+              threadId === parentThreadId
+                ? parentProjection(delegated ? [task] : [])
+                : childProjection,
+            ),
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  delegated = true;
+                }),
+              ),
+              Effect.as({
+                sequence: 1,
+                storedEvents: [
+                  {
+                    sequence: 1,
+                    commandId: null,
+                    event: { type: "subagent.updated", payload: task },
+                  },
+                ],
+              } as never),
+            ),
+        }),
+        providerRegistryLayer([
+          providerSnapshot({ instanceId: codexInstanceId, driver, model: "gpt-5.4" }),
+          providerSnapshot({ instanceId: altInstanceId, driver, model: "codex-alt-model" }),
+        ]),
+        adapterRegistryLayer([codexInstanceId, altInstanceId]),
+        ServerSettings.layerTest(),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService)({}),
+        Layer.mock(ProjectService)({}),
+        Layer.mock(ThreadLaunchService)({}),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        yield* service.delegateTask(scope, {
+          task: "Summarize the diff.",
+          target: { driverKind: driver },
+          mode: "async",
+          clientRequestId: "delegate-driver-skips-disabled",
+        });
+        const commands = yield* Ref.get(dispatched);
+        assert.equal(commands.length, 1);
+        assert.equal(
+          (commands[0] as { modelSelection: { instanceId: string } }).modelSelection.instanceId,
+          altInstanceId,
+        );
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+    }),
   );
 });
 

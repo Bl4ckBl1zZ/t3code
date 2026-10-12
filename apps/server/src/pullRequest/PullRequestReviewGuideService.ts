@@ -331,8 +331,12 @@ const make = Effect.gen(function* () {
       ],
       { concurrency: "unbounded" },
     );
-    // The fork has no project-scoped setting overrides, so the server's settings apply.
-    const modelSelection = ServerSettings.resolveReviewGuideModelSelection(settings, providers);
+    // The machine's settings, with this project's provider switches applied.
+    const modelSelection = ServerSettings.resolveReviewGuideModelSelection(
+      settings,
+      providers,
+      input.projectId,
+    );
     // The checkout lives only as long as the model is reading it. The change's hunks are read
     // from it too, so the guide can be held to the lines the change actually touched.
     const { generated, change } = yield* checkoutHead(

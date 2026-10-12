@@ -82,6 +82,7 @@ import * as GitHubRepositoryApi from "./sourceControl/GitHubRepositoryApi.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import * as ProjectProviderOverrideSweep from "./provider/ProjectProviderOverrideSweep.ts";
 import { layer as ProviderEventLoggersLive } from "./provider/Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -391,6 +392,8 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
 );
 
 const GitManagerLayerLive = GitManager.layer.pipe(
+  // The acting project decides which provider writes source control text.
+  Layer.provide(Layer.merge(ProjectionStore.layer, ProjectServiceLayerLive)),
   Layer.provideMerge(ProjectSetupScriptRunnerLayerLive),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
@@ -550,6 +553,11 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   HeldHooksWaker.layer,
   T3ProjectFileSyncLayerLive,
   ReplayRecordPruner.layer,
+  // Catches provider overrides left behind by a project deleted before the
+  // on-delete cleanup existed, or by a cleanup write that failed.
+  Layer.effectDiscard(ProjectProviderOverrideSweep.sweep).pipe(
+    Layer.provide(ProjectionProjectRepositoryLive),
+  ),
   Layer.effectDiscard(
     Effect.gen(function* () {
       yield* (yield* HermesWorkSyncService).start();

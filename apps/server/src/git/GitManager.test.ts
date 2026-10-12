@@ -50,6 +50,8 @@ import * as GitHubSourceControlProvider from "../sourceControl/GitHubSourceContr
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectTeardownScriptRunner from "../project/ProjectTeardownScriptRunner.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -740,6 +742,12 @@ function makeManager(input?: {
     Layer.succeed(TextGeneration.TextGeneration, textGeneration),
     Layer.mock(ProviderRegistry.ProviderRegistry)({
       getProviders: Effect.succeed([]),
+    }),
+    Layer.mock(ProjectionStore.ProjectionStoreV2)({
+      getThreadShell: () => Effect.succeed(null),
+    }),
+    Layer.mock(ProjectService.ProjectService)({
+      getByWorkspaceRoot: () => Effect.succeed(Option.none()),
     }),
     Layer.succeed(
       ProjectSetupScriptRunner.ProjectSetupScriptRunner,

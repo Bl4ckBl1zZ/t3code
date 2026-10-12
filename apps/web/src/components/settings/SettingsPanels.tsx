@@ -2433,6 +2433,7 @@ export function GeneralSettingsPanel() {
         serverProviders.filter((provider) => provider.supportsTextGeneration !== false),
       ),
       settings,
+      null,
     ),
   );
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(

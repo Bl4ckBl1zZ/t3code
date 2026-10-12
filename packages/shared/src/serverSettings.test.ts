@@ -21,6 +21,9 @@ import {
   isModelSelectionProviderEnabled,
   normalizePersistedServerSettingString,
   parsePersistedServerObservabilitySettings,
+  resolveProjectProviderInstanceEnabled,
+  resolveProjectTextGenerationModelSelection,
+  resolveReviewGuideModelSelection,
   resolveSourceControlWriterModelSelection,
 } from "./serverSettings.ts";
 
@@ -258,7 +261,7 @@ describe("serverSettings helpers", () => {
     expect(isModelSelectionProviderEnabled(settings, sourceControlWriterModelSelection)).toBe(
       false,
     );
-    expect(resolveSourceControlWriterModelSelection(settings)).toBe(
+    expect(resolveSourceControlWriterModelSelection(settings, undefined, null)).toBe(
       settings.textGenerationModelSelection,
     );
     expect(settings.sourceControlWriterModelSelection).toBe(sourceControlWriterModelSelection);
@@ -293,7 +296,7 @@ describe("serverSettings helpers", () => {
       skills: [],
     } satisfies ServerProvider;
 
-    expect(resolveSourceControlWriterModelSelection(settings, [unavailableProvider])).toBe(
+    expect(resolveSourceControlWriterModelSelection(settings, [unavailableProvider], null)).toBe(
       settings.textGenerationModelSelection,
     );
     expect(settings.sourceControlWriterModelSelection).toBe(sourceControlWriterModelSelection);
@@ -662,6 +665,141 @@ describe("agent credit removal on merge", () => {
     });
     expect(resolveProjectRemoveAgentCreditsOnMerge(reset, a)).toBe(true);
     expect(reset.projectRemoveAgentCreditsOnMergeOverrides).toEqual({ [b]: true });
+  });
+});
+
+describe("per-project provider instance switches", () => {
+  const projectId = ProjectId.make("project-a");
+  const otherProjectId = ProjectId.make("project-b");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const codex = ProviderDriverKind.make("codex");
+  const machine = (enabled: boolean) => ({
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: { [instanceId]: { driver: codex, enabled, config: {} } },
+  });
+  const readyProvider = {
+    instanceId,
+    driver: codex,
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-07-27T00:00:00.000Z",
+    availability: "available",
+    models: [],
+    slashCommands: [],
+    skills: [],
+  } satisfies ServerProvider;
+
+  it("inherits the machine value until the project sets one, in either direction", () => {
+    expect(resolveProjectProviderInstanceEnabled(machine(false), projectId, instanceId)).toBe(
+      false,
+    );
+    const turnedOn = applyServerSettingsPatch(machine(false), {
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: true } } },
+    });
+    expect(resolveProjectProviderInstanceEnabled(turnedOn, projectId, instanceId)).toBe(true);
+    expect(resolveProjectProviderInstanceEnabled(turnedOn, otherProjectId, instanceId)).toBe(false);
+    const turnedOff = applyServerSettingsPatch(machine(true), {
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: false } } },
+    });
+    expect(resolveProjectProviderInstanceEnabled(turnedOff, projectId, instanceId)).toBe(false);
+    // No project in scope always reads the machine.
+    expect(resolveProjectProviderInstanceEnabled(turnedOff, null, instanceId)).toBe(true);
+  });
+
+  it("falls back to the machine default for an instance with no settings entry", () => {
+    const settings = { ...DEFAULT_SERVER_SETTINGS, providerInstances: {} };
+    expect(resolveProjectProviderInstanceEnabled(settings, projectId, instanceId)).toBe(
+      resolveProjectProviderInstanceEnabled(settings, null, instanceId),
+    );
+  });
+
+  it("edits sparsely per instance and per project, and drops emptied projects", () => {
+    const other = ProviderInstanceId.make("claudeAgent");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      projectProviderInstanceOverrides: {
+        [projectId]: { [instanceId]: { enabled: false }, [other]: { enabled: true } },
+        [otherProjectId]: { [instanceId]: { enabled: true } },
+      },
+    });
+    const reset = applyServerSettingsPatch(initial, {
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: null } },
+    });
+    expect(reset.projectProviderInstanceOverrides).toEqual({
+      [projectId]: { [other]: { enabled: true } },
+      [otherProjectId]: { [instanceId]: { enabled: true } },
+    });
+    const emptied = applyServerSettingsPatch(reset, {
+      projectProviderInstanceOverrides: { [projectId]: { [other]: null } },
+    });
+    expect(emptied.projectProviderInstanceOverrides).toEqual({
+      [otherProjectId]: { [instanceId]: { enabled: true } },
+    });
+    const removed = applyServerSettingsPatch(initial, {
+      projectProviderInstanceOverrides: { [otherProjectId]: null },
+    });
+    expect(removed.projectProviderInstanceOverrides[otherProjectId]).toBeUndefined();
+    expect(
+      applyServerSettingsPatch(removed, { defaultAutoPull: true }).projectProviderInstanceOverrides,
+    ).toEqual(removed.projectProviderInstanceOverrides);
+  });
+
+  it("moves text generation off an instance the project turned off", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5"),
+      projectProviderInstanceOverrides: {
+        [projectId]: { [ProviderInstanceId.make("codex")]: { enabled: false } },
+      },
+    };
+    const resolved = resolveProjectTextGenerationModelSelection(settings, projectId);
+    expect(resolved.instanceId).not.toBe(ProviderInstanceId.make("codex"));
+    expect(resolveProjectProviderInstanceEnabled(settings, projectId, resolved.instanceId)).toBe(
+      true,
+    );
+    expect(resolveProjectTextGenerationModelSelection(settings, otherProjectId)).toBe(
+      settings.textGenerationModelSelection,
+    );
+    expect(resolveProjectTextGenerationModelSelection(settings, null)).toBe(
+      settings.textGenerationModelSelection,
+    );
+  });
+
+  it("falls back from a writer the project turned off, keeping it for other projects", () => {
+    const writer = createModelSelection(instanceId, "gpt-5.4-mini");
+    const settings = {
+      ...machine(true),
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: false } } },
+      sourceControlWriterModelSelection: writer,
+      reviewGuideModelSelection: writer,
+    };
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], projectId)).toBe(
+      settings.textGenerationModelSelection,
+    );
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], null)).toBe(writer);
+    expect(resolveReviewGuideModelSelection(settings, [readyProvider], projectId)).toBe(
+      settings.textGenerationModelSelection,
+    );
+    expect(resolveReviewGuideModelSelection(settings, [readyProvider], otherProjectId)).toBe(
+      writer,
+    );
+  });
+
+  it("keeps a writer on an instance the project turned on while the machine has it off", () => {
+    const writer = createModelSelection(instanceId, "gpt-5.4-mini");
+    const settings = {
+      ...machine(false),
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: true } } },
+      sourceControlWriterModelSelection: writer,
+    };
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], projectId)).toBe(
+      writer,
+    );
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], null)).toBe(
+      settings.textGenerationModelSelection,
+    );
   });
 });
 

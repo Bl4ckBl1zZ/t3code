@@ -19,6 +19,7 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import * as ProjectionProjects from "../persistence/Services/ProjectionProjects.ts";
 import { ProjectEnrichmentService, type ProjectEnrichment } from "./ProjectEnrichmentService.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 export interface ProjectCreateInput {
   readonly commandId: CommandId;
@@ -124,6 +125,7 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectionProjects.ProjectionProjectRepository;
   const projectEnrichment = yield* ProjectEnrichmentService;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+  const serverSettings = yield* ServerSettingsService;
 
   const toProject = (
     row: ProjectionProjects.ProjectionProject,
@@ -356,6 +358,21 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  // A machine-disabled provider instance that a deleted project once turned on
+  // must not stay probed and alive forever. Best effort: a settings write
+  // failure should not block the deletion it is cleaning up after, and the
+  // boot sweep (ProjectSettingsOverrideSweep) catches what this misses.
+  const clearProjectProviderOverrides = (projectId: ProjectId) =>
+    serverSettings.updateSettings({ projectProviderInstanceOverrides: { [projectId]: null } }).pipe(
+      Effect.asVoid,
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Failed to clear provider overrides for deleted project ${projectId}.`,
+          cause,
+        ),
+      ),
+    );
+
   const deleteProject: ProjectService["Service"]["delete"] = Effect.fn("ProjectService.delete")(
     function* (input) {
       const { projectId } = input;
@@ -376,7 +393,8 @@ export const make = Effect.gen(function* () {
           commandId: input.commandId,
           projectId,
         },
-        invalidateEnrichment(existing.value.workspaceRoot).pipe(
+        clearProjectProviderOverrides(projectId).pipe(
+          Effect.andThen(invalidateEnrichment(existing.value.workspaceRoot)),
           Effect.andThen(readCommitted(projectId)),
         ),
       );

@@ -61,16 +61,18 @@ export function SourceControlWritingSettingsSection() {
 
   const defaultModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const usesDedicatedModel = settings.sourceControlWriterModelSelection !== null;
+  // Machine-wide settings: no project is in scope here.
   const resolvedSourceControlWriterSelection = resolveSourceControlWriterModelSelection(
     settings,
     serverProviders,
+    null,
   );
   const activeSelection =
     resolvedSourceControlWriterSelection === settings.textGenerationModelSelection
       ? defaultModelSelection
       : resolvedSourceControlWriterSelection;
   const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings, null),
   );
   const modelOptionsByInstance = getCustomModelOptionsByInstance(
     settings,
@@ -85,7 +87,11 @@ export function SourceControlWritingSettingsSection() {
   const reviewGuideSelection = resolveAppModelSelectionState(
     {
       ...settings,
-      textGenerationModelSelection: resolveReviewGuideModelSelection(settings, serverProviders),
+      textGenerationModelSelection: resolveReviewGuideModelSelection(
+        settings,
+        serverProviders,
+        null,
+      ),
     },
     serverProviders,
   );
