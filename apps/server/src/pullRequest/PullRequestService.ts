@@ -765,6 +765,58 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * A project with no checkout of the host can still serve a linked pull request on a public
+   * host whose provider targets the repository explicitly and authenticates by host: a thread in
+   * a non-repository project keeps its link's snapshot fresh this way. GitLab selects its host
+   * from the checkout or CLI configuration, and Azure derives its organization from the
+   * checkout, so both still need one.
+   */
+  const checkoutFreeRoute = (
+    ref: PullRequestLinkRef,
+    host: string,
+    repository: string,
+  ): Effect.Effect<SupportedProject, PullRequestError> =>
+    Effect.gen(function* () {
+      const provider = ["github.com", "bitbucket.org"].includes(host)
+        ? detectSourceControlProviderFromRemoteUrl(`https://${host}/${repository}.git`)
+        : null;
+      const api = provider === null ? null : registry.get(provider.kind);
+      if (api === null) {
+        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+      }
+      const selected = yield* projectService.snapshot.pipe(
+        Effect.map((snapshot) =>
+          snapshot.projects.find(
+            (project) => project.id === ref.projectId && project.deletedAt === null,
+          ),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new PullRequestOperationError({
+              operation: "resolveRepository",
+              detail: "The selected project could not be read.",
+              cause,
+            }),
+        ),
+      );
+      if (selected === undefined) {
+        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+      }
+      return {
+        project: selected,
+        api: withRateLimitBackoff(api, host, rateLimits),
+        repository,
+        host,
+      };
+    });
+
+  /**
+   * The project whose checkout and credentials serve a reference. The project's own repository
+   * is the default; a reference that names a `host` may instead point at any repository on that
+   * host, served by a checkout on it or, for public hosts with explicit targeting, by the
+   * selected project's directory (see `checkoutFreeRoute`).
+   */
   const requireProject = (
     ref: PullRequestLinkRef,
   ): Effect.Effect<SupportedProject, PullRequestError> =>
@@ -824,11 +876,7 @@ export const make = Effect.gen(function* () {
                   candidate.repository.toLowerCase() === repository.toLowerCase(),
               ) ??
               onHost.find((candidate) => candidate.api.kind !== "azure-devops");
-            if (route === undefined) {
-              return Effect.fail(
-                new PullRequestUnavailableError({ reason: "provider-unsupported" }),
-              );
-            }
+            if (route === undefined) return checkoutFreeRoute(ref, host, repository);
             return Effect.succeed(
               route.api.kind === "azure-devops" ? route : { ...route, repository },
             );
