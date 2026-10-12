@@ -468,6 +468,26 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func noProjectFilterMergesEveryMachinesScratchProject() {
+        let scratch: Set<String> = ["scratch-a", "scratch-b"]
+        let threads = [
+            thread(id: "a", projectID: "scratch-a", created: -10, updated: -5),
+            thread(id: "b", projectID: "scratch-b", created: -10, updated: -4),
+            thread(id: "repo", projectID: "repo", created: -10, updated: -3),
+        ]
+        let snapshot = FeatureSnapshot(threads: threads)
+        let ids = HomeProjectFilter.projectIDs(selected: HomeProjectFilter.noProjectID, scratchProjectIDs: scratch)
+        let filtered = DailyUXSidebarIndex(snapshot: snapshot, query: "", projectIDs: ids, now: now)
+
+        #expect(Set(filtered.active.map(\.id)) == ["a", "b"])
+        #expect(HomeProjectFilter.projectIDs(selected: nil, scratchProjectIDs: scratch) == nil)
+        #expect(HomeProjectFilter.projectIDs(selected: "repo", scratchProjectIDs: scratch) == ["repo"])
+        #expect(HomeProjectFilter.isAvailable(selected: HomeProjectFilter.noProjectID, projectIDs: ["repo"], scratchProjectIDs: scratch))
+        #expect(!HomeProjectFilter.isAvailable(selected: HomeProjectFilter.noProjectID, projectIDs: ["repo"], scratchProjectIDs: []))
+        #expect(!HomeProjectFilter.isAvailable(selected: "gone", projectIDs: ["repo"], scratchProjectIDs: scratch))
+    }
+
+    @Test
     func searchHandlesScopedClonesAndLegacyDuplicateProjectIDs() {
         let localProjectID = FeatureScopedID.project(
             environmentID: "local",

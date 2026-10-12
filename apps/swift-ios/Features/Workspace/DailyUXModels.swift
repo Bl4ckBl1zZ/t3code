@@ -309,13 +309,15 @@ struct DailyUXSidebarIndex {
         snapshot: FeatureSnapshot,
         query: String,
         projectID: String? = nil,
+        projectIDs: Set<String>? = nil,
         now: Date = .now,
         changeRequests: [String: FeaturePullRequest] = [:],
         workingSectionEnabled: Bool = false
     ) {
         let visible = snapshot.threads.filter { thread in
             guard !thread.isArchived else { return false }
-            return projectID == nil || thread.projectID == projectID
+            return (projectID == nil || thread.projectID == projectID)
+                && projectIDs?.contains(thread.projectID) != false
         }
         // The predicates say what the thread's state *is*; whether a shelf may
         // claim the row is gated separately (environment capability, Main
