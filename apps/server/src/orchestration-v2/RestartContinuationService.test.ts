@@ -6,6 +6,7 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -13,7 +14,12 @@ import { ThreadManagementService } from "./ThreadManagementService.ts";
 import { OrchestratorDispatchError } from "./Orchestrator.ts";
 import { make } from "./RestartContinuationService.ts";
 
-function harness(enabled: boolean, failSecond = false, completed = false) {
+function harness(
+  enabled: boolean,
+  failSecond = false,
+  completed = false,
+  snoozedUntil: DateTime.Utc | null = null,
+) {
   const commands: OrchestrationV2ServerCommand[] = [];
   let reads = 0;
   const shells = ["one", "two"].map((id) => ({
@@ -40,6 +46,7 @@ function harness(enabled: boolean, failSecond = false, completed = false) {
             archivedAt: null,
             deletedAt: null,
             settledOverride: null,
+            snoozedUntil,
           },
           providerThreads: [
             {
@@ -50,6 +57,7 @@ function harness(enabled: boolean, failSecond = false, completed = false) {
             },
           ],
           turnItems: [],
+          providerTurns: [],
           runtimeRequests: [],
           messages: [],
           runs: [
@@ -130,6 +138,25 @@ it.effect("completed work clears stale markers instead of sending a continuation
     yield* service.resume;
     yield* service.awaitInitialResume;
     expect(h.commands.map((command) => command.type)).toEqual([
+      "run.restart-continuation.clear",
+      "run.restart-continuation.clear",
+    ]);
+  }),
+);
+
+it.effect("a snoozed thread is neither prepared nor resumed", () =>
+  Effect.gen(function* () {
+    const snoozedUntil = DateTime.add(yield* DateTime.now, { hours: 1 });
+    const preparing = harness(true, false, false, snoozedUntil);
+    expect(yield* (yield* make.pipe(Effect.provide(preparing.layer))).prepare("restart")).toEqual(
+      [],
+    );
+    expect(preparing.commands).toEqual([]);
+
+    const resuming = harness(true, false, true, snoozedUntil);
+    const service = yield* make.pipe(Effect.provide(resuming.layer));
+    yield* service.resume;
+    expect(resuming.commands.map((command) => command.type)).toEqual([
       "run.restart-continuation.clear",
       "run.restart-continuation.clear",
     ]);

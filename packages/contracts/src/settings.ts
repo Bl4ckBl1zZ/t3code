@@ -1391,8 +1391,10 @@ export const UsageModelPriceOverride = Schema.Struct({
 export type UsageModelPriceOverride = typeof UsageModelPriceOverride.Type;
 
 export const ServerSettings = Schema.Struct({
+  // On by default so restarts resume the work they interrupted; recovery stops
+  // after three automatic continuations in a row.
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(false)),
+    Schema.withDecodingDefault(Effect.succeed(true)),
   ),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),

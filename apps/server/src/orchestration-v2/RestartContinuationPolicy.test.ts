@@ -24,6 +24,7 @@ const fixture = () =>
     turnItems: [],
     runtimeRequests: [],
     messages: [],
+    providerTurns: [],
     providerThreads: [
       {
         id: "native",
@@ -133,6 +134,63 @@ describe("restart continuation ownership", () => {
         "resume",
       ),
     ).toBe(false);
+  });
+  it("leaves a run waiting on a secret or with an ended provider turn for the user", () => {
+    const projection = fixture();
+    const withAttempt = { ...run, activeAttemptId: "attempt" } as OrchestrationV2Run;
+    const secret = (secretStatus: string) =>
+      ({
+        ...projection,
+        runs: [withAttempt],
+        turnItems: [{ type: "secret_request", runId: "run", secretStatus }],
+      }) as unknown as OrchestrationV2ThreadProjection;
+    expect(canContinueAfterRestart(secret("saved"), withAttempt, "prepare")).toBe(true);
+    expect(canContinueAfterRestart(secret("pending"), withAttempt, "prepare")).toBe(false);
+    const turn = (status: string) =>
+      ({
+        ...projection,
+        runs: [withAttempt],
+        providerTurns: [{ runAttemptId: "attempt", ordinal: 1, status }],
+      }) as unknown as OrchestrationV2ThreadProjection;
+    expect(canContinueAfterRestart(turn("running"), withAttempt, "prepare")).toBe(true);
+    for (const status of ["completed", "failed", "interrupted"])
+      expect(canContinueAfterRestart(turn(status), withAttempt, "prepare")).toBe(false);
+  });
+  it("stops after three automatic continuations in a row", () => {
+    // Each continuation run starts from the message its source reserved.
+    const chain = (length: number) => {
+      const runs: OrchestrationV2Run[] = [{ ...run, userMessageId: "user" } as OrchestrationV2Run];
+      const message = { text: "Continue", attachments: [] };
+      const messages: Array<{ id: string; restartContinuation?: boolean }> = [
+        { ...message, id: "user" },
+      ];
+      for (let index = 1; index <= length; index++) {
+        const messageId = `continuation-${index}`;
+        runs[index - 1] = {
+          ...runs[index - 1]!,
+          status: "cancelled",
+          restartContinuation: { messageId, reason: "restart", status: "consumed" },
+        } as OrchestrationV2Run;
+        runs.push({
+          ...run,
+          id: `run-${index}`,
+          ordinal: index + 1,
+          userMessageId: messageId,
+        } as OrchestrationV2Run);
+        messages.push({ ...message, id: messageId, restartContinuation: true });
+      }
+      const latest = runs.at(-1)!;
+      return {
+        latest,
+        projection: { ...fixture(), runs, messages } as unknown as OrchestrationV2ThreadProjection,
+      };
+    };
+    for (const length of [0, 1, 2]) {
+      const { latest, projection } = chain(length);
+      expect(canContinueAfterRestart(projection, latest, "prepare")).toBe(true);
+    }
+    const { latest, projection } = chain(3);
+    expect(canContinueAfterRestart(projection, latest, "prepare")).toBe(false);
   });
   it("does not continue a native maintenance command", () => {
     const compact = { ...run, userMessageId: "compact" } as OrchestrationV2Run;

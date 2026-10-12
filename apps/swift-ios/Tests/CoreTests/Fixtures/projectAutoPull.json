@@ -7,7 +7,7 @@
     }
   },
   "settings": {
-    "continueThreadsAfterServerUpdate": false,
+    "continueThreadsAfterServerUpdate": true,
     "sidebarAutoSettleAfterDays": 3,
     "sidebarAutoSettleOnMerge": true,
     "snoozeLimitedThreads": false,

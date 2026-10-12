@@ -918,7 +918,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       yield* fileSystem.writeFileString(
         serverConfig.settingsPath,
-        '{"addProjectBaseDirectory":42,"providers":{"cursor":{"enabled":false},"grok":{"enabled":true}}}',
+        '{"addProjectBaseDirectory":42,"continueThreadsAfterServerUpdate":"false","providers":{"cursor":{"enabled":false},"grok":{"enabled":true}}}',
       );
       yield* recordProviderUsage("cursor");
 
@@ -927,6 +927,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.isFalse(settings.providers.cursor.enabled);
       assert.isTrue(settings.providers.grok.enabled);
       assert.isFalse(settings.providers.opencode.enabled);
+      // An unreadable file may hold an opt-out, so threads are not resumed on a guess.
+      assert.isFalse(settings.continueThreadsAfterServerUpdate);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
