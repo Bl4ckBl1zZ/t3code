@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { PullRequestState } from "./pullRequest.ts";
+import { PullRequestReviewGuide, PullRequestReviewGuideRun } from "./pullRequestReviewGuide.ts";
 import { ThreadPullRequestLinkSource } from "./threadPullRequestLinks.ts";
 
 export class McpPullRequestCapabilityUnavailableError extends Schema.TaggedErrorClass<McpPullRequestCapabilityUnavailableError>()(
@@ -153,6 +154,24 @@ export class PullRequestWatchFromSubagentError extends Schema.TaggedErrorClass<P
   }
 }
 
+export class PullRequestProjectNotFoundError extends Schema.TaggedErrorClass<PullRequestProjectNotFoundError>()(
+  "PullRequestProjectNotFoundError",
+  { repository: Schema.String },
+) {
+  override get message(): string {
+    return `No project in this environment is a checkout of ${this.repository}, so its pull requests cannot be read here. Add that repository as a project first.`;
+  }
+}
+
+export class PullRequestGuideFailedError extends Schema.TaggedErrorClass<PullRequestGuideFailedError>()(
+  "PullRequestGuideFailedError",
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export const PullRequestToolError = Schema.Union([
   McpPullRequestCapabilityUnavailableError,
   PullRequestUrlInvalidError,
@@ -166,6 +185,8 @@ export const PullRequestToolError = Schema.Union([
   PullRequestWatchFailedError,
   PullRequestNotOpenError,
   PullRequestWatchFromSubagentError,
+  PullRequestProjectNotFoundError,
+  PullRequestGuideFailedError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 
@@ -236,3 +257,47 @@ export const ListThreadPullRequestsResult = Schema.Struct({
   ),
 });
 export type ListThreadPullRequestsResult = typeof ListThreadPullRequestsResult.Type;
+
+/** A pull request to write or read a guide for, by URL or by repository and number. */
+export const PullRequestGuideTarget = Schema.Struct({
+  url: PullRequestTargetInput.fields.url,
+  repository: PullRequestTargetInput.fields.repository,
+  number: PullRequestTargetInput.fields.number,
+  host: PullRequestTargetInput.fields.host,
+});
+export type PullRequestGuideTarget = typeof PullRequestGuideTarget.Type;
+
+export const WritePullRequestGuidesInput = Schema.Struct({
+  pullRequests: Schema.Array(PullRequestGuideTarget).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(20),
+  ),
+});
+export type WritePullRequestGuidesInput = typeof WritePullRequestGuidesInput.Type;
+
+export const PullRequestGuideOutcome = Schema.Struct({
+  ...PullRequestIdentity,
+  outcome: Schema.Literals(["started", "running", "failed"]).annotate({
+    description:
+      "started: a run began. running: one was already going for this head and the call joined it. failed: this pull request could not be guided; see detail.",
+  }),
+  detail: Schema.NullOr(Schema.String),
+});
+export type PullRequestGuideOutcome = typeof PullRequestGuideOutcome.Type;
+
+export const WritePullRequestGuidesResult = Schema.Struct({
+  guides: Schema.Array(PullRequestGuideOutcome),
+});
+export type WritePullRequestGuidesResult = typeof WritePullRequestGuidesResult.Type;
+
+export const ReadPullRequestGuideResult = Schema.Struct({
+  ...PullRequestIdentity,
+  guide: Schema.NullOr(PullRequestReviewGuide),
+  run: Schema.NullOr(PullRequestReviewGuideRun),
+  currentHeadSha: Schema.NullOr(Schema.String),
+  stale: Schema.Boolean.annotate({
+    description:
+      "True when the guide was written for an earlier head than the pull request has now.",
+  }),
+});
+export type ReadPullRequestGuideResult = typeof ReadPullRequestGuideResult.Type;

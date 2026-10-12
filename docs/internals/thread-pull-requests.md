@@ -38,6 +38,11 @@ MCP exposes `link_pull_request`, `unlink_pull_request`, and `list_thread_pull_re
 the `pull-requests` credential capability. Every operation is scoped to the credential's V2
 thread and changes only the local association; no PR is created or mutated on the host.
 
+`write_pull_request_guides` and `read_pull_request_guide` (same capability) start and read review
+guides through `PullRequestReviewGuideService`. They belong to no thread: each pull request is
+read through the project in the environment whose checkout has its repository, preferring the
+caller's own, and a batch reports a failure per pull request rather than failing the call.
+
 Web sidebar/command-palette badges use persisted linked snapshots. The web collection and
 Swift linked-PR sheet display sources, cached state, checks, diff counts, and native/derived
 chain order. Native mirrors are covered by generated wire fixtures and host-side ordering tests.

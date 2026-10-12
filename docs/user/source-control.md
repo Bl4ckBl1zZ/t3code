@@ -263,6 +263,9 @@ are on. **Finish review** on the last stop opens the review form on the **Code**
 everything you collected. On the **Pull requests** page, opening a guide maximizes the panel; use
 the maximize control or its shortcut to restore it.
 
+Agents can write guides too: ask one to prepare guides for a set of pull requests, and it starts
+them for you. Each is read through the project whose checkout has that repository.
+
 To shape guides to your taste, write **Review guide instructions** in Settings → Source Control,
 such as what to show first or what to skip. They change emphasis and ordering, not the guide's
 layout or which files it covers.

@@ -41,4 +41,17 @@ export const PullRequestsToolkitHandlersLive = McpToolAccess.toLayer(PullRequest
       return yield* service.setWatching(yield* McpInvocationContext, input, false);
     }),
   ),
+  // Writing a guide changes no thread; the service checks the pull-requests capability.
+  write_pull_request_guides: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      const service = yield* PullRequestMcpService;
+      return yield* service.writeGuides(yield* McpInvocationContext, input);
+    }),
+  ),
+  read_pull_request_guide: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* PullRequestMcpService;
+      return yield* service.readGuide(yield* McpInvocationContext, input);
+    }),
+  ),
 });

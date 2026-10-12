@@ -13,6 +13,7 @@ import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
+import { PullRequestReviewGuideService } from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../../../secrets/SecretRequests.ts";
@@ -53,6 +54,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(ThreadLaunchService)({}),
   Layer.mock(ProjectService.ProjectService)({}),
+  Layer.mock(PullRequestReviewGuideService)({}),
   ServerSettings.layerTest({}),
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
