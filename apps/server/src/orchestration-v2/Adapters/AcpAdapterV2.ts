@@ -4720,6 +4720,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           modelSelection: ModelSelection,
           runtimePolicy: ProviderAdapterV2RuntimePolicy,
         ) {
+          // A step failing below leaves the native config partly changed, so
+          // the previously applied selection no longer describes the session.
+          // Callers record the new selection only once this completes.
+          yield* Ref.set(activeSelection, null);
           if (flavor.configureSession) {
             return yield* flavor.configureSession(runtime, modelSelection, runtimePolicy);
           }

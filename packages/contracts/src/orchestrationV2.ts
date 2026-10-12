@@ -767,6 +767,44 @@ export const OrchestrationV2RunHandles = Schema.Struct({
 export type OrchestrationV2RunHandles = typeof OrchestrationV2RunHandles.Type;
 
 /**
+ * One agent inside a workflow run. Timestamps are epoch milliseconds rather
+ * than `DateTimeUtc` because only the top-level entity fields are remapped for
+ * the JSON wire shape (see `OrchestrationV2SubagentJson`), so a nested
+ * `DateTimeUtc` would never be encoded.
+ */
+export const OrchestrationV2WorkflowAgent = Schema.Struct({
+  /** Spawn ordinal within the run. Stable identity: an agent keeps it across updates. */
+  index: NonNegativeInt,
+  label: TrimmedNonEmptyString,
+  /**
+   * Provider-assigned id, absent until the agent actually starts. Names the
+   * member's transcript file inside the run's transcript directory.
+   */
+  agentId: Schema.optional(TrimmedNonEmptyString),
+  /** The member's own thread, so the UI can open it like any subagent's. */
+  childThreadId: Schema.optional(ThreadId),
+  state: Schema.Literals(["queued", "running", "completed", "failed"]),
+  phaseIndex: Schema.optional(NonNegativeInt),
+  phaseTitle: Schema.optional(TrimmedNonEmptyString),
+  model: Schema.optional(TrimmedNonEmptyString),
+  /** Retry counter; > 1 means the agent was restarted after a provider error. */
+  attempt: Schema.optional(NonNegativeInt),
+  totalTokens: Schema.optional(NonNegativeInt),
+  toolCalls: Schema.optional(NonNegativeInt),
+  durationMs: Schema.optional(NonNegativeInt),
+  queuedAt: Schema.optional(NonNegativeInt),
+  startedAt: Schema.optional(NonNegativeInt),
+  /**
+   * Prompt and result excerpts, capped by the CLI at a few hundred characters.
+   * The member's own thread carries the full answer when the run left a
+   * transcript.
+   */
+  prompt: Schema.optional(Schema.NonEmptyString),
+  result: Schema.optional(Schema.NonEmptyString),
+});
+export type OrchestrationV2WorkflowAgent = typeof OrchestrationV2WorkflowAgent.Type;
+
+/**
  * Workflow-shaped progress for a task that runs a script rather than a single
  * prompt. `phases` is the script's declared `meta.phases`; `currentPhase` is
  * the title most recently entered. Absent on ordinary subagents.
@@ -778,6 +816,12 @@ export const OrchestrationV2WorkflowProgress = Schema.Struct({
   currentPhase: Schema.optional(TrimmedNonEmptyString),
   /** Agents spawned so far by this workflow; drives the fan-out count. */
   spawnedCount: Schema.optional(NonNegativeInt),
+  /**
+   * The provider's member roster, when it reports one. Each member is also
+   * projected as a subagent of the coordinator's own thread, whose thread
+   * holds the member's prompt and answer.
+   */
+  agents: Schema.optional(Schema.Array(OrchestrationV2WorkflowAgent)),
 });
 export type OrchestrationV2WorkflowProgress = typeof OrchestrationV2WorkflowProgress.Type;
 
@@ -3523,6 +3567,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   launchThread: "orchestration.launchThread",
   generateHandoffScript: "orchestration.generateHandoffScript",
   getWorkflowScript: "orchestration.getWorkflowScript",
+  stopWorkflow: "orchestration.stopWorkflow",
   getTurnItem: "orchestration.getTurnItem",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
@@ -3942,6 +3987,35 @@ export class OrchestrationV2SearchThreadError extends Schema.TaggedErrorClass<Or
   }
 }
 
+export const OrchestrationV2StopWorkflowInput = Schema.Struct({
+  threadId: ThreadId,
+  subagentId: NodeId,
+});
+export type OrchestrationV2StopWorkflowInput = typeof OrchestrationV2StopWorkflowInput.Type;
+
+export class OrchestrationV2StopWorkflowError extends Schema.TaggedErrorClass<OrchestrationV2StopWorkflowError>()(
+  "OrchestrationV2StopWorkflowError",
+  {
+    threadId: ThreadId,
+    subagentId: NodeId,
+    reason: Schema.Literals(["not-running", "unsupported", "unavailable", "stop-failed"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "not-running":
+        return "This workflow is no longer running.";
+      case "unsupported":
+        return "This provider cannot stop a workflow.";
+      case "unavailable":
+        return "This workflow has no live provider task.";
+      case "stop-failed":
+        return "Failed to stop the workflow.";
+    }
+  }
+}
+
 export const OrchestrationV2RpcError = Schema.Union([
   OrchestrationV2GenerateHandoffScriptError,
   OrchestrationV2DispatchCommandError,
@@ -3949,6 +4023,7 @@ export const OrchestrationV2RpcError = Schema.Union([
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2ThreadLaunchError,
   OrchestrationV2GetWorkflowScriptError,
+  OrchestrationV2StopWorkflowError,
 ]);
 export type OrchestrationV2RpcError = typeof OrchestrationV2RpcError.Type;
 
@@ -3984,6 +4059,10 @@ export const OrchestrationV2RpcSchemas = {
   generateHandoffScript: {
     input: OrchestrationV2GenerateHandoffScriptInput,
     output: OrchestrationV2GenerateHandoffScriptResult,
+  },
+  stopWorkflow: {
+    input: OrchestrationV2StopWorkflowInput,
+    output: Schema.Void,
   },
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,

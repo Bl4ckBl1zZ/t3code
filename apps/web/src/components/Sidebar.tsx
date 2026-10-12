@@ -141,7 +141,9 @@ import { readLocalApi } from "../localApi";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
+  getSidebarProjectSettingsKey,
   projectGroupsSpanEnvironments,
+  resolveSidebarProjectScopeKey,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -2626,6 +2628,8 @@ export default function Sidebar() {
     () =>
       buildSidebarProjectSnapshots({
         projects: sidebarProjectSortOrder === "manual" ? orderedProjects : visibleProjects,
+        // Each environment's "No project" (Scratch) merges into one filter.
+        groupScratchProjects: true,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
@@ -2746,7 +2750,18 @@ export default function Sidebar() {
 
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
-  const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
+  const [selectedProjectScopeKey, setProjectScopeKey] = useState<string | null>(null);
+  // A Scratch scope picked before its environment config identified the
+  // project follows it into the merged "No project" group.
+  const projectScopeKey = useMemo(
+    () =>
+      resolveSidebarProjectScopeKey({
+        groups: projectGroups,
+        key: selectedProjectScopeKey,
+        settings: projectGroupingSettings,
+      }),
+    [projectGroups, projectGroupingSettings, selectedProjectScopeKey],
+  );
   const projectScopeItems = useMemo(
     () => [
       { value: "all", label: "All projects" },
@@ -2831,10 +2846,16 @@ export default function Sidebar() {
     [scopedProjectGroup],
   );
   useEffect(() => {
-    if (projectScopeKey !== null && scopedProjectGroup === null) {
-      setProjectScopeKey(null);
+    const nextKey = resolveSidebarProjectScopeKey({
+      groups: projectGroups,
+      key: selectedProjectScopeKey,
+      settings: projectGroupingSettings,
+      canClearMissingScope: true,
+    });
+    if (nextKey !== selectedProjectScopeKey) {
+      setProjectScopeKey(nextKey);
     }
-  }, [projectScopeKey, scopedProjectGroup]);
+  }, [projectGroups, projectGroupingSettings, selectedProjectScopeKey]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
@@ -2878,10 +2899,12 @@ export default function Sidebar() {
       }
       void router.navigate({
         to: "/projects/$projectKey",
-        params: { projectKey: projectGroup.projectKey },
+        params: {
+          projectKey: getSidebarProjectSettingsKey(projectGroup, projectGroupingSettings, projects),
+        },
       });
     },
-    [isMobile, router, setOpenMobile],
+    [isMobile, projectGroupingSettings, projects, router, setOpenMobile],
   );
 
   // Settled threads stay in the live shell stream (settled ≠ archived), so
@@ -4171,7 +4194,14 @@ export default function Sidebar() {
             if (isMobile) setOpenMobile(false);
             void router.navigate({
               to: "/projects/$projectKey",
-              params: { projectKey: projectGroup.projectKey },
+              params: {
+                projectKey: getSidebarProjectSettingsKey(
+                  projectGroup,
+                  projectGroupingSettings,
+                  projects,
+                  { environmentId: session.environmentId, projectId: session.projectId },
+                ),
+              },
             });
             return;
           case "copy-path":
@@ -4190,7 +4220,16 @@ export default function Sidebar() {
         }
       })();
     },
-    [copyBranchToClipboard, copyPathToClipboard, isMobile, projectCwdByKey, router, setOpenMobile],
+    [
+      copyBranchToClipboard,
+      copyPathToClipboard,
+      isMobile,
+      projectCwdByKey,
+      projectGroupingSettings,
+      projects,
+      router,
+      setOpenMobile,
+    ],
   );
 
   const handleThreadContextMenu = useCallback(

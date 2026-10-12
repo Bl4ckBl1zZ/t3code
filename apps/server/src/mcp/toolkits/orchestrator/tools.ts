@@ -32,7 +32,9 @@ import {
   OrchestratorMcpThreadWaitResult,
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
+  OrchestrationV2StopWorkflowInput,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -105,6 +107,18 @@ export const TaskCancelTool = Tool.make("task_cancel", {
   dependencies,
 })
   .annotate(Tool.Title, "Cancel delegated task")
+  .annotate(Tool.Destructive, true);
+
+export const WorkflowStopTool = Tool.make("t3_workflow_stop", {
+  description:
+    "Stop one running Claude workflow in a T3 thread. Use the workflow coordinator's subagentId returned by t3_thread_read with view='activity'. Stops the whole workflow, including its phases and agents. Does not stop the parent thread or other workflows. Individual workflow phases and agents cannot be stopped separately.",
+  parameters: OrchestrationV2StopWorkflowInput,
+  success: Schema.Struct({}),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Stop a workflow")
   .annotate(Tool.Destructive, true);
 
 export const ScheduleTaskTool = Tool.make("schedule_task", {
@@ -213,13 +227,19 @@ export const ThreadListTool = Tool.make("t3_thread_list", {
 export const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
     "Read durable state and a paginated timeline from any T3 thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition. The thread also reports its snooze state. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
-  parameters: OrchestratorMcpThreadReadInput,
+  // This Effect version only marks Tool.Strict in the JSON schema, so the
+  // decoder is made strict here too.
+  parameters: OrchestratorMcpThreadReadInput.annotate({
+    parseOptions: { onExcessProperty: "error" },
+  }),
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies,
 })
   .annotate(Tool.Title, "Read a T3 thread")
+  // Strict so a misspelled paging param fails instead of silently reading from position 0.
+  .annotate(Tool.Strict, true)
   // See TaskStatusTool: the acknowledgement side effect is bookkeeping only.
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
@@ -282,6 +302,7 @@ export const OrchestratorToolkit = Toolkit.make(
   DelegateTaskTool,
   TaskStatusTool,
   TaskCancelTool,
+  WorkflowStopTool,
   ScheduleTaskTool,
   ListScheduledTasksTool,
   UpdateScheduledTaskTool,

@@ -10,6 +10,7 @@ import {
   ProjectBrowserAccessSettings,
 } from "./ProjectBooleanSettings";
 import { PullRequestMergeMethodSettings } from "./PullRequestMergeMethodSettings";
+import { ProjectProviderSettings } from "./ProjectProviderSettings";
 import type { ProjectIconOverride } from "@t3tools/contracts";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
@@ -54,6 +55,7 @@ import {
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { isElectron } from "../../env";
 import {
+  mergeEnvironmentSettings,
   useClientSettings,
   useUpdateClientSettings,
   useEnvironmentSettings,
@@ -469,9 +471,13 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const instanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(serverProviders),
+          settings,
+          representative.id,
+        ),
       ),
-    [serverProviders, settings],
+    [representative.id, serverProviders, settings],
   );
   const modelOptionsByInstance = useMemo(
     () => getCustomModelOptionsByInstance(settings, serverProviders),
@@ -490,11 +496,12 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             applyProviderInstanceSettings(
               deriveProviderInstanceEntries(config.providers),
               config.settings,
+              member.id,
             ).find((candidate) => candidate.instanceId === selection.instanceId);
           const options =
             config &&
             getCustomModelOptionsByInstance(
-              { ...settings, ...config.settings },
+              mergeEnvironmentSettings(config.settings, settings),
               config.providers,
             ).get(selection.instanceId);
           if (
@@ -839,6 +846,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               resolvedSelection && activeEntry ? (
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
                   <ProviderModelPicker
+                    environmentId={representative.environmentId}
                     {...(allServerConfigs.get(representative.environmentId)?.environment
                       .capabilities.providerTerminalEnvironment === true
                       ? {
@@ -936,6 +944,8 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             }
           />
         </SettingsSection>
+
+        <ProjectProviderSettings projects={group.memberProjects} />
 
         <SettingsSection
           title="Checkout"

@@ -18,6 +18,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   resolveProviderInstanceEnabled,
   type ModelSelection,
+  type ProjectId,
   type ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -25,6 +26,7 @@ import {
   type ServerSettings,
   type ServerProviderState,
 } from "@t3tools/contracts";
+import { projectProviderInstanceOverride } from "@t3tools/shared/serverSettings";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
 import { HERMES_DRIVER_KIND } from "./t3WorkProject";
@@ -256,10 +258,19 @@ export function deriveProviderEntriesByEnvironment(
  * other instance exists through `providerInstances`; if it is absent there,
  * its streamed snapshot is stale (for example immediately after deletion)
  * and is treated as disabled.
+ *
+ * `projectId` folds in that project's switch for each instance, in either
+ * direction; `null` reads the machine only. It has no default: a surface that
+ * renders for one project must pass it, and one that is not project-aware
+ * passes `null` deliberately.
  */
 export function applyProviderInstanceSettings(
   entries: ReadonlyArray<ProviderInstanceEntry>,
-  settings: Pick<ServerSettings, "providerInstances" | "providers">,
+  settings: Pick<
+    ServerSettings,
+    "providerInstances" | "providers" | "projectProviderInstanceOverrides"
+  >,
+  projectId: ProjectId | null,
 ): ReadonlyArray<ProviderInstanceEntry> {
   const legacyProviders = settings.providers as Readonly<
     Record<string, { readonly enabled?: boolean } | undefined>
@@ -272,11 +283,13 @@ export function applyProviderInstanceSettings(
     const legacyProvider = Object.hasOwn(legacyProviders, entry.driverKind)
       ? legacyProviders[entry.driverKind]
       : undefined;
-    const enabled = explicitInstance
+    const machineEnabled = explicitInstance
       ? resolveProviderInstanceEnabled(explicitInstance)
       : entry.isDefault && legacyProvider
         ? (legacyProvider.enabled ?? entry.enabled)
         : false;
+    const enabled =
+      projectProviderInstanceOverride(settings, projectId, entry.instanceId) ?? machineEnabled;
     return enabled === entry.enabled ? entry : { ...entry, enabled };
   });
 }

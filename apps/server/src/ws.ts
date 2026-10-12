@@ -197,6 +197,7 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -754,6 +755,7 @@ const makeWsRpcLayer = (
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const pullRequests = yield* PullRequestService.PullRequestService;
+      const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -1607,7 +1609,8 @@ const makeWsRpcLayer = (
                       // Attachment and folder failures say why.
                       message:
                         cause._tag === "AttachmentClaimError" ||
-                        cause._tag === "ProjectProvisionError"
+                        cause._tag === "ProjectProvisionError" ||
+                        cause._tag === "ThreadManagementProviderInstanceDisabledError"
                           ? cause.message
                           : "Failed to launch thread",
                       cause,
@@ -1618,6 +1621,7 @@ const makeWsRpcLayer = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           readWorkflowScript({ scriptPath: input.scriptPath }),
+        [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(
@@ -1942,6 +1946,8 @@ const makeWsRpcLayer = (
         [WS_METHODS.pullRequestsStack]: (input) => pullRequests.stack(input),
         [WS_METHODS.pullRequestsDetail]: (input) => pullRequests.detail(input),
         [WS_METHODS.pullRequestsActivity]: (input) => pullRequests.activity(input),
+        [WS_METHODS.pullRequestsReviewGuide]: (input) => reviewGuides.get(input),
+        [WS_METHODS.pullRequestsGenerateReviewGuide]: (input) => reviewGuides.generate(input),
         [WS_METHODS.pullRequestsThreadComments]: (input) => pullRequests.threadComments(input),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) => pullRequests.diffFileContents(input),
         [WS_METHODS.pullRequestsRunAction]: (input) => pullRequests.runAction(input),
@@ -2431,6 +2437,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2493,6 +2500,13 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              // Shared like the pull request service, so concurrent generations single-flight.
+              Layer.provide(
+                Layer.succeed(
+                  PullRequestReviewGuideService.PullRequestReviewGuideService,
+                  reviewGuides,
+                ),
+              ),
               Layer.provide(OtlpEndpointCheck.layer),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

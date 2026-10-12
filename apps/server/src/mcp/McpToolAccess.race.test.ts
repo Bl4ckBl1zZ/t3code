@@ -20,6 +20,9 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -41,6 +44,14 @@ const layerOrchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
   { name: "mcp-mode-race" },
   ProviderAdapterRegistry.makeSingleLayer(adapter),
   { runEffectWorker: false },
+);
+const layerThreadManagement = ThreadManagement.layer.pipe(
+  Layer.provide(
+    Layer.merge(
+      ServerSettings.layerTest(),
+      CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
+    ),
+  ),
 );
 
 const RenameTool = Tool.make("rename", {
@@ -175,7 +186,7 @@ it.layer(layerOrchestrator)("writesThreads against a mode raise", (it) => {
       const shell = yield* orchestrator.getThreadShell(threadId);
       assert.equal(shell?.runtimeMode, "full-access");
       assert.equal(shell?.title, "Before");
-    }).pipe(Effect.provide(ThreadManagement.layer)),
+    }).pipe(Effect.provide(layerThreadManagement)),
   );
 
   it.effect("lets the write through when the thread stays within the caller's modes", () =>
@@ -186,6 +197,6 @@ it.layer(layerOrchestrator)("writesThreads against a mode raise", (it) => {
       const outcome = yield* renameRacingTheUser(threadId, false);
       assert.deepEqual(outcome, { renamed: true });
       assert.equal((yield* orchestrator.getThreadShell(threadId))?.title, "Renamed by the agent");
-    }).pipe(Effect.provide(ThreadManagement.layer)),
+    }).pipe(Effect.provide(layerThreadManagement)),
   );
 });

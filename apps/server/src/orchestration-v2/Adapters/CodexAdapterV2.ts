@@ -1,5 +1,8 @@
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
-import { buildCodexInitializeParams } from "../../provider/Layers/CodexProvider.ts";
+import {
+  buildCodexInitializeParams,
+  codexAppServerEnvironment,
+} from "../../provider/Layers/CodexProvider.ts";
 import {
   codexMcpToolPresentation,
   codexMcpIntentTitle,
@@ -1687,7 +1690,7 @@ export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
         Effect.gen(function* () {
           const scope = yield* Scope.Scope;
           const environment = {
-            ...input.environment,
+            ...codexAppServerEnvironment(input.environment),
             ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
           };
           const command = yield* makeCodexAppServerSpawnCommand({

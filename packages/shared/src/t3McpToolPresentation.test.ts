@@ -120,6 +120,23 @@ describe("tool intent and status", () => {
         ?.displayName,
     ).toBe("Checked linked pull requests");
   });
+  it("presents review guide tools by the guides they write or read", () => {
+    expect(
+      resolveT3McpToolPresentation("write_pull_request_guides", "completed", {
+        pullRequests: [{ url: "https://github.com/org/repo/pull/7" }],
+      }),
+    ).toEqual({
+      displayName: "Started review guides",
+      logo: "pull-request",
+      action: "write-pr-guides",
+    });
+    expect(
+      resolveT3McpToolPresentation("read_pull_request_guide", "completed", {
+        repository: "org/repo",
+        number: 3,
+      })?.displayName,
+    ).toBe("Read PR #3");
+  });
   it("uses provider completion for readable browser actions", () => {
     expect(resolveT3McpToolPresentation("mcp__t3_code__preview_snapshot", "completed")).toEqual({
       displayName: "Took a snapshot of the preview page",

@@ -54,6 +54,17 @@ Changes take effect when an agent’s next session is prepared. Turning access o
 withholds its browser tools while preserving its conversation and workspace tools.
 Your own browser panel remains available.
 
+## Providers per project
+
+In project settings on web and desktop, **Providers** turns each provider on or off for that
+project only, in either direction: a provider off on the machine can be used in one project, and
+one on everywhere can be kept out of another. **Machine default** removes the override. The
+project's model pickers follow the choice, and no new turn there can start on a provider it turned
+off, including queued messages, scheduled tasks, and follow-ups from delegated tasks. A turn
+already running when the choice changes finishes. A delegated task's result still lands in its
+parent thread, which sees it on its next turn. Every other provider setting stays per machine.
+Group changes apply to its checkouts on connected, supported machines.
+
 ## Pull request merge method
 
 **Pull request merge method** sets which method a pull request's merge starts with: **Merge**,

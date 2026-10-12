@@ -97,6 +97,7 @@ import {
 import { ProjectService } from "../project/ProjectService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import {
   clientRuntimeModeCeiling,
@@ -229,6 +230,8 @@ function threadManagementFailure(error: ThreadManagementError): OrchestratorMcpF
     case "ThreadManagementProjectThreadsListError":
     case "ThreadManagementDurableRunProjectionError":
       return failure("orchestration_error", error.message);
+    case "ThreadManagementProviderInstanceDisabledError":
+      return failure("invalid_request", error.message);
   }
 }
 
@@ -894,6 +897,8 @@ function timelineItem(input: {
     visibility: input.row.visibility,
     sourceThreadId: input.row.sourceThreadId,
     itemId: input.row.sourceItemId,
+    // A workflow coordinator's id is what t3_workflow_stop takes.
+    ...(input.row.item.type === "subagent" ? { subagentId: input.row.item.subagentId } : {}),
     runId: input.row.item.runId,
     messageId,
     createdBy: message?.createdBy ?? null,
@@ -914,6 +919,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
   const projects = yield* ProjectService;
+  const serverSettings = yield* ServerSettingsService;
   const git = yield* GitVcsDriver;
   const fileSystem = yield* FileSystem.FileSystem;
 
@@ -1163,6 +1169,16 @@ const make = Effect.gen(function* () {
     readonly inherited: ModelSelection | undefined;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
+    /** Driver-only resolution skips instances this project turned off. */
+    readonly projectId: ProjectId;
+    /**
+     * Skips that per-candidate project-enablement check. Set only when the
+     * command that will dispatch this target already has a receipt: that
+     * dispatch only replays the recorded result, so filtering by the
+     * project's current settings would just refuse a retry that does no new
+     * work.
+     */
+    readonly skipProjectEnablementFilter?: boolean;
   }): Effect.Effect<ResolvedTarget, OrchestratorMcpFailure> =>
     Effect.gen(function* () {
       const requestedInstanceId = input.target?.providerInstanceId;
@@ -1183,24 +1199,39 @@ const make = Effect.gen(function* () {
         }
         // Inherit the parent's instance only when it can actually serve the
         // child; an unavailable parent yields to a healthy instance of the
-        // requested driver rather than failing the delegation.
-        const inheritedCandidate = candidates.find(
+        // requested driver rather than failing the delegation. An instance
+        // the project turned off cannot serve either, so selection skips it
+        // for the next candidate instead of failing the enablement check.
+        const healthyCandidates = candidates.filter(
           (candidate) =>
-            candidate.instanceId === input.inherited?.instanceId &&
             providerConstraints(candidate, isBuiltInProviderAdapterDriverV2(candidate.driver))
               .length === 0,
         );
-        const availableCandidate = candidates.find((candidate) => {
-          return (
-            providerConstraints(candidate, isBuiltInProviderAdapterDriverV2(candidate.driver))
-              .length === 0
-          );
-        });
-        instanceId = inheritedCandidate?.instanceId ?? availableCandidate?.instanceId;
+        const inheritedCandidate = healthyCandidates.find(
+          (candidate) => candidate.instanceId === input.inherited?.instanceId,
+        );
+        const orderedCandidates = [
+          ...(inheritedCandidate === undefined ? [] : [inheritedCandidate]),
+          ...healthyCandidates.filter((candidate) => candidate !== inheritedCandidate),
+        ];
+        for (const candidate of orderedCandidates) {
+          const enabledForProject =
+            input.skipProjectEnablementFilter === true ||
+            (yield* threadManagement.isProviderInstanceEnabledForProject({
+              projectId: input.projectId,
+              instanceId: candidate.instanceId,
+            }));
+          if (enabledForProject) {
+            instanceId = candidate.instanceId;
+            break;
+          }
+        }
         if (instanceId === undefined) {
           return yield* failure(
             "provider_unavailable",
-            `No available V2 provider instance for driver ${requestedDriver}.`,
+            healthyCandidates.length === 0
+              ? `No available V2 provider instance for driver ${requestedDriver}.`
+              : `No instance of driver ${requestedDriver} is enabled for this project.`,
           );
         }
       }
@@ -1848,6 +1879,11 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
         const providers = yield* loadProviders;
+        // Models the user hid from pickers stay out of the catalog agents choose from.
+        const modelPreferences = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.providerModelPreferences),
+          Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
+        );
         return {
           parentThreadId: parent?.thread.id ?? null,
           inheritedProviderInstanceId: parent?.thread.modelSelection.instanceId ?? null,
@@ -1864,13 +1900,19 @@ const make = Effect.gen(function* () {
               driverKind: provider.driver,
               displayName: provider?.displayName ?? null,
               models:
-                provider?.models.map((model) => ({
-                  id: model.slug,
-                  label: model.name ?? null,
-                  ...(model.capabilities?.optionDescriptors === undefined
-                    ? {}
-                    : { options: model.capabilities.optionDescriptors }),
-                })) ?? [],
+                provider?.models
+                  .filter(
+                    (model) =>
+                      model.isCustom ||
+                      !modelPreferences[provider.instanceId]?.hiddenModels.includes(model.slug),
+                  )
+                  .map((model) => ({
+                    id: model.slug,
+                    label: model.name ?? null,
+                    ...(model.capabilities?.optionDescriptors === undefined
+                      ? {}
+                      : { options: model.capabilities.optionDescriptors }),
+                  })) ?? [],
               ...(provider.supportedRuntimeModes === undefined ||
               provider.supportedRuntimeModes.length === 0
                 ? {}
@@ -1909,10 +1951,23 @@ const make = Effect.gen(function* () {
           );
         }
         const providers = yield* loadProviders;
+        // Computed before resolving the target so a retry of an already
+        // accepted delegation can be recognized: dispatching under the same
+        // command id only replays the recorded result, so candidate
+        // selection must not refuse it over the project's current settings.
+        const key = yield* requestKey(input.clientRequestId);
+        const commandId = stableCommandId({
+          scope,
+          requestKey: key,
+          operation: "delegate-task",
+        });
+        const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
         const target = yield* resolveTargetRechecking({
           inherited: parent.thread.modelSelection,
           target: input.target,
           providers,
+          projectId: parent.thread.projectId,
+          skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
         });
         const runtimeMode = yield* resolveRuntimeMode(
           parent.thread.runtimeMode,
@@ -1923,12 +1978,9 @@ const make = Effect.gen(function* () {
           parent.thread.interactionMode,
           input.interactionMode,
         );
-        const key = yield* requestKey(input.clientRequestId);
-        const commandId = stableCommandId({
-          scope,
-          requestKey: key,
-          operation: "delegate-task",
-        });
+        // ThreadManagementService.dispatch is the chokepoint for this command
+        // type's own enablement check, using the same command id and its
+        // receipt-replay exemption, so no separate assert runs here.
         const result = yield* threadManagement
           .dispatch({
             type: "delegated_task.request",
@@ -1950,10 +2002,12 @@ const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.mapError((error) =>
-              failure(
-                "orchestration_error",
-                `Unable to create delegated task: ${errorMessage(error)}`,
-              ),
+              error._tag === "ThreadManagementProviderInstanceDisabledError"
+                ? threadManagementFailure(error)
+                : failure(
+                    "orchestration_error",
+                    `Unable to create delegated task: ${errorMessage(error)}`,
+                  ),
             ),
           );
         const taskEvent = result.storedEvents.find(
@@ -2213,6 +2267,7 @@ const make = Effect.gen(function* () {
           inherited: parent?.thread.modelSelection ?? project.defaultModelSelection ?? undefined,
           target: input.target,
           providers,
+          projectId,
         });
         const runtimeMode = yield* resolveRuntimeMode(limits.runtimeMode, input.runtimeMode);
         const interactionMode = yield* resolveInteractionMode(
@@ -2252,7 +2307,9 @@ const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.mapError((error) =>
-              failure("orchestration_error", `Unable to launch thread: ${errorMessage(error)}`),
+              error._tag === "ThreadManagementProviderInstanceDisabledError"
+                ? threadManagementFailure(error)
+                : failure("orchestration_error", `Unable to launch thread: ${errorMessage(error)}`),
             ),
           );
         const thread = result.projection.thread;
@@ -2295,6 +2352,7 @@ const make = Effect.gen(function* () {
                 inherited: parent.thread.modelSelection,
                 target: request.target,
                 providers,
+                projectId: parent.thread.projectId,
               });
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
@@ -2310,6 +2368,19 @@ const make = Effect.gen(function* () {
                 requestKey: key,
                 index,
               });
+              // A thread on an instance the project turned off could never start a turn.
+              yield* threadManagement
+                .assertProviderInstanceEnabled({
+                  projectId: parent.thread.projectId,
+                  commandId: stableCommandId({
+                    scope,
+                    requestKey: key,
+                    operation: "create-thread",
+                    index,
+                  }),
+                  instanceId: target.modelSelection.instanceId,
+                })
+                .pipe(Effect.mapError(threadManagementFailure));
               const title = threadTitle({
                 parentTitle: parent.thread.title,
                 prompt: request.prompt,
@@ -2672,6 +2743,7 @@ export const layer: Layer.Layer<
   | ScheduledTaskService
   | ProjectService
   | SecretRequests.SecretRequests
+  | ServerSettingsService
   | GitVcsDriver
   | FileSystem.FileSystem
 > = Layer.effect(OrchestratorMcpService, make);

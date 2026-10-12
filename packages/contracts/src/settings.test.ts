@@ -910,3 +910,25 @@ describe("requiredScopesForProjectMutation", () => {
     ).toEqual(["orchestration:operate", "settings:write"]);
   });
 });
+
+describe("server model favorites", () => {
+  it("distinguishes an unseeded list from a deliberately cleared one", () => {
+    expect(decodeServerSettings({}).favorites).toBeNull();
+    const cleared = decodeServerSettings({ favorites: [] });
+    expect(cleared.favorites).toEqual([]);
+    expect(encodeServerSettings(cleared)).toMatchObject({ favorites: [] });
+  });
+
+  it("decodes per-entry edits scoped to a provider instance and model", () => {
+    const patch = {
+      setModelFavorites: [{ provider: "codex_work", model: "sol", favorite: true }],
+      setModelsHidden: [{ provider: "codex_work", model: "sol", hidden: false }],
+      setProviderModelOrder: { provider: "codex_work", modelOrder: ["sol"] },
+      migrateModelPreferences: { favorites: [{ provider: "codex_work", model: "sol" }] },
+    };
+    expect(decodeServerSettingsPatch(patch)).toEqual(patch);
+    expect(() =>
+      decodeServerSettingsPatch({ setModelsHidden: [{ provider: "codex_work", model: "sol" }] }),
+    ).toThrow();
+  });
+});

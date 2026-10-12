@@ -11,6 +11,8 @@ import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySet
 import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
+  modelPreferencesMigrationPatch,
+  resolveModelPreferences,
   resolveProjectAutoPull,
   resolveProjectPullRequestMergeMethod,
   resolveProjectRemoveAgentCreditsOnMerge,
@@ -19,6 +21,9 @@ import {
   isModelSelectionProviderEnabled,
   normalizePersistedServerSettingString,
   parsePersistedServerObservabilitySettings,
+  resolveProjectProviderInstanceEnabled,
+  resolveProjectTextGenerationModelSelection,
+  resolveReviewGuideModelSelection,
   resolveSourceControlWriterModelSelection,
 } from "./serverSettings.ts";
 
@@ -256,7 +261,7 @@ describe("serverSettings helpers", () => {
     expect(isModelSelectionProviderEnabled(settings, sourceControlWriterModelSelection)).toBe(
       false,
     );
-    expect(resolveSourceControlWriterModelSelection(settings)).toBe(
+    expect(resolveSourceControlWriterModelSelection(settings, undefined, null)).toBe(
       settings.textGenerationModelSelection,
     );
     expect(settings.sourceControlWriterModelSelection).toBe(sourceControlWriterModelSelection);
@@ -291,7 +296,7 @@ describe("serverSettings helpers", () => {
       skills: [],
     } satisfies ServerProvider;
 
-    expect(resolveSourceControlWriterModelSelection(settings, [unavailableProvider])).toBe(
+    expect(resolveSourceControlWriterModelSelection(settings, [unavailableProvider], null)).toBe(
       settings.textGenerationModelSelection,
     );
     expect(settings.sourceControlWriterModelSelection).toBe(sourceControlWriterModelSelection);
@@ -663,6 +668,141 @@ describe("agent credit removal on merge", () => {
   });
 });
 
+describe("per-project provider instance switches", () => {
+  const projectId = ProjectId.make("project-a");
+  const otherProjectId = ProjectId.make("project-b");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const codex = ProviderDriverKind.make("codex");
+  const machine = (enabled: boolean) => ({
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: { [instanceId]: { driver: codex, enabled, config: {} } },
+  });
+  const readyProvider = {
+    instanceId,
+    driver: codex,
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-07-27T00:00:00.000Z",
+    availability: "available",
+    models: [],
+    slashCommands: [],
+    skills: [],
+  } satisfies ServerProvider;
+
+  it("inherits the machine value until the project sets one, in either direction", () => {
+    expect(resolveProjectProviderInstanceEnabled(machine(false), projectId, instanceId)).toBe(
+      false,
+    );
+    const turnedOn = applyServerSettingsPatch(machine(false), {
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: true } } },
+    });
+    expect(resolveProjectProviderInstanceEnabled(turnedOn, projectId, instanceId)).toBe(true);
+    expect(resolveProjectProviderInstanceEnabled(turnedOn, otherProjectId, instanceId)).toBe(false);
+    const turnedOff = applyServerSettingsPatch(machine(true), {
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: false } } },
+    });
+    expect(resolveProjectProviderInstanceEnabled(turnedOff, projectId, instanceId)).toBe(false);
+    // No project in scope always reads the machine.
+    expect(resolveProjectProviderInstanceEnabled(turnedOff, null, instanceId)).toBe(true);
+  });
+
+  it("falls back to the machine default for an instance with no settings entry", () => {
+    const settings = { ...DEFAULT_SERVER_SETTINGS, providerInstances: {} };
+    expect(resolveProjectProviderInstanceEnabled(settings, projectId, instanceId)).toBe(
+      resolveProjectProviderInstanceEnabled(settings, null, instanceId),
+    );
+  });
+
+  it("edits sparsely per instance and per project, and drops emptied projects", () => {
+    const other = ProviderInstanceId.make("claudeAgent");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      projectProviderInstanceOverrides: {
+        [projectId]: { [instanceId]: { enabled: false }, [other]: { enabled: true } },
+        [otherProjectId]: { [instanceId]: { enabled: true } },
+      },
+    });
+    const reset = applyServerSettingsPatch(initial, {
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: null } },
+    });
+    expect(reset.projectProviderInstanceOverrides).toEqual({
+      [projectId]: { [other]: { enabled: true } },
+      [otherProjectId]: { [instanceId]: { enabled: true } },
+    });
+    const emptied = applyServerSettingsPatch(reset, {
+      projectProviderInstanceOverrides: { [projectId]: { [other]: null } },
+    });
+    expect(emptied.projectProviderInstanceOverrides).toEqual({
+      [otherProjectId]: { [instanceId]: { enabled: true } },
+    });
+    const removed = applyServerSettingsPatch(initial, {
+      projectProviderInstanceOverrides: { [otherProjectId]: null },
+    });
+    expect(removed.projectProviderInstanceOverrides[otherProjectId]).toBeUndefined();
+    expect(
+      applyServerSettingsPatch(removed, { defaultAutoPull: true }).projectProviderInstanceOverrides,
+    ).toEqual(removed.projectProviderInstanceOverrides);
+  });
+
+  it("moves text generation off an instance the project turned off", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5"),
+      projectProviderInstanceOverrides: {
+        [projectId]: { [ProviderInstanceId.make("codex")]: { enabled: false } },
+      },
+    };
+    const resolved = resolveProjectTextGenerationModelSelection(settings, projectId);
+    expect(resolved.instanceId).not.toBe(ProviderInstanceId.make("codex"));
+    expect(resolveProjectProviderInstanceEnabled(settings, projectId, resolved.instanceId)).toBe(
+      true,
+    );
+    expect(resolveProjectTextGenerationModelSelection(settings, otherProjectId)).toBe(
+      settings.textGenerationModelSelection,
+    );
+    expect(resolveProjectTextGenerationModelSelection(settings, null)).toBe(
+      settings.textGenerationModelSelection,
+    );
+  });
+
+  it("falls back from a writer the project turned off, keeping it for other projects", () => {
+    const writer = createModelSelection(instanceId, "gpt-5.4-mini");
+    const settings = {
+      ...machine(true),
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: false } } },
+      sourceControlWriterModelSelection: writer,
+      reviewGuideModelSelection: writer,
+    };
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], projectId)).toBe(
+      settings.textGenerationModelSelection,
+    );
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], null)).toBe(writer);
+    expect(resolveReviewGuideModelSelection(settings, [readyProvider], projectId)).toBe(
+      settings.textGenerationModelSelection,
+    );
+    expect(resolveReviewGuideModelSelection(settings, [readyProvider], otherProjectId)).toBe(
+      writer,
+    );
+  });
+
+  it("keeps a writer on an instance the project turned on while the machine has it off", () => {
+    const writer = createModelSelection(instanceId, "gpt-5.4-mini");
+    const settings = {
+      ...machine(false),
+      projectProviderInstanceOverrides: { [projectId]: { [instanceId]: { enabled: true } } },
+      sourceControlWriterModelSelection: writer,
+    };
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], projectId)).toBe(
+      writer,
+    );
+    expect(resolveSourceControlWriterModelSelection(settings, [readyProvider], null)).toBe(
+      settings.textGenerationModelSelection,
+    );
+  });
+});
+
 describe("pull request merge method defaults", () => {
   it("prefers the project, then the machine, then the client's last choice", () => {
     const a = ProjectId.make("a"),
@@ -744,5 +884,102 @@ describe("worktreesDirectory", () => {
     expect(reset.previousWorktreesDirectories).toEqual(["/a", "/b"]);
     const back = applyServerSettingsPatch(reset, { worktreesDirectory: "/a" });
     expect(back.previousWorktreesDirectories).toEqual(["/b"]);
+  });
+});
+
+describe("synchronized model preferences", () => {
+  const provider = ProviderInstanceId.make("codex_work");
+  const legacy = { favorites: [{ provider, model: "sol" }] };
+
+  it("keeps repeated adds and removes of the same favorite idempotent", () => {
+    const add = { setModelFavorites: [{ provider, model: "sol", favorite: true }] };
+    const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, add);
+    expect(applyServerSettingsPatch(first, add).favorites).toEqual([{ provider, model: "sol" }]);
+    const remove = { setModelFavorites: [{ provider, model: "sol", favorite: false }] };
+    const removed = applyServerSettingsPatch(first, remove);
+    expect(applyServerSettingsPatch(removed, remove).favorites).toEqual([]);
+  });
+
+  it("keeps the same model on different provider instances as separate favorites", () => {
+    const otherProvider = ProviderInstanceId.make("codex_personal");
+    const both = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      setModelFavorites: [
+        { provider, model: "sol", favorite: true },
+        { provider: otherProvider, model: "sol", favorite: true },
+      ],
+    });
+    expect(
+      applyServerSettingsPatch(both, {
+        setModelFavorites: [{ provider, model: "sol", favorite: false }],
+      }).favorites,
+    ).toEqual([{ provider: otherProvider, model: "sol" }]);
+  });
+
+  it("preserves unrelated models and providers during visibility and order edits", () => {
+    const otherProvider = ProviderInstanceId.make("claude_work");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      providerModelPreferences: {
+        [provider]: { hiddenModels: ["astra"], modelOrder: ["sol"] },
+        [otherProvider]: { hiddenModels: ["opus"], modelOrder: ["sonnet", "opus"] },
+      },
+    });
+    const mobile = applyServerSettingsPatch(initial, {
+      setModelsHidden: [{ provider, model: "luna", hidden: true }],
+    });
+    const web = applyServerSettingsPatch(mobile, {
+      setModelsHidden: [
+        { provider, model: "astra", hidden: false },
+        { provider, model: "sol", hidden: true },
+      ],
+      setProviderModelOrder: { provider, modelOrder: ["sol", "luna", "astra"] },
+    });
+    expect(web.providerModelPreferences[provider]).toEqual({
+      hiddenModels: ["luna", "sol"],
+      modelOrder: ["sol", "luna", "astra"],
+    });
+    expect(web.providerModelPreferences[otherProvider]).toEqual(
+      initial.providerModelPreferences[otherProvider],
+    );
+    expect(
+      applyServerSettingsPatch(web, {
+        setModelsHidden: [{ provider, model: "astra", hidden: false }],
+      }).providerModelPreferences,
+    ).toEqual(web.providerModelPreferences);
+  });
+
+  it("seeds legacy favorites only while the environment has none", () => {
+    expect(modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, {})).toBeNull();
+    expect(modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, { favorites: [] })).toBeNull();
+    const patch = modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, legacy)!;
+    const migrated = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, patch);
+    expect(resolveModelPreferences(migrated).favorites).toEqual(legacy.favorites);
+    expect(modelPreferencesMigrationPatch(migrated, legacy)).toBeNull();
+  });
+
+  it("keeps an explicit clear when a delayed seed arrives from another device", () => {
+    const staleSeed = modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, legacy)!;
+    const cleared = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { favorites: [] });
+    const afterSeed = applyServerSettingsPatch(cleared, staleSeed);
+    expect(resolveModelPreferences(afterSeed, legacy).favorites).toEqual([]);
+  });
+
+  it("applies a favorite edit on top of the seed it carries", () => {
+    const edited = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      ...modelPreferencesMigrationPatch(DEFAULT_SERVER_SETTINGS, legacy),
+      setModelFavorites: [{ provider, model: "astra", favorite: true }],
+    });
+    expect(edited.favorites).toEqual([
+      { provider, model: "sol" },
+      { provider, model: "astra" },
+    ]);
+  });
+
+  it("reads the legacy list until the environment holds one", () => {
+    expect(resolveModelPreferences(DEFAULT_SERVER_SETTINGS, legacy).favorites).toEqual(
+      legacy.favorites,
+    );
+    expect(
+      resolveModelPreferences({ ...DEFAULT_SERVER_SETTINGS, favorites: [] }, legacy).favorites,
+    ).toEqual([]);
   });
 });

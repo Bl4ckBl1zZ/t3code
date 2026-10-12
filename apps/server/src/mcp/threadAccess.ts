@@ -27,15 +27,19 @@ export const unavailable = () =>
  * are not. The fork's orchestrator rejects a command with an
  * `OrchestratorDispatchError` whose cause is the decider's message.
  */
-export const dispatchFailure = (error: OrchestratorV2Error) =>
-  error._tag === "OrchestratorDispatchError" &&
-  typeof error.cause === "string" &&
-  error.cause.length > 0
-    ? new OrchestratorMcpFailure({
-        code: "orchestration_error",
-        message: Array.from(error.cause).slice(0, 1000).join(""),
-      })
-    : unavailable();
+export const dispatchFailure = (
+  error: OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError,
+) =>
+  error._tag === "ThreadManagementProviderInstanceDisabledError"
+    ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
+    : error._tag === "OrchestratorDispatchError" &&
+        typeof error.cause === "string" &&
+        error.cause.length > 0
+      ? new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message: Array.from(error.cause).slice(0, 1000).join(""),
+        })
+      : unavailable();
 
 /**
  * The most a caller may hand to the threads it targets. A thread caller is

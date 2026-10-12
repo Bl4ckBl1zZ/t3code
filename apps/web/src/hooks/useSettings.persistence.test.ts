@@ -1,4 +1,5 @@
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -18,6 +19,7 @@ import {
   getClientSettings,
   persistClientSettingsPatch,
   persistClientSettingsUpdate,
+  prepareModelPreferencesPatch,
 } from "./useSettings";
 
 beforeEach(() => {
@@ -38,6 +40,36 @@ describe("client settings hydration", () => {
   };
   const onboardingCompletedAt = "2026-09-05T12:00:00.000Z";
   const complete = (current: ClientSettings) => ({ ...current, onboardingCompletedAt });
+
+  it("waits for saved favorites before the first edit claims the environment's list", async () => {
+    const provider = ProviderInstanceId.make("codex_work");
+    let finishRead!: (settings: ClientSettings) => void;
+    persistenceMocks.getClientSettings.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRead = resolve;
+      }),
+    );
+    const patch = prepareModelPreferencesPatch(DEFAULT_SERVER_SETTINGS, {
+      setModelFavorites: [{ provider, model: "new", favorite: true }],
+    });
+    expect(getClientSettings()).toBe(DEFAULT_CLIENT_SETTINGS);
+    finishRead(savedSettings);
+    const edited = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, await patch);
+    expect(edited.favorites).toEqual([...savedSettings.favorites, { provider, model: "new" }]);
+  });
+
+  it("does not prepare a favorites edit after a failed read", async () => {
+    const failure = new Error("storage unavailable");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    persistenceMocks.getClientSettings.mockRejectedValueOnce(failure);
+    await expect(
+      prepareModelPreferencesPatch(DEFAULT_SERVER_SETTINGS, {
+        setModelFavorites: [
+          { provider: ProviderInstanceId.make("codex_work"), model: "new", favorite: true },
+        ],
+      }),
+    ).rejects.toBe(failure);
+  });
 
   it("rejects completion after a failed read and preserves saved preferences on retry", async () => {
     const failure = new Error("storage unavailable");

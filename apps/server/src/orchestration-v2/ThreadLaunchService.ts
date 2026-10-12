@@ -28,6 +28,7 @@ import {
   isTemporaryWorktreeBranch,
   WORKTREE_BRANCH_PREFIX,
 } from "@t3tools/shared/git";
+import { resolveProjectTextGenerationModelSelection } from "@t3tools/shared/serverSettings";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -161,7 +162,10 @@ export class ThreadLaunchService extends Context.Service<
   {
     readonly launch: (
       input: ThreadLaunchInput,
-    ) => Effect.Effect<ThreadLaunchResult, ThreadLaunchError>;
+    ) => Effect.Effect<
+      ThreadLaunchResult,
+      ThreadLaunchError | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+    >;
     /**
      * Fails when a new worktree's base ref cannot give provisioning a commit.
      * `launch` falls back to the project root for such a launch; a caller that
@@ -171,9 +175,12 @@ export class ThreadLaunchService extends Context.Service<
       input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy">,
     ) => Effect.Effect<void, ThreadLaunchBaseRefError>;
     /** Dispatches prepared-run.retry and prepares the run's workspace again. */
-    readonly retryPreparation: (
-      input: ThreadLaunchRetryInput,
-    ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
+    readonly retryPreparation: (input: ThreadLaunchRetryInput) => Effect.Effect<
+      OrchestratorV2DispatchResult,
+      // Dispatches prepared-run.retry, a command the enablement chokepoint
+      // never gates; the type stays accurate anyway.
+      OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+    >;
   }
 >()("t3/orchestration-v2/ThreadLaunchService") {}
 
@@ -320,10 +327,11 @@ export const make = Effect.gen(function* () {
         const settings = yield* serverSettings.getSettings;
         const modelSelection =
           settings.sourceControlWriterModelSelection === null
-            ? settings.textGenerationModelSelection
+            ? resolveProjectTextGenerationModelSelection(settings, input.projectId)
             : ServerSettings.resolveSourceControlWriterModelSelection(
                 settings,
                 yield* providerRegistry.getProviders,
+                input.projectId,
               );
         return yield* textGeneration
           .generateBranchName({
@@ -636,6 +644,11 @@ export const make = Effect.gen(function* () {
       }
 
       const launchReceipt = yield* readReceipt(input, input.commandId);
+      yield* threads.assertProviderInstanceEnabled({
+        projectId: input.projectId,
+        commandId: input.commandId,
+        instanceId: input.modelSelection.instanceId,
+      });
       return yield* Effect.gen(function* () {
         const candidateThreadId =
           input.threadId ??

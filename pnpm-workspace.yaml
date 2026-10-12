@@ -101,6 +101,7 @@ minimumReleaseAgeExclude:
   - alchemy@2.0.0-beta.65
   - effect@4.0.0-beta.103
   - "@legendapp/list@3.3.5"
+  - "@muse-code/sdk@1.4.6"
 
 overrides:
   # The SDK always receives the user's Claude executable, so its bundled binaries are unused.
@@ -168,9 +169,10 @@ packageExtensions:
 
 patchedDependencies:
   "@clerk/expo@4.2.0": patches/@clerk__expo@4.2.0.patch
+  "@effect/platform-node-shared@4.0.0-beta.103": patches/@effect__platform-node-shared@4.0.0-beta.103.patch
   "@effect/vitest@4.0.0-beta.103": patches/@effect__vitest@4.0.0-beta.103.patch
   "@expo/metro-config@56.0.14": patches/@expo%2Fmetro-config@56.0.14.patch
-  "@ff-labs/fff-node@0.9.4": patches/@ff-labs__fff-node@0.9.4.patch
+  "@ff-labs/fff-node@0.11.0": patches/@ff-labs__fff-node@0.11.0.patch
   "@legendapp/list@3.3.5": patches/@legendapp__list@3.3.5.patch
   # Exports the dependency-light subpaths mobile and the web diff parser import, and keeps
   # measured wrapped-row heights above an edit (fileEditorVirtualization.test.ts).

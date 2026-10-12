@@ -72,6 +72,21 @@ export function assertSubagentV2NestedApprovalOutput(
   const approval = approvalItems[0]!;
   assert.equal(approval.runId, run.id);
   assert.equal(approval.status, "completed");
+  // The item lands before its request, so an immediate answer finds it.
+  const pendingRequestIndex = result.domainEvents.findIndex(
+    (event) =>
+      event.type === "runtime-request.updated" &&
+      event.payload.id === request.id &&
+      event.payload.status === "pending",
+  );
+  const waitingItemIndex = result.domainEvents.findIndex(
+    (event) =>
+      event.type === "turn-item.updated" &&
+      event.payload.id === approval.id &&
+      event.payload.status === "waiting",
+  );
+  assert.isAtLeast(waitingItemIndex, 0);
+  assert.isAbove(pendingRequestIndex, waitingItemIndex);
   if (approval.type !== "approval_request") throw new Error("expected an approval item");
   assert.equal(approval.requestId, request.id);
   assert.include(approval.prompt ?? "", "nested-approval.txt");

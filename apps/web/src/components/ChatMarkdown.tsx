@@ -132,6 +132,7 @@ import {
   shouldOpenMarkdownFileLinkInEditor,
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
+import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import { useRemoteOpenResolution, type RemoteOpenMode } from "../remoteOpen";
@@ -2061,7 +2062,22 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
               // conversation instead of in a browser: it is the thing being talked about, and
               // the panel it opens offers the browser as one of its actions. Anything else is
               // an ordinary link and keeps the `_blank` the shell already handles.
-              if (href) openChangeRequestLink(event, href);
+              if (!href || openChangeRequestLink(event, href) || event.defaultPrevented) return;
+              // Chromium turns an Option/Alt-click into a download that never reaches the
+              // shell. On desktop, open the link here while the key is still down, so link
+              // routers such as Finicky can still read it.
+              if (isElectron && event.altKey) {
+                event.preventDefault();
+                event.stopPropagation();
+                void readLocalApi()
+                  ?.shell.openExternal(href)
+                  .catch((cause) =>
+                    reportMarkdownActionFailure(
+                      { operation: "open-link-external", target: href },
+                      cause,
+                    ),
+                  );
+              }
             }}
             onContextMenu={(event) => {
               if (!href) return;

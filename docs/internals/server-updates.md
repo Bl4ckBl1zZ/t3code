@@ -122,8 +122,9 @@ it.
 
 ## V2 restart continuation
 
-`continueThreadsAfterServerUpdate` is an environment-owned opt-in, default false, advertised through
-`threadRestartContinuation`. `RestartContinuationService` prepares only the latest running root run
+`continueThreadsAfterServerUpdate` is an environment-owned preference, default true, advertised
+through `threadRestartContinuation`. A `settings.json` that fails to decode turns it off, since the
+file may hold an opt-out. `RestartContinuationService` prepares only the latest running root run
 with a saved native provider reference, before provider shutdown or startup reconciliation. A
 `run.restart-continuation.prepare` command writes the marker into the V2 run JSON projection under
 the thread lock. Process-loss reconciliation preserves it while terminalizing old process-bound
@@ -131,7 +132,11 @@ work; no V1 directory or migration is involved.
 
 After activation, the service dispatches a server-created continuation through normal V2 commands.
 Its marker is consumed in the same transaction as the new message and run. Duplicate deliveries,
-newer work, missing native state, blocking requests and changed provider context are rejected.
+newer work, missing native state, blocking requests, a pending secret request and changed provider
+context are rejected. Prepare also skips a provider turn that already ended, and both prepare and
+delivery skip a thread still snoozed. `RestartContinuationPolicy` stops after three consecutive
+continuations (each continuation run starts from the message its source run reserved), so a turn
+that crashes the server cannot loop.
 Archive, settle, checkout and provider changes cancel pending markers. A stop the user requested
 and maintenance turns such as `/compact` are not continued. Queued runs never started, so recovery
 holds them and the continuation runs ahead of the held queue; "newer work" compares when runs ran,

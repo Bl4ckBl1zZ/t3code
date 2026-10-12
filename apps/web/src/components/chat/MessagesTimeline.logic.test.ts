@@ -2733,6 +2733,13 @@ describe("V2 historical tool summaries", () => {
         entry({ toolTitle: "list_thread_pull_requests" }),
       ]),
     ).toBe("Unlinked 1 pull request and checked linked pull requests");
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ toolTitle: "write_pull_request_guides" }),
+        entry({ toolTitle: "read_pull_request_guide" }),
+        entry({ toolTitle: "read_pull_request_guide" }),
+      ]),
+    ).toBe("Started review guides and read 2 review guides");
   });
   it("deduplicates integration sources without swallowing PR intent", () => {
     const source = { key: "browser-use:chrome", name: "Chrome", kind: "integration" } as const;

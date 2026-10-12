@@ -18,7 +18,7 @@
     }
   },
   "settings": {
-    "continueThreadsAfterServerUpdate": false,
+    "continueThreadsAfterServerUpdate": true,
     "sidebarAutoSettleAfterDays": 3,
     "sidebarAutoSettleOnMerge": true,
     "snoozeLimitedThreads": false,
@@ -52,6 +52,7 @@
     "projectPullRequestMergeMethodOverrides": {},
     "removeAgentCreditsOnMerge": false,
     "projectRemoveAgentCreditsOnMergeOverrides": {},
+    "projectProviderInstanceOverrides": {},
     "backgroundActivity": {
       "schemaVersion": 1,
       "profile": "balanced",
@@ -89,6 +90,9 @@
       "followChangeRequestTemplates": true
     },
     "sourceControlWriterModelSelection": null,
+    "reviewGuidesEnabled": false,
+    "reviewGuideModelSelection": null,
+    "reviewGuideInstructions": "",
     "providers": {
       "codex": {
         "enabled": true,
@@ -158,6 +162,7 @@
     },
     "providerInstances": {},
     "providerModelPreferences": {},
+    "favorites": null,
     "providerModelPreferencesMigrated": false,
     "observability": {
       "otlpTracesUrl": "",

@@ -239,7 +239,14 @@ const orchestratorProvided = orchestratorLayer.pipe(
 );
 
 const threadManagementProvided = threadManagementServiceLayer.pipe(
-  Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      orchestratorProvided,
+      legacyV1ThreadImporterProvided,
+      commandReceiptStoreProvided,
+      providerSessionManagerProvided,
+    ),
+  ),
 );
 const effectExecutorProvided = effectExecutorLayer.pipe(
   Layer.provide(

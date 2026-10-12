@@ -1,10 +1,10 @@
 import { ExternalLinkIcon, PaperclipIcon, PlayIcon } from "lucide-react";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { splitPullRequestBody } from "@t3tools/client-runtime/pull-request-markdown";
 
 import { cn } from "~/lib/utils";
 
 import ChatMarkdown from "../ChatMarkdown";
-import { splitPullRequestBody } from "./pullRequestMarkdown.logic";
 
 /**
  * A pull request body, rendered with the app's markdown renderer plus a card for each upload
@@ -30,11 +30,11 @@ export function PullRequestMarkdown({
   return (
     <div className={cn("space-y-3", className)} data-image-gallery>
       {segments.map((segment) => {
-        if (segment.kind === "markdown") {
+        if (segment.kind === "markdown" || segment.media === "image") {
           return (
             <ChatMarkdown
               key={segment.id}
-              text={segment.text}
+              text={segment.kind === "markdown" ? segment.text : `![](<${segment.url}>)`}
               cwd={cwd}
               environmentId={environmentId}
             />

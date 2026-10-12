@@ -167,7 +167,7 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
   }),
 );
 
-it("leaves a child thread created after the root turn ended to the run that is live then", () => {
+it("routes only enrolled workflow members after the root turn ends", () => {
   const threadId = ThreadId.make("thread:late-child");
   const rootProviderTurnId = ProviderTurnId.make("provider-turn:late-child");
   const identity: ProviderEventRouteIdentity = {
@@ -176,14 +176,17 @@ it("leaves a child thread created after the root turn ended to the run that is l
     attemptId: RunAttemptId.make("attempt:late-child"),
     providerThreadId: ProviderThreadId.make("provider-thread:late-child"),
   };
-  const childCreated = (childThreadId: ThreadId): ProviderAdapterV2Event =>
+  const childCreated = (
+    childThreadId: ThreadId,
+    parentThreadId = threadId,
+  ): ProviderAdapterV2Event =>
     ({
       type: "app_thread.created",
       driver,
       appThread: {
         id: childThreadId,
         lineage: {
-          parentThreadId: threadId,
+          parentThreadId,
           relationshipToParent: "subagent",
           rootThreadId: threadId,
         },
@@ -198,6 +201,13 @@ it("leaves a child thread created after the root turn ended to the run that is l
   });
   const [earlyAccepted, live] = routeProviderEvent(childCreated(earlyChild), identity, initial);
   assert.isTrue(earlyAccepted);
+  const existingDescendant = ThreadId.make("thread:late-child:existing-descendant");
+  const [descendantAccepted, withDescendant] = routeProviderEvent(
+    childCreated(existingDescendant, earlyChild),
+    identity,
+    live,
+  );
+  assert.isTrue(descendantAccepted);
   const [terminalAccepted, ended] = routeProviderEvent(
     {
       type: "turn.terminal",
@@ -210,7 +220,7 @@ it("leaves a child thread created after the root turn ended to the run that is l
       threadDisposition: "reusable",
     },
     identity,
-    live,
+    withDescendant,
   );
   assert.isTrue(terminalAccepted);
   // A child the root launched before it ended stays with this run.
@@ -218,6 +228,81 @@ it("leaves a child thread created after the root turn ended to the run that is l
   const [lateAccepted, afterLate] = routeProviderEvent(childCreated(lateChild), identity, ended);
   assert.isFalse(lateAccepted);
   assert.isFalse(afterLate.ownedThreadIds.has(lateChild));
+
+  // A workflow member is created after the root ended; only its coordinator's
+  // roster enrolls it with this run.
+  const memberId = ThreadId.make("thread:late-child:workflow-member");
+  assert.isFalse(routeProviderEvent(childCreated(memberId, earlyChild), identity, ended)[0]);
+  const coordinator: OrchestrationV2Subagent = {
+    id: NodeId.make("node:late-child:workflow"),
+    threadId,
+    runId: identity.runId,
+    parentNodeId: NodeId.make("node:late-child"),
+    origin: "provider_native",
+    createdBy: "agent",
+    driver,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerThreadId: null,
+    childThreadId: earlyChild,
+    nativeTaskRef: null,
+    prompt: "Review the code",
+    title: "Review",
+    model: null,
+    status: "running",
+    result: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: DateTime.makeUnsafe(0),
+    workflow: {
+      phases: [],
+      agents: [{ index: 0, label: "Reviewer", state: "running", childThreadId: memberId }],
+    },
+  };
+  // Another run's coordinator cannot enroll members with this one.
+  const [foreignAccepted, afterForeign] = routeProviderEvent(
+    {
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        ...coordinator,
+        threadId: earlyChild,
+        childThreadId: existingDescendant,
+        runId: RunId.make("run:late-child:new"),
+      },
+    },
+    identity,
+    ended,
+  );
+  assert.isTrue(foreignAccepted);
+  assert.isFalse(
+    routeProviderEvent(childCreated(memberId, existingDescendant), identity, afterForeign)[0],
+  );
+  const [workflowAccepted, afterWorkflow] = routeProviderEvent(
+    { type: "subagent.updated", driver, subagent: coordinator },
+    identity,
+    ended,
+  );
+  assert.isTrue(workflowAccepted);
+  // Enrolled under the coordinator's thread, not anywhere else.
+  assert.isFalse(routeProviderEvent(childCreated(memberId), identity, afterWorkflow)[0]);
+  const [memberAccepted, afterMember] = routeProviderEvent(
+    childCreated(memberId, earlyChild),
+    identity,
+    afterWorkflow,
+  );
+  assert.isTrue(memberAccepted);
+  assert.isTrue(afterMember.ownedThreadIds.has(memberId));
+  const [unrelatedDescendantAccepted, afterUnrelatedDescendant] = routeProviderEvent(
+    childCreated(ThreadId.make("thread:late-child:unrelated-descendant"), earlyChild),
+    identity,
+    afterWorkflow,
+  );
+  assert.isFalse(unrelatedDescendantAccepted);
+  assert.isFalse(
+    afterUnrelatedDescendant.ownedThreadIds.has(
+      ThreadId.make("thread:late-child:unrelated-descendant"),
+    ),
+  );
 });
 
 it("does not route a superseded attempt through a reused provider thread", () => {

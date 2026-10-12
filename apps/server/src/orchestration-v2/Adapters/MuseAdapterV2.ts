@@ -5,6 +5,7 @@ import {
   ProviderDriverKind,
   type ModelSelection,
   type ChatAttachment,
+  type OrchestrationV2AppThread,
   isProviderSendTurnSupportedImageMimeType,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
@@ -23,6 +24,7 @@ import {
   type ProviderApprovalDecision,
   type RuntimeRequestId,
   type ServerProviderModel,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -100,6 +102,11 @@ import {
 import type * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import {
+  makeSubagentChildThread,
+  makeSubagentConversationArtifacts,
+  subagentThreadTitle,
+} from "../SubagentProjection.ts";
 import { museItemStatus, museToolPresentation } from "./MuseItemPresentation.ts";
 
 const MUSE_PROVIDER = ProviderDriverKind.make("muse");
@@ -168,9 +175,9 @@ const MuseProviderCapabilitiesV2 = {
     planDeltasHaveItemIds: false,
   },
   subagents: {
-    supportsSubagents: false,
+    supportsSubagents: true,
     exposesSubagentThreadIds: false,
-    emitsSubagentLifecycle: false,
+    emitsSubagentLifecycle: true,
     canWaitForSubagents: false,
     canCloseSubagents: false,
     canForkSubagentThread: false,
@@ -247,6 +254,22 @@ interface PendingRequest {
   item: OrchestrationV2TurnItem;
   /** What T3 answered, recorded on the request once Muse confirms it. */
   response?: Pick<OrchestrationV2RuntimeRequest, "decision" | "answers">;
+}
+
+/**
+ * One native subagent's child thread. Muse 1.4.4 cannot address an inline
+ * child session (`session/read` and `view/subscribe` answer sessionNotFound),
+ * so the thread carries the prompt, live status (on its root node) and result.
+ */
+interface ChildContext {
+  readonly childSessionId: string;
+  readonly childThreadId: ThreadId;
+  readonly appThread: OrchestrationV2AppThread;
+  readonly rootNodeId: NodeId;
+  readonly parentThreadId: ThreadId;
+  status: OrchestrationV2TurnItemStatus;
+  /** The result shown in the child thread, once the subagent settled. */
+  result?: string;
 }
 
 const nativeRef = (nativeId: string) => ({
@@ -347,6 +370,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       const seenTerminals = new Set<string>();
       // Workflows and subagents that outlive their turn, by item id, with the turn that owns them.
       const observedChildren = new Map<string, ActiveTurn>();
+      // Native subagents' child threads, by subagent item id.
+      const childrenByItemId = new Map<string, ChildContext>();
+      // Titles per native subagent and workflow child attempt; later revisions drop the label.
+      const agentTitles = new Map<string, string>();
       // A turn Muse started on its own, held until the continuation run T3 opens for it takes it.
       let wake:
         | { readonly nativeId: string; readonly events: Array<[string, unknown]> }
@@ -443,6 +470,246 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           updatedAt: time,
         };
       };
+      const childItemIdentity = (context: ChildContext, nativeId: string) =>
+        `${options.instanceId}:child:${context.childSessionId}:${nativeId}`;
+      /** A subagent with a ready result has finished its work even while Muse keeps it open. */
+      const itemStatus = (item: MuseItem): OrchestrationV2TurnItemStatus => {
+        const status = museItemStatus(item);
+        return status === "running" &&
+          item.kind === "subagent" &&
+          item.controlStatus === "resultReady"
+          ? "completed"
+          : status;
+      };
+      const publishChildRoot = Effect.fnUntraced(function* (
+        context: ChildContext,
+        status: OrchestrationV2TurnItemStatus,
+        time: DateTime.Utc,
+      ) {
+        context.status = status;
+        yield* emit({
+          type: "node.updated",
+          driver: MUSE_PROVIDER,
+          node: {
+            id: context.rootNodeId,
+            threadId: context.childThreadId,
+            runId: null,
+            parentNodeId: null,
+            rootNodeId: context.rootNodeId,
+            kind: "root_turn",
+            status,
+            countsForRun: false,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: nativeRef(context.childSessionId),
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt: context.appThread.createdAt,
+            completedAt: status === "running" || status === "pending" ? null : time,
+          },
+        });
+      });
+      /** One synthesized conversation row in a child thread: its prompt or its result. */
+      const publishChildMessage = Effect.fnUntraced(function* (
+        context: ChildContext,
+        role: "user" | "assistant",
+        text: string,
+        suffix: "prompt" | "result",
+        time: DateTime.Utc,
+      ) {
+        const identity = childItemIdentity(context, suffix);
+        const artifacts = makeSubagentConversationArtifacts({
+          messageId: idAllocator.derive.messageFromProviderItem({
+            driver: MUSE_PROVIDER,
+            nativeItemId: identity,
+          }),
+          ...(role === "user" ? { senderThreadId: context.parentThreadId } : {}),
+          turnItemId: idAllocator.derive.turnItemFromProviderItem({
+            driver: MUSE_PROVIDER,
+            nativeItemId: identity,
+          }),
+          threadId: context.childThreadId,
+          rootNodeId: context.rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: nativeRef(context.childSessionId),
+          role,
+          text,
+          ordinal: suffix === "prompt" ? 1 : 2,
+          now: time,
+        });
+        yield* emit({ type: "message.updated", driver: MUSE_PROVIDER, message: artifacts.message });
+        yield* emit({
+          type: "turn_item.updated",
+          driver: MUSE_PROVIDER,
+          turnItem: artifacts.turnItem,
+        });
+      });
+      /** Creates the child thread for a native subagent the first time its session id is known. */
+      const ensureChildContext = Effect.fnUntraced(function* (
+        turn: ActiveTurn,
+        item: MuseItem,
+        parentNodeId: NodeId,
+        title: string,
+        prompt: string,
+        status: OrchestrationV2TurnItemStatus,
+        time: DateTime.Utc,
+      ) {
+        const existing = childrenByItemId.get(item.itemId);
+        const childSessionId = item.childSessionId;
+        if (existing || !childSessionId) return existing;
+        const childThreadId = idAllocator.derive.threadFromProviderThread({
+          driver: MUSE_PROVIDER,
+          nativeThreadId: childSessionId,
+        });
+        const appThread = makeSubagentChildThread({
+          parentThread: turn.input.appThread,
+          childThreadId,
+          parentNodeId,
+          activeProviderThreadId: null,
+          providerInstanceId: options.instanceId,
+          modelSelection: turn.input.modelSelection,
+          title,
+          now: time,
+          createdBy: "agent",
+          creationSource: "provider",
+        });
+        const context: ChildContext = {
+          childSessionId,
+          childThreadId,
+          appThread,
+          rootNodeId: idAllocator.derive.nodeFromProviderItem({
+            driver: MUSE_PROVIDER,
+            nativeItemId: `${options.instanceId}:child:${childSessionId}:thread-root`,
+          }),
+          parentThreadId: turn.input.threadId,
+          status,
+        };
+        childrenByItemId.set(item.itemId, context);
+        yield* emit({ type: "app_thread.created", driver: MUSE_PROVIDER, appThread });
+        yield* publishChildRoot(context, status, time);
+        if (prompt) yield* publishChildMessage(context, "user", prompt, "prompt", time);
+        return context;
+      });
+      /**
+       * Shows a native subagent on its parent thread and mirrors it into a child
+       * thread the user can open, like Claude's and Codex's subagents.
+       */
+      const publishNativeSubagent = Effect.fnUntraced(function* (
+        turn: ActiveTurn,
+        item: MuseItem,
+        base: ReturnType<typeof baseItem> & {
+          readonly status: OrchestrationV2TurnItemStatus;
+          readonly completedAt: DateTime.Utc | null;
+          readonly title: string | null;
+        },
+        status: OrchestrationV2TurnItemStatus,
+        time: DateTime.Utc,
+      ) {
+        const prompt = item.objective ?? item.fallbackText ?? "";
+        const settled = status !== "running" && status !== "pending";
+        const endKey = `subagent:${item.itemId}`;
+        if (settled && !agentEndedAt.has(endKey)) agentEndedAt.set(endKey, time);
+        if (!settled) agentEndedAt.delete(endKey);
+        const completedAt = settled ? (agentEndedAt.get(endKey) ?? time) : null;
+        if (!agentTitles.has(endKey))
+          agentTitles.set(
+            endKey,
+            subagentThreadTitle({
+              parentTitle: turn.input.appThread.title,
+              prompt,
+              title: item.role ?? null,
+              ordinal: childrenByItemId.size + 1,
+            }),
+          );
+        const title = agentTitles.get(endKey)!;
+        const context = yield* ensureChildContext(
+          turn,
+          item,
+          base.nodeId,
+          title,
+          prompt,
+          status,
+          time,
+        );
+        const resultText =
+          item.result?.text ??
+          item.result?.summary ??
+          (status === "failed" ? item.failureReason : undefined);
+        const result = resultText ?? null;
+        const nativeTaskRef = item.childSessionId
+          ? nativeRef(item.childSessionId)
+          : nativeRef(item.subagentId ?? item.itemId);
+        const subagent: OrchestrationV2Subagent = {
+          id: base.nodeId,
+          threadId: base.threadId,
+          runId: base.runId,
+          parentNodeId: turn.input.rootNodeId,
+          origin: "provider_native",
+          createdBy: "agent",
+          driver: MUSE_PROVIDER,
+          providerInstanceId: options.instanceId,
+          providerThreadId: base.providerThreadId,
+          childThreadId: context?.childThreadId ?? null,
+          nativeTaskRef,
+          prompt,
+          title,
+          model: null,
+          status,
+          result,
+          startedAt: base.startedAt,
+          completedAt,
+          updatedAt: time,
+        };
+        yield* emit({ type: "subagent.updated", driver: MUSE_PROVIDER, subagent });
+        yield* emit({
+          type: "node.updated",
+          driver: MUSE_PROVIDER,
+          node: {
+            id: base.nodeId,
+            threadId: base.threadId,
+            runId: base.runId,
+            parentNodeId: turn.input.rootNodeId,
+            rootNodeId: turn.input.rootNodeId,
+            kind: "subagent",
+            status,
+            countsForRun: false,
+            providerThreadId: base.providerThreadId,
+            providerTurnId: base.providerTurnId,
+            nativeItemRef: nativeTaskRef,
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt: base.startedAt,
+            completedAt,
+          },
+        });
+        yield* emit({
+          type: "turn_item.updated",
+          driver: MUSE_PROVIDER,
+          turnItem: {
+            ...base,
+            nativeItemRef: nativeTaskRef,
+            type: "subagent",
+            status,
+            title,
+            completedAt,
+            subagentId: subagent.id,
+            origin: "provider_native",
+            driver: MUSE_PROVIDER,
+            providerInstanceId: options.instanceId,
+            childThreadId: subagent.childThreadId,
+            prompt,
+            result,
+          },
+        });
+        if (context) {
+          if (context.status !== status) yield* publishChildRoot(context, status, time);
+          if (settled && result?.trim() && context.result !== result) {
+            context.result = result;
+            yield* publishChildMessage(context, "assistant", result, "result", time);
+          }
+        }
+      });
       const publishItem = Effect.fnUntraced(function* (
         turn: ActiveTurn,
         item: MuseItem,
@@ -459,7 +726,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         )
           return;
         const time = yield* DateTime.now;
-        const status = terminal ?? museItemStatus(item);
+        const status = terminal ?? itemStatus(item);
         // Running workflow children publish as subagents, which the thread lists as pending work.
         if (item.kind === "subagent" || item.kind === "workflow") {
           if (status === "running") observedChildren.set(item.itemId, turn);
@@ -472,6 +739,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           completedAt: streaming ? null : time,
           title: item.tool ?? null,
         };
+        if (item.kind === "subagent") {
+          yield* publishNativeSubagent(turn, item, base, status, time);
+          return;
+        }
         const text = item.text ?? item.summary?.join("\n") ?? item.fallbackText ?? "";
         let turnItem: OrchestrationV2TurnItem;
         if (item.kind === "agentMessage") {
@@ -551,8 +822,9 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         for (const [index, child] of [...latest.values()].entries()) {
           const time = yield* DateTime.now;
           const base = baseItem(turn, `${item.itemId}:agent:${child.childId}`, time);
+          // Muse marks a failed attempt with `failureKind`, even when its terminal is `completed`.
           const status: OrchestrationV2TurnItemStatus =
-            child.terminal === "completed"
+            child.terminal === "completed" && child.failureKind === undefined
               ? "completed"
               : child.terminal === "cancelled"
                 ? "cancelled"
@@ -567,8 +839,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           // Children are re-sent on every workflow change; keep each one's first end time.
           const endKey = `${item.itemId}:${child.childId}:${child.attempt}`;
           if (settled && !agentEndedAt.has(endKey)) agentEndedAt.set(endKey, time);
-          const title = child.label?.trim() || `Agent ${index + 1}`;
-          const result = child.failureReason ?? null;
+          // Later revisions drop the label; keep the last one seen.
+          if (child.label?.trim()) agentTitles.set(endKey, child.label.trim());
+          const title = agentTitles.get(endKey) || `Agent ${index + 1}`;
+          const result = child.failureReason ?? child.failureKind ?? null;
           const subagent: OrchestrationV2Subagent = {
             id: base.nodeId,
             threadId: base.threadId,
@@ -688,9 +962,12 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         seenTerminals.add(turn.nativeId);
         const completedAt = yield* DateTime.now;
         for (const item of turn.items.values()) {
+          // Workflows and subagents outlive a completed turn. A stopped or failed
+          // turn ends them in T3 too, as the orchestrator stops following them.
           if (
             (item.kind === "subagent" || item.kind === "workflow") &&
             item.status === "inProgress" &&
+            status === "completed" &&
             disposition === "reusable"
           )
             continue;

@@ -16,11 +16,12 @@ import {
  * access is intentionally named as such so environment-sensitive consumers
  * cannot silently read the wrong server's settings.
  */
-import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { useAtomValue } from "@effect/atom-react";
+import { useCallback, useContext, useMemo, useRef, useSyncExternalStore } from "react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
+  type ProviderInstanceId,
   requiredScopesForServerSettingsPatch,
   ServerSettings,
   type ServerSettingsPatch,
@@ -47,7 +48,12 @@ import {
   subscribeToThemePreview,
   themeAllowsSidebarArtwork,
 } from "~/themePalette";
+import {
+  modelPreferencesMigrationPatch,
+  resolveModelPreferences,
+} from "@t3tools/shared/serverSettings";
 import * as Struct from "effect/Struct";
+import { Atom } from "effect/unstable/reactivity";
 import {
   environmentServerConfigsAtom,
   primaryServerSettingsAtom,
@@ -243,7 +249,14 @@ export async function persistClientSettingsUpdate(
 
 // ── Key sets for routing patches ─────────────────────────────────────
 
-const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
+const SERVER_SETTINGS_KEYS = new Set<string>([
+  ...Struct.keys(ServerSettings.fields),
+  // Patch-only edits of server-owned model preferences.
+  "setModelFavorites",
+  "setModelsHidden",
+  "setProviderModelOrder",
+  "migrateModelPreferences",
+]);
 
 function splitPatch(
   patch: UnifiedSettingsPatch,
@@ -330,6 +343,9 @@ export function mergeEnvironmentSettings(
     // migration can find it. Client keys win in the spread above, so without
     // this the stale device-local map would shadow the synced one forever.
     providerModelPreferences: serverSettings.providerModelPreferences,
+    // Same for favorites, except that this device's legacy list stands in
+    // until some client has seeded the environment.
+    favorites: resolveModelPreferences(serverSettings, clientSettings).favorites,
     ...(serverAutoSettlement
       ? {
           sidebarAutoSettleAfterDays: serverSettings.sidebarAutoSettleAfterDays,
@@ -408,6 +424,99 @@ export function useLegacySidebarEnabled(): boolean {
   const settingsHydrated = useClientSettingsHydrated();
   const legacySidebarEnabled = useClientSettingsValue().legacySidebarEnabled;
   return settingsHydrated && legacySidebarEnabled;
+}
+
+const noEnvironmentSettingsAtom = Atom.make<ServerSettings | null>(null);
+
+/**
+ * Seeds this device's legacy favorites into a patch while the environment has
+ * none, so the first edit made from a fresh environment cannot claim the list
+ * without them. Waits for client settings to load before deciding.
+ */
+export async function prepareModelPreferencesPatch(
+  settings: ServerSettings,
+  patch: ServerSettingsPatch,
+): Promise<ServerSettingsPatch> {
+  if (settings.favorites === null) {
+    await ensureClientSettingsHydrated();
+  }
+  return { ...modelPreferencesMigrationPatch(settings, getClientSettings()), ...patch };
+}
+
+/** Favorites and model visibility for one environment, which model pickers may not have yet. */
+export function useEnvironmentModelPreferences(environmentId: EnvironmentId | null) {
+  const settings = useAtomValue(
+    environmentId ? serverEnvironment.settingsValueAtom(environmentId) : noEnvironmentSettingsAtom,
+  );
+  const legacyFavorites = useClientSettingsValue().favorites;
+  return useMemo(
+    () =>
+      resolveModelPreferences(settings ?? DEFAULT_SERVER_SETTINGS, { favorites: legacyFavorites }),
+    [legacyFavorites, settings],
+  );
+}
+
+/**
+ * Sends per-entry model preference edits (`setModelFavorites`,
+ * `setModelsHidden`, `setProviderModelOrder`) to one environment, seeded with
+ * this device's legacy favorites while the environment has none.
+ */
+export function useUpdateEnvironmentModelPreferences(environmentId: EnvironmentId | null) {
+  const registry = useContext(RegistryContext);
+  const updateSettings = useUpdateSettingsTarget(environmentId);
+  return useCallback(
+    async (patch: ServerSettingsPatch) => {
+      const settings = environmentId
+        ? registry.get(serverEnvironment.settingsValueAtom(environmentId))
+        : null;
+      if (!settings) {
+        updateSettings(patch);
+        return;
+      }
+      try {
+        updateSettings(await prepareModelPreferencesPatch(settings, patch));
+      } catch {
+        toastManager.add({
+          type: "error",
+          title: "Model preferences not saved",
+          description: "Could not load saved model preferences. Try again.",
+        });
+      }
+    },
+    [environmentId, registry, updateSettings],
+  );
+}
+
+/**
+ * Toggles one favorite by sending the desired state, so two clients adding the
+ * same favorite do not cancel each other. A second toggle before the first
+ * save is echoed back flips the remembered choice rather than the stale list.
+ */
+export function useToggleEnvironmentModelFavorite(environmentId: EnvironmentId | null) {
+  const registry = useContext(RegistryContext);
+  const save = useUpdateEnvironmentModelPreferences(environmentId);
+  const pending = useRef(
+    new Map<string, { readonly favorite: boolean; readonly basis: ServerSettings | null }>(),
+  );
+  return useCallback(
+    (provider: ProviderInstanceId, model: string) => {
+      const settings = environmentId
+        ? registry.get(serverEnvironment.settingsValueAtom(environmentId))
+        : null;
+      const key = JSON.stringify([environmentId, provider, model]);
+      const remembered = pending.current.get(key);
+      const isFavorite =
+        remembered && remembered.basis === settings
+          ? remembered.favorite
+          : resolveModelPreferences(
+              settings ?? DEFAULT_SERVER_SETTINGS,
+              getClientSettings(),
+            ).favorites.some((entry) => entry.provider === provider && entry.model === model);
+      pending.current.set(key, { favorite: !isFavorite, basis: settings });
+      return save({ setModelFavorites: [{ provider, model, favorite: !isFavorite }] });
+    },
+    [environmentId, registry, save],
+  );
 }
 
 /** Read current settings for one environment, merged with client-local preferences. */
