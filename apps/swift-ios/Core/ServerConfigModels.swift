@@ -502,6 +502,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let pullRequestMergeMethod: String?
     /// Per-project merge methods, laid over `pullRequestMergeMethod`.
     public let projectPullRequestMergeMethodOverrides: [String: String]
+    /// Per-project provider instance switches, keyed by project then instance
+    /// (`ServerSettings.projectProviderInstanceOverrides`). An instance absent
+    /// here inherits the machine. Empty on servers that predate the setting.
+    public let projectProviderInstanceOverrides: [String: [String: ProjectProviderInstanceOverride]]
     public let environmentIcon: String?
     public let usageLimitSources: [String: UsageLimitSourceConfig]?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
@@ -569,6 +573,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         projectAgentBrowserAccessOverrides: [String: Bool] = [:],
         pullRequestMergeMethod: String? = nil,
         projectPullRequestMergeMethodOverrides: [String: String] = [:],
+        projectProviderInstanceOverrides: [String: [String: ProjectProviderInstanceOverride]] = [:],
         environmentIcon: String? = nil,
         usageLimitSources: [String: UsageLimitSourceConfig]? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
@@ -602,6 +607,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.projectAutoPullOverrides = projectAutoPullOverrides
         self.pullRequestMergeMethod = pullRequestMergeMethod
         self.projectPullRequestMergeMethodOverrides = projectPullRequestMergeMethodOverrides
+        self.projectProviderInstanceOverrides = projectProviderInstanceOverrides
         self.environmentIcon = environmentIcon
         self.usageLimitSources = usageLimitSources
         self.usagePriceOverrides = usagePriceOverrides
@@ -638,6 +644,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case defaultProjectScripts, projectScriptOverrides
         case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
         case pullRequestMergeMethod, projectPullRequestMergeMethodOverrides
+        case projectProviderInstanceOverrides
         case environmentIcon
         case usageLimitSources
         case usagePriceOverrides
@@ -680,6 +687,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
         pullRequestMergeMethod = try container.decodeIfPresent(String.self, forKey: .pullRequestMergeMethod)
         projectPullRequestMergeMethodOverrides = try container.decodeIfPresent([String: String].self, forKey: .projectPullRequestMergeMethodOverrides) ?? [:]
+        projectProviderInstanceOverrides = try container.decodeIfPresent(
+            [String: [String: ProjectProviderInstanceOverride]].self,
+            forKey: .projectProviderInstanceOverrides
+        ) ?? [:]
         environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
         usageLimitSources = try container.decodeIfPresent([String: UsageLimitSourceConfig].self, forKey: .usageLimitSources)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
@@ -737,6 +748,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
         try container.encode(pullRequestMergeMethod, forKey: .pullRequestMergeMethod)
         try container.encode(projectPullRequestMergeMethodOverrides, forKey: .projectPullRequestMergeMethodOverrides)
+        try container.encode(projectProviderInstanceOverrides, forKey: .projectProviderInstanceOverrides)
         try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
         try container.encodeIfPresent(usageLimitSources, forKey: .usageLimitSources)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)

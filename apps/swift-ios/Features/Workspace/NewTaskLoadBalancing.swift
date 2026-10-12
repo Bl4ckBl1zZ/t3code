@@ -40,6 +40,8 @@ enum NewTaskLoadBalancing {
             let config = configs.first(where: { $0.environmentID == environment.id }),
             config.providers.contains(where: { provider in
                 provider.instanceId == selection.providerID && provider.driver == driver
+                    // The destination project may have turned the instance off.
+                    && project.providerInstancesOff?.contains(provider.instanceId) != true
                     && provider.enabled && provider.installed && provider.status != "error"
                     && provider.auth.status != "unauthenticated" && provider.availability != "unavailable"
                     && provider.models.contains { $0.slug == selection.modelID || $0.aliases?.contains(selection.modelID) == true }

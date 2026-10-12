@@ -5832,7 +5832,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     previewUrl: pinnedPreviewURLs[uiID],
                     faviconPath: project.faviconPath,
                     projectIcon: project.projectIcon,
-                    repositoryCanonicalKey: project.repositoryIdentity?.canonicalKey
+                    repositoryCanonicalKey: project.repositoryIdentity?.canonicalKey,
+                    providerInstancesOff: serverConfigsByEnvironmentID[environment.id]?
+                        .providerInstancesOff(inProject: project.id)
                 )
             }
         }

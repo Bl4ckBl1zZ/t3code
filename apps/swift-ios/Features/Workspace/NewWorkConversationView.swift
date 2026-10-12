@@ -307,8 +307,11 @@ public struct NewWorkConversationView: View {
 
     private var environmentProviders: [FeatureProvider] {
         guard let target = activeTarget else { return model.snapshot.providers }
-        return model.snapshot.providersByEnvironment?[target.environmentID]
+        let providers = model.snapshot.providersByEnvironment?[target.environmentID]
             ?? model.snapshot.providers
+        // The conversation runs in the Work backing project, whose switches apply.
+        let project = model.snapshot.projects.first { $0.id == target.target.project.project.id }
+        return project?.scoping(providers) ?? providers
     }
 
     /// Hermes resolves its own default model; the picker starts there and the

@@ -198,7 +198,17 @@ enum DailyUXCreationContext {
         }
     }
 
+    /// The provider catalog a new or existing thread in `project` may pick
+    /// from, with the instances that project turned off made unavailable.
     static func providers(
+        for project: FeatureProject?,
+        in snapshot: FeatureSnapshot
+    ) -> [FeatureProvider] {
+        let catalog = environmentProviders(for: project, in: snapshot)
+        return project?.scoping(catalog) ?? catalog
+    }
+
+    private static func environmentProviders(
         for project: FeatureProject?,
         in snapshot: FeatureSnapshot
     ) -> [FeatureProvider] {
