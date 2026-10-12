@@ -39,7 +39,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { resolveProjectProviderInstanceEnabled } from "@t3tools/shared/serverSettings";
+import { projectProviderInstanceOverride } from "@t3tools/shared/serverSettings";
 
 import { ServerSettingsService } from "../serverSettings.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
@@ -373,8 +373,10 @@ export interface ThreadManagementServiceShape {
     readonly instanceId: ProviderInstanceId;
   }) => Effect.Effect<void, ThreadManagementProviderInstanceDisabledError>;
   /**
-   * Effective enablement for candidate selection, without the receipt-replay
-   * exemption `assertProviderInstanceEnabled` grants an accepted command.
+   * Whether the project leaves the instance on, without the receipt-replay
+   * exemption `assertProviderInstanceEnabled` grants an accepted command. Only
+   * an explicit project "off" refuses: whether the instance runs machine-wide
+   * is the provider registry's call, as it was before per-project switches.
    */
   readonly isProviderInstanceEnabledForProject: (input: {
     readonly projectId: ProjectId;
@@ -517,8 +519,9 @@ const make = Effect.gen(function* () {
     (input) =>
       serverSettings.getSettings.pipe(
         Effect.orDie,
-        Effect.map((current) =>
-          resolveProjectProviderInstanceEnabled(current, input.projectId, input.instanceId),
+        Effect.map(
+          (current) =>
+            projectProviderInstanceOverride(current, input.projectId, input.instanceId) !== false,
         ),
       );
 

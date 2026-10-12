@@ -399,24 +399,30 @@ describe("per-project provider instance switches", () => {
     );
   });
 
-  it.effect("inherits the machine value when the project has no override", () =>
-    Effect.gen(function* () {
-      const threads = yield* ThreadManagementService;
-      const error = yield* Effect.flip(
-        threads.assertProviderInstanceEnabled({
+  it.effect(
+    "leaves a machine-disabled instance to the registry when the project has no override",
+    () => {
+      const dispatched: Array<string> = [];
+      return Effect.gen(function* () {
+        const threads = yield* ThreadManagementService;
+        yield* threads.assertProviderInstanceEnabled({
           projectId,
           commandId: CommandId.make("command:chokepoint-inherit"),
           instanceId,
-        }),
+        });
+        yield* threads.dispatch(message(CommandId.make("command:chokepoint-inherit-dispatch")));
+        expect(dispatched).toEqual(["message.dispatch"]);
+      }).pipe(
+        Effect.provide(
+          layerChokepoint(
+            {
+              providerInstances: { [instanceId]: { driver: codex, enabled: false } },
+            },
+            dispatched,
+          ),
+        ),
       );
-      expect(error).toBeInstanceOf(ThreadManagementProviderInstanceDisabledError);
-    }).pipe(
-      Effect.provide(
-        layerChokepoint({
-          providerInstances: { [instanceId]: { driver: codex, enabled: false } },
-        }),
-      ),
-    ),
+    },
   );
 
   it.effect("replays an already-accepted command even though the instance is now off", () => {
