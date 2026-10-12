@@ -136,6 +136,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// Last-known shells and thread projections on disk. Nil keeps every open,
     /// launch and cold start on the network path.
     private let syncCache: SyncSnapshotCache?
+    private let pullRequestCache: PullRequestOverviewCache?
     /// How long a closed thread keeps its stream so going back to it neither
     /// refetches nor resubscribes. One thread at most: opening another
     /// thread, a memory warning, or backgrounding releases it.
@@ -164,6 +165,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             try await $0.environments()
         },
         syncCache: SyncSnapshotCache? = nil,
+        pullRequestCache: PullRequestOverviewCache? = nil,
         threadKeepAlive: Duration = .seconds(180)
     ) {
         let controller: T3ConnectController
@@ -192,6 +194,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         self.environmentShellTimeoutInterval = environmentShellTimeoutInterval
         self.aggregateEnvironmentLoader = aggregateEnvironmentLoader
         self.syncCache = syncCache
+        self.pullRequestCache = pullRequestCache
         self.threadKeepAlive = threadKeepAlive
         let pair = AsyncStream<FeatureEvent>.makeStream()
         stream = pair.stream
@@ -634,6 +637,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await runtime.remove(id: id)
         environmentThemesByEnvironmentID[id] = nil
         await syncCache?.removeEnvironment(id)
+        await pullRequestCache?.removeEnvironment(id)
         if removesActiveEnvironment {
             await clearActiveEnvironment(disconnectClient: false)
         }
@@ -3343,9 +3347,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {
         let (route, repository) = try projectPullRequestRoute(scope)
-        let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, host: scope.host, number: number)
-        let activity = try? await route.client.pullRequestActivity(projectID: route.wireID, repository: repository, host: scope.host, number: number)
-        return FeaturePullRequestOverview(detail: detail, activity: activity)
+        let key = PullRequestOverviewCache.Key(environmentID: route.environmentID, projectID: route.wireID, repository: repository, number: number)
+        return try await savingPullRequestOverview(key) {
+            let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, host: scope.host, number: number)
+            let activity = try? await route.client.pullRequestActivity(projectID: route.wireID, repository: repository, host: scope.host, number: number)
+            return FeaturePullRequestOverview(detail: detail, activity: activity)
+        }
+    }
+
+    /// Saves each live overview and, when the environment is out of reach,
+    /// answers with the last saved one instead of the connection error.
+    private func savingPullRequestOverview(
+        _ key: PullRequestOverviewCache.Key,
+        read: () async throws -> FeaturePullRequestOverview
+    ) async throws -> FeaturePullRequestOverview {
+        do {
+            let overview = try await read()
+            if let pullRequestCache { Task.detached(priority: .utility) { await pullRequestCache.save(overview, for: key) } }
+            return overview
+        } catch where PullRequestOverviewCache.isOffline(error) {
+            if let saved = await pullRequestCache?.overview(for: key) { return saved }
+            throw error
+        }
     }
 
     func projectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestLabelCandidateList {
@@ -3391,19 +3414,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               !repository.isEmpty else {
             throw NativeFeatureClientError.repositoryIdentityUnavailable
         }
-        let detail = try await route.client.pullRequestDetail(
-            projectID: project.id,
-            repository: repository,
-            number: number
-        )
-        // The conversation is an enrichment: a host that cannot answer it
-        // still has a summary worth showing.
-        let activity = try? await route.client.pullRequestActivity(
-            projectID: project.id,
-            repository: repository,
-            number: number
-        )
-        return FeaturePullRequestOverview(detail: detail, activity: activity)
+        let key = PullRequestOverviewCache.Key(environmentID: route.environmentID, projectID: project.id, repository: repository, number: number)
+        return try await savingPullRequestOverview(key) {
+            let detail = try await route.client.pullRequestDetail(
+                projectID: project.id,
+                repository: repository,
+                number: number
+            )
+            // The conversation is an enrichment: a host that cannot answer it
+            // still has a summary worth showing.
+            let activity = try? await route.client.pullRequestActivity(
+                projectID: project.id,
+                repository: repository,
+                number: number
+            )
+            return FeaturePullRequestOverview(detail: detail, activity: activity)
+        }
     }
 
     /// One subscription per checkout, not per thread: threads that share a

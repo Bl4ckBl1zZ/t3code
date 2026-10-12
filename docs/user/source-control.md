@@ -301,4 +301,8 @@ GitHub, and a dropped video as a link that plays in the browser. Template commen
 they do on GitHub, bot and CI badges are left out, and on GitHub `#123`, commit SHAs and
 `@mentions` link to the host.
 
+A pull request you have opened on iPhone or iPad before stays readable when its environment is
+offline: it shows the copy saved on the device, marked **Offline** with when it was saved. Lists,
+diffs and guides still need a connection, and so does any change.
+
 Pull-request links can open another repository on a Git host configured in the same environment, even when that repository has no local project. Web and native iOS keep the linked repository selected throughout review, comments, diffs and actions. Your existing checkout is used to contact the host.

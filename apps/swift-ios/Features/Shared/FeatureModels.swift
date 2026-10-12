@@ -164,10 +164,15 @@ public struct FeatureEnvironmentRoute: Identifiable, Sendable, Equatable, Hashab
 public struct FeaturePullRequestOverview: Sendable, Equatable {
     public let detail: PullRequestDetail
     public let activity: PullRequestActivity?
+    /// When this copy was saved on the device, for one read from
+    /// `PullRequestOverviewCache` while the environment is out of reach. Nil
+    /// for a live read.
+    public let savedAt: Date?
 
-    public init(detail: PullRequestDetail, activity: PullRequestActivity?) {
+    public init(detail: PullRequestDetail, activity: PullRequestActivity?, savedAt: Date? = nil) {
         self.detail = detail
         self.activity = activity
+        self.savedAt = savedAt
     }
 }
 

@@ -371,7 +371,7 @@ struct PullRequestDetailSheet: View {
         let showsCode = detail.capabilities?.diff == true && access.diff != nil
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 20, pinnedViews: .sectionHeaders) {
-                header(detail)
+                header(detail, savedAt: overview.savedAt)
                     .padding(.horizontal, 16)
 
                 Section {
@@ -423,7 +423,7 @@ struct PullRequestDetailSheet: View {
         .onChange(of: showsGuide) { _, shows in if !shows, tab == .guide { tab = .summary } }
     }
 
-    private func header(_ detail: PullRequestDetail) -> some View {
+    private func header(_ detail: PullRequestDetail, savedAt: Date?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 PullRequestStateBadge(state: detail.state, isDraft: detail.isDraft)
@@ -459,6 +459,14 @@ struct PullRequestDetailSheet: View {
                 .monospacedDigit()
                 .foregroundStyle(T3Colors.textSecondary)
 
+            if let savedAt {
+                bannerCard(.warning) {
+                    ThreadSheetBanner(tone: .warning, title: "Offline",
+                        message: "Showing the copy saved \(savedAt.formatted(.relative(presentation: .named))). Changes need a connection.") {
+                        Button("Try Again") { Task { await load() } }
+                    }
+                }
+            }
             banners(detail)
             actionRow(detail)
         }
