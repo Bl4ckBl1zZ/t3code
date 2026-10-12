@@ -47,6 +47,11 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
             "phases": phases,
             "currentPhase": "Report",
             "spawnedCount": 3,
+            "agents": [
+                ["index": 0, "label": "scan", "state": "completed", "phaseIndex": 0,
+                 "childThreadId": "thread-member", "durationMs": 61_000, "startedAt": 1_785_466_800_000],
+                ["index": 1, "label": "write", "state": "queued", "phaseIndex": 1, "phaseTitle": "Report"],
+            ],
         ]
         let usage: [String: Any] = [
             "totalTokens": 4200,
@@ -94,6 +99,9 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
         XCTAssertEqual(subagent.workflow?.name, "review")
         XCTAssertEqual(subagent.workflow?.currentPhase, "Report")
         XCTAssertEqual(subagent.workflow?.spawnedCount, 3)
+        XCTAssertEqual(subagent.workflow?.agents?.map(\.label), ["scan", "write"])
+        XCTAssertEqual(subagent.workflow?.agents?.first?.childThreadId, "thread-member")
+        XCTAssertEqual(subagent.workflow?.agents?.first?.durationMs, 61_000)
         XCTAssertEqual(subagent.workflow?.phases.map(\.title), ["Survey", "Report"])
         XCTAssertEqual(subagent.workflow?.phases.last?.detail, "Write it up")
         XCTAssertEqual(subagent.usage?.totalTokens, 4200)

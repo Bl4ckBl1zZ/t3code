@@ -67,6 +67,7 @@ public struct SettingsView: View {
                     selection: $settings.defaultSelection,
                     setupContext: setupContext
                 )
+                .modelFavorites(model, environmentID: model.snapshot.environments.first(where: \.isActive)?.id)
                 if let setupContext {
                     agentSetupLink(setupContext)
                 }

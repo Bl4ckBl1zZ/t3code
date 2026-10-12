@@ -42,7 +42,9 @@ public struct WorkspaceView: View {
     @State private var compactColumns: [MobileWorkspace: NavigationSplitViewColumn] = [:]
     /// Per tab, the threads Back returns to before the list.
     @State private var threadBackStacks: [MobileWorkspace: ThreadBackStack] = [:]
-    @State private var selectedProjectID: String?
+    /// The Code list's project filter, kept for the next launch as on web and
+    /// mobile. Empty is All Projects.
+    @AppStorage(HomeProjectFilter.storageKey) private var storedProjectFilter = ""
     @State private var searchText = ""
     @State private var isSearchPresented = false
     /// Which workspace a search looks through. It starts at the tab the search
@@ -524,9 +526,12 @@ public struct WorkspaceView: View {
         Menu {
             if WorkspaceSwitcher.showsProjectFilter(tab), !filterableProjects.isEmpty {
                 Section("Project") {
-                    Picker("Project", selection: $selectedProjectID) {
+                    Picker("Project", selection: Binding(get: { selectedProjectID }, set: { selectedProjectID = $0 })) {
                         Text("All Projects").tag(String?.none)
-                        ForEach(filterableProjects) { project in
+                        if !scratchProjectIDs.isEmpty {
+                            Text("No Project").tag(Optional(HomeProjectFilter.noProjectID))
+                        }
+                        ForEach(namedFilterProjects) { project in
                             Text(projectMenuTitle(project)).tag(Optional(project.id))
                         }
                     }
@@ -1019,7 +1024,7 @@ public struct WorkspaceView: View {
                 ActiveThreadArrangementSheet(
                     model: model,
                     workspace: workspace,
-                    projectID: activeProjectFilterID,
+                    projectIDs: activeProjectFilterIDs,
                     arrangesActive: !isWorkingSectionEnabled
                 )
             }
@@ -1253,7 +1258,9 @@ public struct WorkspaceView: View {
                 showingPullRequests = false
                 openThread(threadID, in: .code)
             } : nil)
-            .onChange(of: selectedProjectIsAvailable) { _, isAvailable in
+            // A saved filter waits for the projects to load before it can
+            // read as gone; one that is still missing then resets.
+            .onChange(of: selectedProjectIsAvailable || isAwaitingData, initial: true) { _, isAvailable in
                 if !isAvailable { selectedProjectID = nil }
             }
             .onChange(of: selectedProjectID) {
@@ -1346,7 +1353,10 @@ public struct WorkspaceView: View {
             revision: model.homePresentationRevision,
             workspace: listWorkspace,
             query: query,
-            projectID: WorkspaceSwitcher.projectFilter(listWorkspace, selectedProjectID: selectedProjectID),
+            projectIDs: HomeProjectFilter.projectIDs(
+                selected: WorkspaceSwitcher.projectFilter(listWorkspace, selectedProjectID: selectedProjectID),
+                scratchProjectIDs: scratchProjectIDs
+            ),
             now: sidebarBoundaryNow,
             changeRequests: model.changeRequestsByThreadID,
             contentMatchIDs: query.isEmpty ? [] : Set(currentContentMatches.keys),
@@ -1399,7 +1409,9 @@ public struct WorkspaceView: View {
         return HomeEmptyState.resolve(
             workspace: tab,
             hasCreationProjects: !creationProjects.isEmpty,
-            filteredProjectName: tab == .code ? selectedProject?.name : nil,
+            filteredProjectName: tab == .code
+                ? (selectedProjectID == HomeProjectFilter.noProjectID ? "No Project" : selectedProject?.name)
+                : nil,
             hermesReady: hermesReady
         )
     }
@@ -1455,6 +1467,12 @@ public struct WorkspaceView: View {
         WorkspaceSwitcher.projectFilter(workspace, selectedProjectID: selectedProjectID)
     }
 
+    /// The projects the Code filter keeps, with "No Project" expanded to every
+    /// machine's Scratch project.
+    private var activeProjectFilterIDs: Set<String>? {
+        HomeProjectFilter.projectIDs(selected: activeProjectFilterID, scratchProjectIDs: scratchProjectIDs)
+    }
+
     /// The Home projects as the routing model reads them. `OrchestrationProject.id`
     /// carries the *feature* id here so a resolved Hermes target names a project
     /// this view can actually open.
@@ -1496,6 +1514,11 @@ public struct WorkspaceView: View {
         filterableProjects.first { $0.id == selectedProjectID }
     }
 
+    private var selectedProjectID: String? {
+        get { storedProjectFilter.isEmpty ? nil : storedProjectFilter }
+        nonmutating set { storedProjectFilter = newValue ?? "" }
+    }
+
     private var creationProjects: [FeatureProject] {
         DailyUXCreationContext.projects(
             in: model.snapshot,
@@ -1529,8 +1552,25 @@ public struct WorkspaceView: View {
     /// reads as unavailable, so the existing reset clears it rather than leaving
     /// the list filtered to a project it no longer offers.
     private var selectedProjectIsAvailable: Bool {
-        guard let selectedProjectID else { return true }
-        return filterableProjects.contains { $0.id == selectedProjectID }
+        HomeProjectFilter.isAvailable(
+            selected: selectedProjectID,
+            projectIDs: Set(filterableProjects.map(\.id)),
+            scratchProjectIDs: scratchProjectIDs
+        )
+    }
+
+    /// Every machine's Scratch project, offered together as "No Project".
+    private var scratchProjectIDs: Set<String> {
+        let serverConfigs = workspaceServerConfigs
+        return Set(filterableProjects.filter {
+            DailyUXCreationContext.isScratchProject($0, serverConfigs: serverConfigs)
+        }.map(\.id))
+    }
+
+    /// The projects the filter lists by name.
+    private var namedFilterProjects: [FeatureProject] {
+        let scratch = scratchProjectIDs
+        return filterableProjects.filter { !scratch.contains($0.id) }
     }
 
     /// A thread deleted elsewhere closes in whichever tab had it open, back to
@@ -1655,8 +1695,10 @@ public struct WorkspaceView: View {
         }
     }
 
+    /// "No Project" names no single project, so the draft picks its own.
     private func startNewDraft() {
-        openDraft(draftID: UUID().uuidString, projectID: activeProjectFilterID)
+        let projectID = activeProjectFilterID == HomeProjectFilter.noProjectID ? nil : activeProjectFilterID
+        openDraft(draftID: UUID().uuidString, projectID: projectID)
     }
 
     /// The composer opens once the drafts sheet is gone, so the two sheets
@@ -1898,6 +1940,7 @@ struct HomePresentation {
         workspace: MobileWorkspace,
         query: String,
         projectID: String?,
+        projectIDs: Set<String>? = nil,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
         contentMatchIDs: Set<String> = [],
@@ -1920,6 +1963,7 @@ struct HomePresentation {
             snapshot: scoped,
             query: "",
             projectID: projectID,
+            projectIDs: projectIDs,
             now: now,
             changeRequests: changeRequests,
             // Chat has no shelves to fold anything into.
@@ -1930,7 +1974,8 @@ struct HomePresentation {
         let archived = snapshot.threads
             .filter { thread in
                 guard thread.isArchived, !thread.isSubagentThread else { return false }
-                guard projectID == nil || thread.projectID == projectID else { return false }
+                guard projectID == nil || thread.projectID == projectID,
+                      projectIDs?.contains(thread.projectID) != false else { return false }
                 return WorkspaceSwitcher.workspace(
                     of: thread,
                     providerDrivers: providerDrivers,
@@ -1985,7 +2030,7 @@ final class HomePresentationCache {
         /// cache and the list silently keeps showing the other workspace.
         let workspace: MobileWorkspace
         let query: String
-        let projectID: String?
+        let projectIDs: Set<String>?
         let now: Date
         /// Change-request state moves rows between Active and Settled, and it
         /// streams in outside `homePresentationRevision` — without it in the
@@ -2005,7 +2050,7 @@ final class HomePresentationCache {
         revision: UInt64,
         workspace: MobileWorkspace,
         query: String,
-        projectID: String?,
+        projectIDs: Set<String>?,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
         contentMatchIDs: Set<String> = [],
@@ -2015,7 +2060,7 @@ final class HomePresentationCache {
             revision: revision,
             workspace: workspace,
             query: query,
-            projectID: projectID,
+            projectIDs: projectIDs,
             now: now,
             changeRequests: changeRequests,
             contentMatchIDs: contentMatchIDs,
@@ -2031,7 +2076,8 @@ final class HomePresentationCache {
             snapshot: snapshot,
             workspace: workspace,
             query: query,
-            projectID: projectID,
+            projectID: nil,
+            projectIDs: projectIDs,
             now: now,
             changeRequests: changeRequests,
             contentMatchIDs: contentMatchIDs,
@@ -2904,7 +2950,7 @@ private struct ProjectBadge: View {
 private struct ActiveThreadArrangementSheet: View {
     @Bindable var model: FeatureRootModel
     let workspace: MobileWorkspace
-    let projectID: String?
+    let projectIDs: Set<String>?
     var arrangesActive = true
     @State private var rows: [FeatureThread] = []
     @State private var contexts: [String: HomeThreadRowContext] = [:]
@@ -2916,7 +2962,8 @@ private struct ActiveThreadArrangementSheet: View {
             snapshot: model.snapshot,
             workspace: workspace,
             query: "",
-            projectID: projectID,
+            projectID: nil,
+            projectIDs: projectIDs,
             now: .now,
             changeRequests: model.changeRequestsByThreadID
         )

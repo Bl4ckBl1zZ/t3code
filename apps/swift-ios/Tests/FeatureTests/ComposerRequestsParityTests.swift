@@ -424,4 +424,16 @@ final class ComposerRequestsParityTests: XCTestCase {
         XCTAssertEqual(try label("2026-08-04T09:00:00Z"), "Aug 4, 9:00\u{202F}AM")
         XCTAssertEqual(try label("2027-01-04T09:00:00Z"), "Jan 4, 2027, 9:00\u{202F}AM")
     }
+
+    func testResetInTheFinalMinuteReadsMomentarily() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func phrase(_ offset: TimeInterval) -> String {
+            UsageLimitTime.resetsPhrase(at: now.addingTimeInterval(offset), now: now) { _ in "at reset" }
+        }
+        XCTAssertEqual(phrase(30), "Resets momentarily")
+        XCTAssertEqual(phrase(59.9), "Resets momentarily")
+        XCTAssertEqual(phrase(60), "Resets at reset")
+        XCTAssertEqual(phrase(0), "Resets at reset")
+        XCTAssertEqual(phrase(-5), "Resets at reset")
+    }
 }

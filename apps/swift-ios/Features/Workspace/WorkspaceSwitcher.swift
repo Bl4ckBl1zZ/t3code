@@ -241,3 +241,25 @@ public enum WorkspaceSwitcher {
         return .hermesConversation(target)
     }
 }
+
+/// The Code list's project filter. Every machine's Scratch project is one
+/// "No Project" choice rather than a row per machine, as on web.
+enum HomeProjectFilter {
+    /// The selection that stands for "No Project".
+    static let noProjectID = "t3:no-project"
+    /// Where the selection is kept between launches.
+    static let storageKey = "workspace.project-filter"
+
+    /// The projects a selection keeps, or nil for all of them.
+    static func projectIDs(selected: String?, scratchProjectIDs: Set<String>) -> Set<String>? {
+        guard let selected else { return nil }
+        return selected == noProjectID ? scratchProjectIDs : [selected]
+    }
+
+    /// Whether the filter still offers `selected`; a remembered choice it no
+    /// longer offers is cleared.
+    static func isAvailable(selected: String?, projectIDs: Set<String>, scratchProjectIDs: Set<String>) -> Bool {
+        guard let selected else { return true }
+        return selected == noProjectID ? !scratchProjectIDs.isEmpty : projectIDs.contains(selected)
+    }
+}

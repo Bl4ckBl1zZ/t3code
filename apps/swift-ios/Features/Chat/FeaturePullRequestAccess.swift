@@ -52,6 +52,8 @@ struct FeaturePullRequestAccess {
     let runStackAction: (Int, PullRequestStack, String, String?) async throws -> Void
     /// See ``FeaturePullRequestMergeDefaultsReading``.
     let mergeMethodDefault: () -> String?
+    /// Nil where the client cannot read guides at all.
+    let reviewGuide: FeaturePullRequestReviewGuideAccess?
 
     init(client: any FeatureClient, threadID: String) {
         scope = .thread(threadID)
@@ -78,6 +80,7 @@ struct FeaturePullRequestAccess {
         runStackAction = { try await client.runPullRequestStackAction(threadID: threadID, number: $0, stack: $1, action: $2, mergeMethod: $3) }
         let defaults = client as? any FeaturePullRequestMergeDefaultsReading
         mergeMethodDefault = { defaults?.pullRequestMergeMethodDefault(scope: .thread(threadID)) }
+        reviewGuide = (client as? any FeaturePullRequestReviewGuiding).map { FeaturePullRequestReviewGuideAccess(guiding: $0, scope: .thread(threadID)) }
     }
 
     /// `onAction` hears each action as it is sent and once the host answers,
@@ -120,6 +123,7 @@ struct FeaturePullRequestAccess {
         runStackAction = { try await manager.runProjectPullRequestStackAction(scope: scope, number: $0, stack: $1, action: $2, mergeMethod: $3) }
         let defaults = manager as? any FeaturePullRequestMergeDefaultsReading
         mergeMethodDefault = { defaults?.pullRequestMergeMethodDefault(scope: .project(scope)) }
+        reviewGuide = (manager as? any FeaturePullRequestReviewGuiding).map { FeaturePullRequestReviewGuideAccess(guiding: $0, scope: .project(scope)) }
     }
 }
 
@@ -192,5 +196,34 @@ struct FeaturePullRequestReviewerAccess {
     init(writer: any FeaturePullRequestReviewWriting, scope: FeaturePullRequestScope, number: Int, expectedURL: String) {
         load = { try await writer.pullRequestReviewerCandidates(scope: scope, number: number, expectedURL: expectedURL) }
         request = { try await writer.requestPullRequestReviewers(scope: scope, number: number, expectedURL: expectedURL, request: $0) }
+    }
+}
+
+/// Review guides for one scope (`pullRequests.reviewGuide` and
+/// `pullRequests.generateReviewGuide`).
+@MainActor
+protocol FeaturePullRequestReviewGuiding: AnyObject, Sendable {
+    /// The server's `reviewGuidesEnabled`; false on a server that predates guides.
+    func pullRequestReviewGuidesEnabled(scope: FeaturePullRequestScope) -> Bool
+    func pullRequestReviewGuide(scope: FeaturePullRequestScope, number: Int) async throws -> PullRequestReviewGuideResult
+    func generatePullRequestReviewGuide(scope: FeaturePullRequestScope, number: Int) async throws -> PullRequestReviewGuideResult
+}
+
+@MainActor
+struct FeaturePullRequestReviewGuideAccess {
+    let isEnabled: () -> Bool
+    let load: (Int) async throws -> PullRequestReviewGuideResult
+    let generate: (Int) async throws -> PullRequestReviewGuideResult
+
+    init(isEnabled: @escaping () -> Bool,
+         load: @escaping (Int) async throws -> PullRequestReviewGuideResult,
+         generate: @escaping (Int) async throws -> PullRequestReviewGuideResult) {
+        self.isEnabled = isEnabled; self.load = load; self.generate = generate
+    }
+
+    init(guiding: any FeaturePullRequestReviewGuiding, scope: FeaturePullRequestScope) {
+        isEnabled = { guiding.pullRequestReviewGuidesEnabled(scope: scope) }
+        load = { try await guiding.pullRequestReviewGuide(scope: scope, number: $0) }
+        generate = { try await guiding.generatePullRequestReviewGuide(scope: scope, number: $0) }
     }
 }

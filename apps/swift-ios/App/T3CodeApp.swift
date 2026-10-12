@@ -7,7 +7,7 @@ struct T3CodeApp: App {
     @State private var model: FeatureRootModel
 
     init() {
-        let client = NativeFeatureClient(syncCache: SyncSnapshotCache())
+        let client = NativeFeatureClient(syncCache: SyncSnapshotCache(), pullRequestCache: PullRequestOverviewCache())
         let model = FeatureRootModel(client: client)
         _model = State(initialValue: model)
         PlatformCloudDeliveryCoordinator.shared.install(

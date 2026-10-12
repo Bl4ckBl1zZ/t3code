@@ -176,6 +176,8 @@ extension ServerSettingsPatchInput {
         if let value = later.enableAgentBrowserAccess { result.enableAgentBrowserAccess = value }
         if let value = later.claudeAutoCompactWindow { result.claudeAutoCompactWindow = value }
         result.hiddenModelsByProvider = mergeMap(hiddenModelsByProvider, later.hiddenModelsByProvider)
+        if let value = later.setModelFavorites { result.setModelFavorites = (setModelFavorites ?? []) + value }
+        if let value = later.migrateModelFavorites { result.migrateModelFavorites = migrateModelFavorites ?? value }
         if let value = later.github { result.github = github?.merged(with: value) ?? value }
         return result
     }

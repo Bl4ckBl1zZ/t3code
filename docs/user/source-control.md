@@ -240,7 +240,10 @@ nothing else running.
 ## Review guides
 
 Review guides are in beta. Turn on **Review guides** in Settings → Source Control to add the
-**Guide** tab to pull requests on that server.
+**Guide** tab to pull requests on that server. On iPhone and iPad, open a stop from the outline and
+move between stops with **Next** or the arrows at the top; tap an excerpt's file name to see it in
+the full diff. A stale guide offers **Rewrite Guide** and hides excerpts that no longer match the
+change. While a guide is being written, stay on the tab or come back later to see it.
 
 The **Guide** tab gives you a tour of a pull request without reading it line by line: stops
 through the change in reading order. Each stop points at the lines worth reading, and a stop marked
@@ -292,5 +295,14 @@ a rejected push suggests pulling first. Publishing directly to the default branc
 confirm first. When the branch has conflicts, commit actions hide and
 **Ask Agent to Resolve** hands the conflict to the thread's agent. Tap a changed file to open it in
 **Review**.
+
+On iPhone and iPad, pull request descriptions and comments show images dropped into them on
+GitHub, and a dropped video as a link that plays in the browser. Template comments stay hidden as
+they do on GitHub, bot and CI badges are left out, and on GitHub `#123`, commit SHAs and
+`@mentions` link to the host.
+
+A pull request you have opened on iPhone or iPad before stays readable when its environment is
+offline: it shows the copy saved on the device, marked **Offline** with when it was saved. Lists,
+diffs and guides still need a connection, and so does any change.
 
 Pull-request links can open another repository on a Git host configured in the same environment, even when that repository has no local project. Web and native iOS keep the linked repository selected throughout review, comments, diffs and actions. Your existing checkout is used to contact the host.

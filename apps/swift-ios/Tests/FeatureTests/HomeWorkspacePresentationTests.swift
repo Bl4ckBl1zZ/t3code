@@ -258,7 +258,7 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             revision: 1,
             workspace: .code,
             query: "",
-            projectID: nil,
+            projectIDs: nil,
             now: now
         )
         let work = cache.presentation(
@@ -266,7 +266,7 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             revision: 1,
             workspace: .work,
             query: "",
-            projectID: nil,
+            projectIDs: nil,
             now: now
         )
 

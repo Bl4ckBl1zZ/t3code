@@ -985,7 +985,7 @@ public actor WebSocketRPCClient {
             ?? value?["message"]?.stringValue
             ?? value?["detail"]?.stringValue
             ?? "The environment rejected the RPC request."
-        return .remote(message)
+        return .remote(ProviderInstanceDisabledFailure.userMessage(for: message) ?? message)
     }
 
     private func allocateRequestID() -> Int {

@@ -164,10 +164,15 @@ public struct FeatureEnvironmentRoute: Identifiable, Sendable, Equatable, Hashab
 public struct FeaturePullRequestOverview: Sendable, Equatable {
     public let detail: PullRequestDetail
     public let activity: PullRequestActivity?
+    /// When this copy was saved on the device, for one read from
+    /// `PullRequestOverviewCache` while the environment is out of reach. Nil
+    /// for a live read.
+    public let savedAt: Date?
 
-    public init(detail: PullRequestDetail, activity: PullRequestActivity?) {
+    public init(detail: PullRequestDetail, activity: PullRequestActivity?, savedAt: Date? = nil) {
         self.detail = detail
         self.activity = activity
+        self.savedAt = savedAt
     }
 }
 
@@ -198,6 +203,10 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     public var faviconPath: String?
     public var projectIcon: ProjectIconOverride?
     public var repositoryCanonicalKey: String?
+    /// Provider instances the host turned off for this project, which its
+    /// pickers hide (see ``scoping(_:)``). Nil when the server has nothing to
+    /// scope or predates per-project provider switches.
+    public var providerInstancesOff: Set<String>?
 
     public init(
         id: String,
@@ -212,7 +221,8 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         previewUrl: String? = nil,
         faviconPath: String? = nil,
         projectIcon: ProjectIconOverride? = nil,
-        repositoryCanonicalKey: String? = nil
+        repositoryCanonicalKey: String? = nil,
+        providerInstancesOff: Set<String>? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -227,6 +237,20 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.faviconPath = faviconPath
         self.projectIcon = projectIcon
         self.repositoryCanonicalKey = repositoryCanonicalKey
+        self.providerInstancesOff = providerInstancesOff
+    }
+
+    /// The catalog as this project sees it: an instance the project turned off
+    /// stays listed but unavailable, so every picker drops it and a thread on
+    /// it reads as unavailable, like a provider turned off machine-wide.
+    public func scoping(_ providers: [FeatureProvider]) -> [FeatureProvider] {
+        guard let off = providerInstancesOff, !off.isEmpty else { return providers }
+        return providers.map { provider in
+            guard off.contains(provider.id) else { return provider }
+            var scoped = provider
+            scoped.isAvailable = false
+            return scoped
+        }
     }
 
     /// `ProjectScript` is a Core wire type and is deliberately not `Hashable`,
@@ -1577,6 +1601,11 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     /// The server's folder for projects started from just a name; see
     /// ``NewTaskWorkspaceDefaults/newThreadMode(environmentDefault:projectPath:newProjectsRoot:projectHasThreads:)``.
     public var newProjectsRoot: String? = nil
+    /// Whether this server keeps model favorites for every client. Nil on
+    /// older servers, where favorites stay on the device.
+    public var syncsModelFavorites: Bool? = nil
+    /// The server's favorites; nil until a client seeds them.
+    public var modelFavorites: [ModelFavorite]? = nil
 
     mutating func setPullRequestMergeMethod(_ method: String?, supported: Bool) {
         supportsPullRequestMergeMethod = supported ? true : nil

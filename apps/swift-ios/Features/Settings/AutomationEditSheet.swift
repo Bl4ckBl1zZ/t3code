@@ -481,7 +481,7 @@ public struct AutomationEditSheet: View {
     private var modelOptions: [ModelOption] {
         // The draft's own selection is the fallback so a model the catalog no
         // longer lists still appears — and stays selectable — in the picker.
-        ModelOptions.build(config: config, fallbackSelection: draft.modelSelection)
+        ModelOptions.build(config: config, fallbackSelection: draft.modelSelection, projectID: draftProjectID)
     }
 
     private var modelGroups: [ModelProviderGroup] {
@@ -525,16 +525,29 @@ public struct AutomationEditSheet: View {
 
     /// A new automation has to carry a model, and the project's default is the
     /// one its threads already use. Falls back to the catalog default, then to
-    /// whatever the catalog lists first.
+    /// whatever the catalog lists first. A chosen model on a provider the
+    /// project turned off falls back the same way, since runs would be refused.
     private func resolveDefaultModel() {
-        guard !hasChosenModel else { return }
+        guard !hasChosenModel || isDraftModelOffForProject else { return }
         if let projectDefault = selectedProject?.defaultSelection,
-           let usable = ModelOptions.selectable(ModelSelection(featureSelection: projectDefault), in: config) {
+           let usable = ModelOptions.selectable(
+               ModelSelection(featureSelection: projectDefault), in: config, projectID: draftProjectID
+           ) {
             draft.modelSelection = usable
             return
         }
-        let options = ModelOptions.build(config: config, fallbackSelection: nil)
+        let options = ModelOptions.build(config: config, fallbackSelection: nil, projectID: draftProjectID)
         draft.modelSelection = (options.first(where: \.isDefault) ?? options.first)?.selection
+    }
+
+    /// The project a run works in (wire id), whose provider switches apply.
+    private var draftProjectID: String? {
+        draft.projectID.isEmpty ? nil : draft.projectID
+    }
+
+    private var isDraftModelOffForProject: Bool {
+        guard let instanceID = draft.modelSelection?.instanceId, let draftProjectID else { return false }
+        return config?.providerInstancesOff(inProject: draftProjectID)?.contains(instanceID) == true
     }
 
     @MainActor

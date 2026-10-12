@@ -199,6 +199,15 @@ enum UsageLimitTime {
         return "\(date.formatted(day)), \(clock)"
     }
 
+    /// "Resets momentarily" in the final minute before `date`, where a clock
+    /// time would read as a minute away; otherwise "Resets " and `when`.
+    /// Mirrors web's `formatResetsIn`.
+    static func resetsPhrase(at date: Date, now: Date = .now, when: (Date) -> String) -> String {
+        let remaining = date.timeIntervalSince(now)
+        if remaining > 0, remaining < 60 { return "Resets momentarily" }
+        return "Resets \(when(date))"
+    }
+
     /// The work log heading for a failed turn: when to try again, if known.
     static func heading(resetAt: String?, now: Date = .now) -> String {
         guard let date = resetAt.flatMap(ThreadTimelineDay.date(fromISO8601:)) else {
@@ -271,9 +280,9 @@ struct UsageLimitRecoveryBanner: View {
 
     private func description(now: Date) -> String {
         guard let reset = limit.resetDate else { return "Reset time unavailable; retry manually." }
-        let when = UsageLimitTime.label(for: reset, now: now)
-        if limit.autoResumeScheduled { return "Resets \(when). The thread resumes then." }
-        return "Resets \(when)."
+        let resets = UsageLimitTime.resetsPhrase(at: reset, now: now) { UsageLimitTime.label(for: $0, now: now) }
+        if limit.autoResumeScheduled { return "\(resets). The thread resumes then." }
+        return "\(resets)."
     }
 
     @ViewBuilder

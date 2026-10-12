@@ -173,10 +173,21 @@ final class McpAppTests: XCTestCase {
         XCTAssertEqual(context["platform"], .string("mobile"))
         XCTAssertEqual(context["theme"], .string("dark"))
         XCTAssertEqual(context["displayMode"], .string("inline"))
-        XCTAssertEqual(context["containerDimensions"], .object(["width": .number(390), "height": .number(420)]))
+        // Inline rows grow to the app's content, so the app learns its ceiling.
+        XCTAssertEqual(context["containerDimensions"], .object(["width": .number(390), "maxHeight": .number(420)]))
         XCTAssertEqual(context["deviceCapabilities"], .object(["touch": .bool(true), "hover": .bool(false)]))
         XCTAssertEqual(context["styles"]?["variables"]?["--color-text-primary"], .string("#ffffff"))
         XCTAssertEqual(result["hostCapabilities"]?["sandbox"]?["permissions"], .object(["clipboardWrite": .object([:])]))
+    }
+
+    func testInlineRowsFollowTheAppsReportedHeightWithinBounds() {
+        XCTAssertNil(McpAppLayout.inlineHeight(forContentHeight: nil))
+        XCTAssertNil(McpAppLayout.inlineHeight(forContentHeight: .nan))
+        XCTAssertNil(McpAppLayout.inlineHeight(forContentHeight: .infinity))
+        XCTAssertEqual(McpAppLayout.inlineHeight(forContentHeight: -10), 80)
+        XCTAssertEqual(McpAppLayout.inlineHeight(forContentHeight: 149.6), 150)
+        XCTAssertEqual(McpAppLayout.inlineHeight(forContentHeight: 420), 420)
+        XCTAssertEqual(McpAppLayout.inlineHeight(forContentHeight: 2_000), 420)
     }
 
     func testToolCallReachesTheAppOnceAfterItInitializesWithNullsNormalized() {

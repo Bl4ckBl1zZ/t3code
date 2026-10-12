@@ -165,13 +165,16 @@ struct PullRequestCodeView: View {
     }
 }
 
-private struct PullRequestCodeFileView: View {
+/// One changed file's diff. A guide stop opens it with `focus` on the lines
+/// its excerpt covers, which start highlighted and scrolled into view.
+struct PullRequestCodeFileView: View {
     let file: FeatureReviewFile
     let reviewDraft: PullRequestReviewDraftModel?
     let canComment: Bool
     let conversations: PullRequestConversationContext
     let commit: String?
     let fileContents: ((PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents)?
+    var focus: PullRequestReviewGuideFocus? = nil
     @SwiftUI.Environment(\.pullRequestSelectionHandoff) private var selectionHandoff
     @State private var selectingLines = false
     @State private var selectionStart: String?
@@ -204,7 +207,7 @@ private struct PullRequestCodeFileView: View {
     @State private var commentingLine: FeatureDiffLine?
     var body: some View {
         let originalPositions = Set(file.lines.map(PullRequestFullContext.positionKey))
-        let selectedIDs = selectedLines
+        let selectedIDs = selectedLines.union(PullRequestReviewGuideTour.focusedLineIDs(displayedLines, focus: focus))
         let placedThreads = placed
         let unplacedThreads = fileThreads.filter { PullRequestThreadPlacement.anchor(thread: $0, file: file, commit: commit) == nil }
         VStack(alignment: .leading, spacing: 8) {
@@ -227,6 +230,7 @@ private struct PullRequestCodeFileView: View {
                 ContentUnavailableView("No text diff", systemImage: "doc", description: Text(file.change == .binary ? "This is a binary file." : "The host did not include text hunks for this file."))
             } else {
                 GeometryReader { geometry in
+                    ScrollViewReader { proxy in
                     ScrollView([.horizontal, .vertical]) {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(displayedLines) { line in
@@ -244,6 +248,12 @@ private struct PullRequestCodeFileView: View {
                                 conversation(thread).frame(width: geometry.size.width).padding(.vertical, 8)
                             }
                         }
+                    }
+                    .onAppear {
+                        if let first = displayedLines.first(where: { focus?.contains($0) == true }) {
+                            proxy.scrollTo(first.id, anchor: .top)
+                        }
+                    }
                     }
                 }
             }

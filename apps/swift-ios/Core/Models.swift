@@ -225,6 +225,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         /// Whether server settings carry `pullRequestMergeMethod` and
         /// `projectPullRequestMergeMethodOverrides`.
         public var pullRequestMergeMethodDefaults: Bool? = nil
+        /// Whether the server stores and enforces `projectProviderInstanceOverrides`.
+        /// Older servers drop the key, so pickers only scope by project here.
+        public var projectProviderInstanceOverrides: Bool? = nil
         public let fileDocumentPreviews: Bool?
         public let agentSessionImport: Bool?
         public let providerTerminalEnvironment: Bool?
@@ -260,6 +263,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case projectBrowserAccess
             case projectAutoPull
             case pullRequestMergeMethodDefaults
+            case projectProviderInstanceOverrides
             case fileDocumentPreviews
             case agentSessionImport, providerTerminalEnvironment
             case projectIcons
@@ -302,6 +306,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             projectBrowserAccess = try container.decodeIfPresent(Bool.self, forKey: .projectBrowserAccess)
             projectAutoPull = try container.decodeIfPresent(Bool.self, forKey: .projectAutoPull)
             pullRequestMergeMethodDefaults = try container.decodeIfPresent(Bool.self, forKey: .pullRequestMergeMethodDefaults)
+            projectProviderInstanceOverrides = try container.decodeIfPresent(Bool.self, forKey: .projectProviderInstanceOverrides)
             fileDocumentPreviews = try container.decodeIfPresent(Bool.self, forKey: .fileDocumentPreviews)
             agentSessionImport = try container.decodeIfPresent(Bool.self, forKey: .agentSessionImport)
             providerTerminalEnvironment = try container.decodeIfPresent(Bool.self, forKey: .providerTerminalEnvironment)

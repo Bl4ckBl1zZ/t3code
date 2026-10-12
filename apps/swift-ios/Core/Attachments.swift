@@ -72,6 +72,10 @@ public enum AssetResource: Equatable, Sendable {
     case workspaceFile(threadID: String, path: String)
     case mediaFile(threadID: String, path: String)
     case documentAttachment(id: String, name: String, mimeType: String)
+    /// A saved MCP App document. `renderIntent: "mcp-app"` has the server
+    /// inject the host theme bootstrap, so the app opens in the host's color
+    /// scheme. Servers that predate it ignore the key and serve the file as is.
+    case mcpAppDocument(id: String, name: String)
     case attachment(id: String)
     /// A file in the server's browser-artifacts directory: Hermes screenshots
     /// and recordings. Without this, an assistant message referencing one has
@@ -97,6 +101,10 @@ public enum AssetResource: Equatable, Sendable {
         case let .documentAttachment(id, name, mimeType):
             .object(["_tag": .string("attachment"), "attachmentId": .string(id),
                      "fileName": .string(name), "mimeType": .string(mimeType), "disposition": .string("inline")])
+        case let .mcpAppDocument(id, name):
+            .object(["_tag": .string("attachment"), "attachmentId": .string(id),
+                     "fileName": .string(name), "mimeType": .string("text/html"), "disposition": .string("inline"),
+                     "renderIntent": .string("mcp-app")])
         case let .attachment(id):
             .object([
                 "_tag": .string("attachment"),

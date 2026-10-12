@@ -6,6 +6,8 @@ import Foundation
 /// Sections of a change request available from a thread or the workspace.
 enum PullRequestDetailTab: String, CaseIterable {
     case summary = "Summary"
+    /// Only where the server has review guides turned on.
+    case guide = "Guide"
     case timeline = "Timeline"
     case code = "Code"
 }

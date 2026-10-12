@@ -36,7 +36,8 @@ struct McpAppHostContext: Equatable {
     var styleVariables: [String: String]
     var displayMode: McpAppDisplayMode
     var availableDisplayModes: [McpAppDisplayMode] = [.inline, .fullscreen]
-    /// Inline rows and full screen are both fixed boxes the app must fit.
+    /// Full screen is a fixed box the app must fit; an inline row grows to
+    /// the app's reported height, so `height` is its maximum there.
     var width: Double
     var height: Double
     var locale: String
@@ -55,7 +56,10 @@ struct McpAppHostContext: Equatable {
             "styles": .object(["variables": .object(styleVariables.mapValues(JSONValue.string))]),
             "displayMode": .string(displayMode.rawValue),
             "availableDisplayModes": .array(availableDisplayModes.map { .string($0.rawValue) }),
-            "containerDimensions": .object(["width": .number(width.rounded()), "height": .number(height.rounded())]),
+            "containerDimensions": .object([
+                "width": .number(width.rounded()),
+                displayMode == .inline ? "maxHeight" : "height": .number(height.rounded()),
+            ]),
             "platform": .string("mobile"),
             "locale": .string(locale),
             "timeZone": .string(timeZone),
