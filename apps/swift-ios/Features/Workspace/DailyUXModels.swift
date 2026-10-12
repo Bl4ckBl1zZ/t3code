@@ -184,7 +184,17 @@ enum DailyUXCreationContext {
         }
     }
 
+    /// The provider catalog a new or existing thread in `project` may pick
+    /// from, with the instances that project turned off made unavailable.
     static func providers(
+        for project: FeatureProject?,
+        in snapshot: FeatureSnapshot
+    ) -> [FeatureProvider] {
+        let catalog = environmentProviders(for: project, in: snapshot)
+        return project?.scoping(catalog) ?? catalog
+    }
+
+    private static func environmentProviders(
         for project: FeatureProject?,
         in snapshot: FeatureSnapshot
     ) -> [FeatureProvider] {
@@ -295,13 +305,15 @@ struct DailyUXSidebarIndex {
         snapshot: FeatureSnapshot,
         query: String,
         projectID: String? = nil,
+        projectIDs: Set<String>? = nil,
         now: Date = .now,
         changeRequests: [String: FeaturePullRequest] = [:],
         workingSectionEnabled: Bool = false
     ) {
         let visible = snapshot.threads.filter { thread in
             guard !thread.isArchived else { return false }
-            return projectID == nil || thread.projectID == projectID
+            return (projectID == nil || thread.projectID == projectID)
+                && projectIDs?.contains(thread.projectID) != false
         }
         // The predicates say what the thread's state *is*; whether a shelf may
         // claim the row is gated separately (environment capability, Main
@@ -1105,5 +1117,27 @@ enum ThreadActiveOrder {
             while reserved.contains(key(value)) { value += stride }
             return (thread.id, key(value))
         }
+    }
+}
+
+/// The Code list's project filter. Every machine's Scratch project is one
+/// "No Project" choice rather than a row per machine, as on web.
+enum HomeProjectFilter {
+    /// The selection that stands for "No Project".
+    static let noProjectID = "t3:no-project"
+    /// Where the selection is kept between launches.
+    static let storageKey = "workspace.project-filter"
+
+    /// The projects a selection keeps, or nil for all of them.
+    static func projectIDs(selected: String?, scratchProjectIDs: Set<String>) -> Set<String>? {
+        guard let selected else { return nil }
+        return selected == noProjectID ? scratchProjectIDs : [selected]
+    }
+
+    /// Whether the filter still offers `selected`; a remembered choice it no
+    /// longer offers is cleared.
+    static func isAvailable(selected: String?, projectIDs: Set<String>, scratchProjectIDs: Set<String>) -> Bool {
+        guard let selected else { return true }
+        return selected == noProjectID ? !scratchProjectIDs.isEmpty : projectIDs.contains(selected)
     }
 }

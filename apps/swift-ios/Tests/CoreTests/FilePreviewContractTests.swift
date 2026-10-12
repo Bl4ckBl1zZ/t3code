@@ -5,11 +5,12 @@ import Testing
 @Suite("File preview contracts")
 struct FilePreviewContractTests {
     @Test func encodesTheActualHostAndAttachmentRequests() throws {
-        struct Fixture: Decodable { let host: JSONValue; let attachment: JSONValue; let capabilities: EnvironmentDescriptor.Capabilities }
+        struct Fixture: Decodable { let host: JSONValue; let attachment: JSONValue; let mcpApp: JSONValue; let capabilities: EnvironmentDescriptor.Capabilities }
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/filePreviews.json")
         let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
         #expect(AssetResource.mediaFile(threadID: "thread-1", path: "/tmp/report.html").jsonValue == fixture.host)
         #expect(AssetResource.documentAttachment(id: "upload-pdf", name: "report.pdf", mimeType: "application/pdf").jsonValue == fixture.attachment)
+        #expect(AssetResource.mcpAppDocument(id: "mcp-app-snapshot", name: "app.html").jsonValue == fixture.mcpApp)
         #expect(fixture.capabilities.fileDocumentPreviews == true)
         let legacy = try JSONDecoder().decode(EnvironmentDescriptor.Capabilities.self, from: Data("{}".utf8))
         #expect(legacy.fileDocumentPreviews == nil)

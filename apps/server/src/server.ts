@@ -44,6 +44,8 @@ import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -58,6 +60,7 @@ import * as GitHubRepositoryApi from "./sourceControl/GitHubRepositoryApi.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import * as ProjectProviderOverrideSweep from "./provider/ProjectProviderOverrideSweep.ts";
 import { layer as ProviderEventLoggersLive } from "./provider/Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -356,6 +359,8 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
 );
 
 const GitManagerLayerLive = GitManager.layer.pipe(
+  // The acting project decides which provider writes source control text.
+  Layer.provide(Layer.merge(ProjectionStore.layer, ProjectServiceLayerLive)),
   Layer.provideMerge(ProjectSetupScriptRunnerLayerLive),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
@@ -515,6 +520,11 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   HeldHooksWaker.layer,
   T3ProjectFileSyncLayerLive,
   ReplayRecordPruner.layer,
+  // Catches provider overrides left behind by a project deleted before the
+  // on-delete cleanup existed, or by a cleanup write that failed.
+  Layer.effectDiscard(ProjectProviderOverrideSweep.sweep).pipe(
+    Layer.provide(ProjectionProjectRepositoryLive),
+  ),
 ).pipe(
   // Core Services
   // One per environment, so every shell subscription shares its thread shell reads.
@@ -631,8 +641,13 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Last, so no route layer can replace the server's one TracerDisabledWhen.
   untracedRequestsLayer,
 ).pipe(
+  // Guides read through the same pull request service as every other surface.
+  Layer.provide(
+    PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
+  ),
   // Both transports consume the same service instance, so caches single-flight across clients
-  // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
+  // and mutations observed on WebSocket invalidate patches subsequently read over HTTP. Provided
+  // after the guide service so it reaches that too.
   Layer.provide(PullRequestServiceLive),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(McpOAuth.layerMcpClientAuthenticator),

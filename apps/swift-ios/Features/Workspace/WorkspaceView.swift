@@ -36,7 +36,9 @@ public struct WorkspaceView: View {
     @State private var compactColumn: NavigationSplitViewColumn = .sidebar
     /// The threads Back returns to before the list.
     @State private var threadBackStack = ThreadBackStack()
-    @State private var selectedProjectID: String?
+    /// The project filter, kept for the next launch as on web and mobile.
+    /// Empty is All Projects.
+    @AppStorage(HomeProjectFilter.storageKey) private var storedProjectFilter = ""
     @State private var searchText = ""
     @State private var isSearchPresented = false
     // Persisted like the web sidebar's shelves: whether a shelf is open is a
@@ -458,9 +460,12 @@ public struct WorkspaceView: View {
         Menu {
             if !model.snapshot.projects.isEmpty {
                 Section("Project") {
-                    Picker("Project", selection: $selectedProjectID) {
+                    Picker("Project", selection: Binding(get: { selectedProjectID }, set: { selectedProjectID = $0 })) {
                         Text("All Projects").tag(String?.none)
-                        ForEach(model.snapshot.projects) { project in
+                        if !scratchProjectIDs.isEmpty {
+                            Text("No Project").tag(Optional(HomeProjectFilter.noProjectID))
+                        }
+                        ForEach(namedFilterProjects) { project in
                             Text(projectMenuTitle(project)).tag(Optional(project.id))
                         }
                     }
@@ -920,7 +925,7 @@ public struct WorkspaceView: View {
             .sheet(isPresented: $showingArrangement) {
                 ActiveThreadArrangementSheet(
                     model: model,
-                    projectID: selectedProjectID,
+                    projectIDs: activeProjectFilterIDs,
                     arrangesActive: !isWorkingSectionEnabled
                 )
             }
@@ -1154,7 +1159,9 @@ public struct WorkspaceView: View {
                 showingPullRequests = false
                 openThread(threadID)
             } : nil)
-            .onChange(of: selectedProjectIsAvailable) { _, isAvailable in
+            // A saved filter waits for the projects to load before it can
+            // read as gone; one that is still missing then resets.
+            .onChange(of: selectedProjectIsAvailable || isAwaitingData, initial: true) { _, isAvailable in
                 if !isAvailable { selectedProjectID = nil }
             }
             .onChange(of: selectedProjectID) {
@@ -1238,7 +1245,7 @@ public struct WorkspaceView: View {
             snapshot: model.snapshot,
             revision: model.homePresentationRevision,
             query: query,
-            projectID: selectedProjectID,
+            projectIDs: activeProjectFilterIDs,
             now: sidebarBoundaryNow,
             changeRequests: model.changeRequestsByThreadID,
             contentMatchIDs: query.isEmpty ? [] : Set(currentContentMatches.keys),
@@ -1267,7 +1274,9 @@ public struct WorkspaceView: View {
     private var homeEmptyState: HomeEmptyState {
         HomeEmptyState.resolve(
             hasCreationProjects: !creationProjects.isEmpty,
-            filteredProjectName: selectedProject?.name
+            filteredProjectName: selectedProjectID == HomeProjectFilter.noProjectID
+                ? "No Project"
+                : selectedProject?.name
         )
     }
 
@@ -1310,8 +1319,19 @@ public struct WorkspaceView: View {
             .sorted()
     }
 
+    /// The projects the filter keeps, with "No Project" expanded to every
+    /// machine's Scratch project.
+    private var activeProjectFilterIDs: Set<String>? {
+        HomeProjectFilter.projectIDs(selected: selectedProjectID, scratchProjectIDs: scratchProjectIDs)
+    }
+
     private var selectedProject: FeatureProject? {
         model.snapshot.projects.first { $0.id == selectedProjectID }
+    }
+
+    private var selectedProjectID: String? {
+        get { storedProjectFilter.isEmpty ? nil : storedProjectFilter }
+        nonmutating set { storedProjectFilter = newValue ?? "" }
     }
 
     private var creationProjects: [FeatureProject] {
@@ -1329,8 +1349,25 @@ public struct WorkspaceView: View {
     /// A filter on a project that has since gone reads as unavailable, so the
     /// reset clears it rather than leaving the list filtered to nothing.
     private var selectedProjectIsAvailable: Bool {
-        guard let selectedProjectID else { return true }
-        return model.snapshot.projects.contains { $0.id == selectedProjectID }
+        HomeProjectFilter.isAvailable(
+            selected: selectedProjectID,
+            projectIDs: Set(model.snapshot.projects.map(\.id)),
+            scratchProjectIDs: scratchProjectIDs
+        )
+    }
+
+    /// Every machine's Scratch project, offered together as "No Project".
+    private var scratchProjectIDs: Set<String> {
+        let serverConfigs = model.client.workspaceServerConfigs()
+        return Set(model.snapshot.projects.filter {
+            DailyUXCreationContext.isScratchProject($0, serverConfigs: serverConfigs)
+        }.map(\.id))
+    }
+
+    /// The projects the filter lists by name.
+    private var namedFilterProjects: [FeatureProject] {
+        let scratch = scratchProjectIDs
+        return model.snapshot.projects.filter { !scratch.contains($0.id) }
     }
 
     /// A thread deleted elsewhere closes, back to the thread that opened it
@@ -1454,8 +1491,10 @@ public struct WorkspaceView: View {
         }
     }
 
+    /// "No Project" names no single project, so the draft picks its own.
     private func startNewDraft() {
-        openDraft(draftID: UUID().uuidString, projectID: selectedProjectID)
+        let projectID = selectedProjectID == HomeProjectFilter.noProjectID ? nil : selectedProjectID
+        openDraft(draftID: UUID().uuidString, projectID: projectID)
     }
 
     /// The composer opens once the drafts sheet is gone, so the two sheets
@@ -1660,6 +1699,7 @@ struct HomePresentation {
         snapshot: FeatureSnapshot,
         query: String,
         projectID: String?,
+        projectIDs: Set<String>? = nil,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
         contentMatchIDs: Set<String> = [],
@@ -1673,6 +1713,7 @@ struct HomePresentation {
             snapshot: scoped,
             query: "",
             projectID: projectID,
+            projectIDs: projectIDs,
             now: now,
             changeRequests: changeRequests,
             workingSectionEnabled: workingSectionEnabled
@@ -1680,7 +1721,8 @@ struct HomePresentation {
         let archived = snapshot.threads
             .filter { thread in
                 guard thread.isArchived, !thread.isSubagentThread else { return false }
-                return projectID == nil || thread.projectID == projectID
+                return (projectID == nil || thread.projectID == projectID)
+                    && projectIDs?.contains(thread.projectID) != false
             }
             .sorted {
                 if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
@@ -1714,7 +1756,7 @@ final class HomePresentationCache {
     private struct Key: Equatable {
         let revision: UInt64
         let query: String
-        let projectID: String?
+        let projectIDs: Set<String>?
         let now: Date
         /// Change-request state moves rows between Active and Settled, and it
         /// streams in outside `homePresentationRevision` — without it in the
@@ -1733,7 +1775,7 @@ final class HomePresentationCache {
         snapshot: FeatureSnapshot,
         revision: UInt64,
         query: String,
-        projectID: String?,
+        projectIDs: Set<String>?,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
         contentMatchIDs: Set<String> = [],
@@ -1742,7 +1784,7 @@ final class HomePresentationCache {
         let key = Key(
             revision: revision,
             query: query,
-            projectID: projectID,
+            projectIDs: projectIDs,
             now: now,
             changeRequests: changeRequests,
             contentMatchIDs: contentMatchIDs,
@@ -1757,7 +1799,8 @@ final class HomePresentationCache {
         let presentation = HomePresentation(
             snapshot: snapshot,
             query: query,
-            projectID: projectID,
+            projectID: nil,
+            projectIDs: projectIDs,
             now: now,
             changeRequests: changeRequests,
             contentMatchIDs: contentMatchIDs,
@@ -2403,7 +2446,7 @@ private struct ProjectBadge: View {
 /// every client sees the same arrangement.
 private struct ActiveThreadArrangementSheet: View {
     @Bindable var model: FeatureRootModel
-    let projectID: String?
+    let projectIDs: Set<String>?
     var arrangesActive = true
     @State private var rows: [FeatureThread] = []
     @State private var contexts: [String: HomeThreadRowContext] = [:]
@@ -2414,7 +2457,8 @@ private struct ActiveThreadArrangementSheet: View {
         HomePresentation(
             snapshot: model.snapshot,
             query: "",
-            projectID: projectID,
+            projectID: nil,
+            projectIDs: projectIDs,
             now: .now,
             changeRequests: model.changeRequestsByThreadID
         )

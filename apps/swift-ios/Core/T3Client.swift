@@ -1068,6 +1068,17 @@ public actor T3Client {
         )
     }
 
+    /// Stops a workflow run as a whole: its coordinator and every member it
+    /// still has going. `subagentID` is the coordinator's subagent id on
+    /// `threadID`, the thread that spawned it.
+    public func stopWorkflow(threadID: String, subagentID: String) async throws {
+        let _: JSONValue = try await rpc.request(
+            RPCMethod.stopWorkflow.rawValue,
+            payload: .object(["threadId": .string(threadID), "subagentId": .string(subagentID)]),
+            as: JSONValue.self
+        )
+    }
+
     public func interrupt(
         threadID: String,
         runID: String,
@@ -1314,6 +1325,21 @@ public actor T3Client {
         if let cursor { payload["cursor"] = .string(cursor) }
         if let commit { payload["commit"] = .string(commit) }
         return try await rpc.request("pullRequests.diff", payload: .object(payload), as: PullRequestDiffResult.self)
+    }
+
+    /// The stored review guide and any run in progress (`pullRequests.reviewGuide`).
+    public func pullRequestReviewGuide(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestReviewGuideResult {
+        try await rpc.request("pullRequests.reviewGuide", payload: .object(PullRequestWireReference.withHost(host, [
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ])), as: PullRequestReviewGuideResult.self)
+    }
+
+    /// Starts a guide run on the server and answers with its first state; the
+    /// run itself takes minutes, so callers poll `pullRequestReviewGuide`.
+    public func generatePullRequestReviewGuide(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestReviewGuideResult {
+        try await rpc.request("pullRequests.generateReviewGuide", payload: .object(PullRequestWireReference.withHost(host, [
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ])), as: PullRequestReviewGuideResult.self)
     }
 
     public func pullRequestLabelCandidates(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestLabelCandidateList {
@@ -2784,6 +2810,7 @@ public enum RPCMethod: String, Sendable {
     case dispatchCommand = "orchestration.dispatchCommand"
     case launchThread = "orchestration.launchThread"
     case generateHandoffScript = "orchestration.generateHandoffScript"
+    case stopWorkflow = "orchestration.stopWorkflow"
     case getTurnDiff = "orchestration.getTurnDiff"
     case getFullThreadDiff = "orchestration.getFullThreadDiff"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"

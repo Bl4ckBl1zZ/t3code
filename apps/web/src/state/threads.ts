@@ -10,7 +10,12 @@ import {
   createThreadEnvironmentAtoms,
   isThreadRunInFlight,
 } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ShellThreadStatus,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
@@ -57,8 +62,13 @@ export function useEnvironmentThread(
 
 type KeptThreads = ReadonlyMap<EnvironmentId, ReadonlySet<ThreadId>>;
 
+// A queued run is not mid-turn, but it starts without the user opening the
+// thread, so its stream stays open like an in-flight one.
+const keepsThreadSubscribed = (status: OrchestrationV2ShellThreadStatus) =>
+  status === "queued" || isThreadRunInFlight(status);
+
 // True once a thread's own stream no longer needs to stay open: it is in sync
-// and shows no run in flight, or it cannot progress (deleted or failed). A
+// and shows no queued or in-flight run, or it cannot progress (deleted or failed). A
 // stream that is still loading or reconnecting keeps waiting for the stop.
 function isDetailDone<E>(result: AsyncResult.AsyncResult<EnvironmentThreadState, E>): boolean {
   if (!AsyncResult.isSuccess(result)) return true;
@@ -66,7 +76,7 @@ function isDetailDone<E>(result: AsyncResult.AsyncResult<EnvironmentThreadState,
   if (status === "deleted" || Option.isSome(error)) return true;
   return (
     status === "live" &&
-    !Option.exists(data, (thread) => thread.runs.some((run) => isThreadRunInFlight(run.status)))
+    !Option.exists(data, (thread) => thread.runs.some((run) => keepsThreadSubscribed(run.status)))
   );
 }
 
@@ -95,7 +105,7 @@ export function createRunningThreadKeepAliveAtom<E>(input: {
     let previous: ReadonlyArray<ThreadId> = [];
     return Atom.make((get) => {
       const running = get(input.threadsAtom(environmentId)).flatMap((thread) =>
-        isThreadRunInFlight(thread.status) ? [thread.id] : [],
+        keepsThreadSubscribed(thread.status) ? [thread.id] : [],
       );
       if (arrayElementsEqual(previous, running)) return previous;
       previous = running;

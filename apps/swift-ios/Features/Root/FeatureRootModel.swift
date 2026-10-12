@@ -47,6 +47,13 @@ public final class FeatureRootModel {
 
     var pendingAssistantCitation: AssistantCitationNavigationRequest?
 
+    /// Favorite toggles sent but not yet reflected in an environment's
+    /// settings, keyed by environment then model option id.
+    var pendingModelFavorites: [String: [String: Bool]] = [:]
+    /// Environments this launch already tried to seed with the device's
+    /// favorites; see `reconcileModelFavorites`.
+    @ObservationIgnored var seededModelFavoriteEnvironments: Set<String> = []
+
     public private(set) var snapshot = FeatureSnapshot()
     public private(set) var details: [String: FeatureThreadDetail] = [:]
     /// Advances whenever a Home presentation input changes.
@@ -1042,6 +1049,7 @@ public final class FeatureRootModel {
             threadCollectionRevision &+= 1
         }
         snapshot = value
+        reconcileModelFavorites()
         observeChangeRequests(threadIDs: changeRequestThreadIDs)
         if value.connection.state == .connected
             || value.environments.contains(where: { $0.connectionState == .connected }) {

@@ -74,7 +74,8 @@ export function ProjectDefaultsSettings({
   const storedSelection = serverSettings.defaultModelSelection;
   const selection = resolveDefaultProviderModelSelection(providers, storedSelection);
   const entries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+    // The machine's default for every project, so no project's switches apply.
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
   );
   const modelOptions = getCustomModelOptionsByInstance(
     settings,
@@ -110,6 +111,7 @@ export function ProjectDefaultsSettings({
       const entry = applyProviderInstanceSettings(
         deriveProviderInstanceEntries(config.providers),
         config.settings,
+        null,
       ).find((candidate) => candidate.instanceId === instanceId);
       const options = getCustomModelOptionsByInstance(
         { ...config.settings, ...clientSettings },
@@ -230,6 +232,7 @@ export function ProjectDefaultsSettings({
                 className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 disabled:opacity-50"
               >
                 <ProviderModelPicker
+                  environmentId={representative?.environmentId ?? null}
                   {...(representative?.serverConfig?.environment.capabilities
                     .providerTerminalEnvironment === true
                     ? {

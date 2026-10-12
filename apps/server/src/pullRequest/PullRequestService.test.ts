@@ -8,6 +8,8 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeV8 from "node:v8";
+import * as NodeVM from "node:vm";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as Persistence from "effect/unstable/persistence/Persistence";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
@@ -4502,5 +4504,161 @@ it.effect("announces state a detail read sees first or newly", () =>
     detail = { state: "open", updatedAt: "2026-07-05T00:00:00Z" };
     yield* readDetail;
     assert.strictEqual(announced.length, 3);
+  }),
+);
+
+it.effect.each([
+  ["github.com", "github"],
+  ["bitbucket.org", "bitbucket"],
+] as const)("reads linked PR summaries and stacks on %s without a checkout", ([host, kind]) =>
+  Effect.gen(function* () {
+    const seen: Array<{ cwd: string; repository: string; host: string }> = [];
+    const service = yield* makeService({
+      projects: [project({ id: "inbox", title: "Inbox", workspaceRoot: "/home/alex" })],
+      providers: [
+        fakeProvider(kind, {
+          getChangeRequestSummary: (input) =>
+            Effect.sync(() => {
+              seen.push({ cwd: input.cwd, repository: input.repository, host: input.host });
+              return changeRequest(7, "2026-07-02T00:00:00Z");
+            }),
+          getStack: (input) =>
+            Effect.sync(() => {
+              seen.push({ cwd: input.cwd, repository: input.repository, host: input.host });
+              return null;
+            }),
+        }),
+      ],
+    });
+    const reference = {
+      projectId: "inbox" as ProjectId,
+      host,
+      repository: "acme/api",
+      number: 7,
+    };
+    const summary = yield* service.summary(reference);
+    const stack = yield* service.stack(reference, { includeDetails: false });
+    assert.strictEqual(summary.title, "Change request 7");
+    assert.strictEqual(summary.state, "open");
+    assert.strictEqual(summary.projectId, reference.projectId);
+    assert.strictEqual(stack, null);
+    assert.deepStrictEqual(seen, [
+      { cwd: "/home/alex", repository: "acme/api", host },
+      { cwd: "/home/alex", repository: "acme/api", host },
+    ]);
+  }),
+);
+
+it.effect("prefers a matching checkout over a non-repository project's directory", () =>
+  Effect.gen(function* () {
+    const seen: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "inbox", title: "Inbox", workspaceRoot: "/home/alex" }),
+        project({ id: "repo", title: "API", workspaceRoot: "/api", repository: "acme/api" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: (input) =>
+            Effect.sync(() => {
+              seen.push(input.cwd);
+              return changeRequest(7, "2026-07-02T00:00:00Z");
+            }),
+        }),
+      ],
+    });
+    yield* service.summary({
+      projectId: "inbox" as ProjectId,
+      host: "github.com",
+      repository: "acme/api",
+      number: 7,
+    });
+    assert.deepStrictEqual(seen, ["/api"]);
+  }),
+);
+
+it.effect("requires an explicit host for a non-repository project's linked PR", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "inbox", title: "Inbox", workspaceRoot: "/home/alex" })],
+      providers: [fakeProvider("github")],
+    });
+    const error = yield* service
+      .summary({ projectId: "inbox" as ProjectId, repository: "acme/api", number: 7 })
+      .pipe(Effect.flip);
+    assert.strictEqual(error._tag, "PullRequestUnavailableError");
+  }),
+);
+
+it.effect("refuses a public host reference without a selected project directory", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [],
+      providers: [fakeProvider("github")],
+    });
+    const error = yield* service
+      .summary({
+        projectId: "missing" as ProjectId,
+        host: "github.com",
+        repository: "acme/api",
+        number: 7,
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(error._tag, "PullRequestUnavailableError");
+  }),
+);
+
+it.effect(
+  "requires a checkout for GitLab because its adapter does not explicitly target the host",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [project({ id: "inbox", title: "Inbox", workspaceRoot: "/home/alex" })],
+        providers: [fakeProvider("gitlab")],
+      });
+      const error = yield* service
+        .summary({
+          projectId: "inbox" as ProjectId,
+          host: "gitlab.com",
+          repository: "acme/api",
+          number: 7,
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(error._tag, "PullRequestUnavailableError");
+    }),
+);
+
+it.effect("releases an expired diff nobody reads again", () =>
+  Effect.gen(function* () {
+    NodeV8.setFlagsFromString("--expose-gc");
+    const collect = NodeVM.runInNewContext("gc") as () => void;
+    const settle = Effect.promise(async () => {
+      // A weak reference keeps its target for the rest of the job that created it.
+      await new Promise((resolve) => setImmediate(resolve));
+      collect();
+    });
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getDiff: () => Effect.sync(() => ({ patch: "@@", truncated: false, nextCursor: null })),
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const read = (input: Parameters<typeof service.diff>[0]) =>
+      Effect.map(service.diff(input), (result) => new WeakRef(result));
+    const page = yield* read(reference);
+    const commit = yield* read({ ...reference, commit: "a".repeat(40) });
+
+    yield* TestClock.adjust("9 minutes");
+    yield* settle;
+    assert.isDefined(page.deref());
+    assert.isDefined(commit.deref());
+
+    yield* TestClock.adjust("2 minutes");
+    yield* settle;
+    assert.isUndefined(page.deref());
+    assert.isUndefined(commit.deref());
   }),
 );

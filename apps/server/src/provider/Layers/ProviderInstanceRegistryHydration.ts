@@ -44,6 +44,8 @@ import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
  */
 import {
   defaultInstanceIdForDriver,
+  providerInstanceConfigEnabledFlag,
+  resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   ServerSettings,
@@ -110,6 +112,25 @@ export const deriveProviderInstanceConfigMap = (
       driver: driver.driverKind,
       config: legacyConfig,
     };
+  }
+
+  // A project that turns an instance on needs it alive and probed even when
+  // the machine itself has it off, or a thread in that project would route
+  // to an instance nobody ever checked in on. An instance already enabled is
+  // untouched, and one absent from settings (deleted) stays out.
+  for (const overrides of Object.values(settings.projectProviderInstanceOverrides)) {
+    for (const [instanceId, projectOverride] of Object.entries(overrides)) {
+      if (projectOverride.enabled !== true) continue;
+      const existing = Object.hasOwn(merged, instanceId) ? merged[instanceId] : undefined;
+      if (existing === undefined || resolveProviderInstanceEnabled(existing)) continue;
+      merged[instanceId] = {
+        ...existing,
+        enabled: true,
+        ...(providerInstanceConfigEnabledFlag(existing.config) === false
+          ? { config: { ...(existing.config as Record<string, unknown>), enabled: true } }
+          : {}),
+      };
+    }
   }
 
   return merged as ProviderInstanceConfigMap;

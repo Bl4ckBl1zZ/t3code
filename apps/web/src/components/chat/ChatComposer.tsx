@@ -32,6 +32,7 @@ import {
 import type {
   EnvironmentId,
   ModelSelection,
+  ProjectId,
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -208,6 +209,12 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
 
     const updatePosition = () => {
       const rect = anchor.getBoundingClientRect();
+      // A maximized right panel collapses the chat column to zero width; the
+      // menu must not float over the panel then.
+      if (rect.width <= 0) {
+        setPosition(null);
+        return;
+      }
       const next = {
         bottom: window.innerHeight - rect.top + 8,
         left: rect.left,
@@ -700,6 +707,8 @@ export interface ChatComposerProps {
   providerStatuses: ServerProvider[];
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
+  /** The active project, so the picker can fold in its provider switches. */
+  activeProjectId: ProjectId | null;
   /**
    * Persists a model-option change (effort, context window, …) onto a server
    * thread. Supplied only on the server route; draft routes fall through to the
@@ -828,6 +837,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerStatuses,
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
+    activeProjectId,
     onThreadModelOptionsChange,
     activeContextWindow,
     onCompactContext,
@@ -990,9 +1000,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const providerInstanceEntries = useMemo<ReadonlyArray<ProviderInstanceEntry>>(
     () =>
       sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(providerStatuses),
+          settings,
+          activeProjectId,
+        ),
       ),
-    [providerStatuses, settings],
+    [activeProjectId, providerStatuses, settings],
   );
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
@@ -3629,6 +3643,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         </Button>
       ) : (
         <ProviderModelPicker
+          environmentId={environmentId}
           isComposerOwned
           size={isComposerResting ? "xs" : "sm"}
           {...(props.onOpenProviderSetup ? { onOpenProviderSetup: props.onOpenProviderSetup } : {})}

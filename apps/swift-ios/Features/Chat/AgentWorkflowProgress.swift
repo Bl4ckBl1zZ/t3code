@@ -37,19 +37,24 @@ public struct AgentWorkflowProgress: Equatable, Hashable, Sendable {
     public let currentPhase: String?
     /// Agents spawned so far by this workflow.
     public let spawnedCount: Int?
+    /// The member roster, when the provider reports one; see
+    /// ``ThreadLineageWorkflowGroup``. Child thread ids are feature-scoped.
+    public var members: [OrchestrationV2WorkflowAgent]?
 
     public init(
         name: String? = nil,
         description: String? = nil,
         phases: [AgentWorkflowPhase] = [],
         currentPhase: String? = nil,
-        spawnedCount: Int? = nil
+        spawnedCount: Int? = nil,
+        members: [OrchestrationV2WorkflowAgent]? = nil
     ) {
         self.name = name
         self.description = description
         self.phases = phases
         self.currentPhase = currentPhase
         self.spawnedCount = spawnedCount
+        self.members = members
     }
 }
 

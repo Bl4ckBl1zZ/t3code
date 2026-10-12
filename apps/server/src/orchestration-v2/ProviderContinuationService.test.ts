@@ -1,7 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  MessageId,
+  NodeId,
+  ProjectId,
   ProviderDriverKind,
+  ProviderInstanceId,
   ProviderThreadId,
+  RunId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
@@ -21,7 +26,10 @@ import {
   layer as continuationRequestsLayer,
 } from "./ProviderContinuationRequests.ts";
 import { workerLive } from "./ProviderContinuationService.ts";
-import { ThreadManagementService } from "./ThreadManagementService.ts";
+import {
+  ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementService,
+} from "./ThreadManagementService.ts";
 
 const threadId = ThreadId.make("thread-provider-continuation");
 const providerThreadId = ProviderThreadId.make("provider-thread-continuation");
@@ -384,5 +392,101 @@ describe("ProviderContinuationService", () => {
         Effect.scoped,
       );
     });
+  });
+
+  describe("when the project turned the provider off", () => {
+    const disabled = new ThreadManagementProviderInstanceDisabledError({
+      projectId: ProjectId.make("project-provider-continuation-disabled"),
+      instanceId: ProviderInstanceId.make("codex"),
+    });
+
+    it.effect("drops a buffered wake and clears the adapter's sticky offer", () =>
+      Effect.gen(function* () {
+        const dispatched = yield* Queue.unbounded<unknown>();
+        const attempts = yield* Ref.make(0);
+        const cleared = yield* Ref.make(false);
+        yield* Effect.gen(function* () {
+          const requests = yield* ProviderContinuationRequests;
+          yield* requests.offer({ ...request(), clearIfCurrent: () => Ref.set(cleared, true) });
+          for (let attempt = 0; attempt < 20 && !(yield* Ref.get(cleared)); attempt += 1) {
+            yield* Effect.yieldNow;
+          }
+          assert.isTrue(yield* Ref.get(cleared));
+          assert.equal(yield* Ref.get(attempts), 1);
+        }).pipe(
+          Effect.provide(
+            testLayerWithDispatch({
+              dispatched,
+              getThreadRecords: () => Effect.succeed(projection),
+              dispatch: () =>
+                Ref.update(attempts, (count) => count + 1).pipe(
+                  Effect.andThen(Effect.fail(disabled)),
+                ),
+            }),
+          ),
+          Effect.scoped,
+        );
+      }),
+    );
+
+    it.effect("acknowledges a refused delegated completion instead of retrying it", () =>
+      Effect.gen(function* () {
+        const parentRunId = RunId.make("run-provider-continuation-parent");
+        const messageId = MessageId.make("message-provider-continuation-delegated");
+        const taskIds = [NodeId.make("node-first"), NodeId.make("node-second")];
+        const delegatedProjection = {
+          thread: { archivedAt: null },
+          messages: [],
+          subagents: [],
+          runs: [
+            {
+              id: parentRunId,
+              delegatedCompletion: {
+                disposition: "open",
+                delivery: { generation: 1, messageId, taskIds },
+              },
+            },
+          ],
+        } as unknown as OrchestrationV2ThreadProjection;
+        const dispatched = yield* Queue.unbounded<unknown>();
+        const attempts = yield* Ref.make(0);
+        yield* Effect.gen(function* () {
+          const requests = yield* ProviderContinuationRequests;
+          yield* requests.offer({
+            ...request(),
+            delivery: "message_text",
+            delegatedCompletion: { parentRunId, generation: 1, messageId },
+          });
+          const acknowledgements = [yield* Queue.take(dispatched), yield* Queue.take(dispatched)];
+          assert.deepEqual(
+            acknowledgements.map((command) => ({
+              type: (command as { type: string }).type,
+              taskId: (command as { taskId: string }).taskId,
+              observedByRunId: (command as { observedByRunId: string | null }).observedByRunId,
+            })),
+            taskIds.map((taskId) => ({
+              type: "delegated_task.completion-delivery.acknowledge",
+              taskId,
+              observedByRunId: null,
+            })),
+          );
+          assert.equal(yield* Ref.get(attempts), 1);
+        }).pipe(
+          Effect.provide(
+            testLayerWithDispatch({
+              dispatched,
+              getThreadRecords: () => Effect.succeed(delegatedProjection),
+              dispatch: (command) =>
+                command.type === "message.dispatch"
+                  ? Ref.update(attempts, (count) => count + 1).pipe(
+                      Effect.andThen(Effect.fail(disabled)),
+                    )
+                  : Queue.offer(dispatched, command).pipe(Effect.as({} as never)),
+            }),
+          ),
+          Effect.scoped,
+        );
+      }),
+    );
   });
 });

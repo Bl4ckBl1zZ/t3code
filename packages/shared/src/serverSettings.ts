@@ -1,11 +1,17 @@
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_TEXT_GENERATION_MODEL,
+  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
+  defaultInstanceIdForDriver,
   isProviderDriverKind,
   isProviderAvailable,
   resolveProviderInstanceEnabled,
   isProviderTextGenerationCapable,
   type ModelSelection,
   type ProjectId,
-  type ProviderDriverKind,
+  type ProjectProviderInstanceOverride,
+  ProviderDriverKind,
+  ProviderInstanceId,
   type PullRequestMergeMethod,
   type ServerProvider,
   ServerSettings,
@@ -73,16 +79,18 @@ const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
 type LegacyProviderSettings = ServerSettings["providers"][keyof ServerSettings["providers"]];
 
 const getLegacyProviderSettings = (
-  settings: ServerSettings,
+  settings: Pick<ServerSettings, "providers">,
   provider: ProviderDriverKind,
 ): LegacyProviderSettings | undefined =>
   (settings.providers as Record<string, LegacyProviderSettings | undefined>)[provider];
 
 export function isModelSelectionProviderEnabled(
-  settings: ServerSettings,
-  selection: ModelSelection,
+  settings: Pick<ServerSettings, "providerInstances" | "providers">,
+  selection: Pick<ModelSelection, "instanceId">,
 ): boolean {
-  const instanceConfig = settings.providerInstances[selection.instanceId];
+  const instanceConfig = Object.hasOwn(settings.providerInstances, selection.instanceId)
+    ? settings.providerInstances[selection.instanceId]
+    : undefined;
   if (instanceConfig !== undefined) {
     return resolveProviderInstanceEnabled(instanceConfig);
   }
@@ -93,13 +101,96 @@ export function isModelSelectionProviderEnabled(
   );
 }
 
+type ProjectProviderSettings = Pick<
+  ServerSettings,
+  "providerInstances" | "providers" | "projectProviderInstanceOverrides"
+>;
+
+/** A project's own switch for an instance; `undefined` inherits the machine. */
+export function projectProviderInstanceOverride(
+  settings: Pick<ServerSettings, "projectProviderInstanceOverrides">,
+  projectId: ProjectId | null,
+  instanceId: ProviderInstanceId,
+): ProjectProviderInstanceOverride["enabled"] {
+  if (projectId === null) return undefined;
+  const overrides = settings.projectProviderInstanceOverrides[projectId];
+  return overrides !== undefined && Object.hasOwn(overrides, instanceId)
+    ? overrides[instanceId]?.enabled
+    : undefined;
+}
+
+/**
+ * Effective enablement for a provider instance within a project: the project's override when
+ * set, in either direction, otherwise the machine's. `null` (no project in scope) always
+ * resolves to the machine value.
+ */
+export function resolveProjectProviderInstanceEnabled(
+  settings: ProjectProviderSettings,
+  projectId: ProjectId | null,
+  instanceId: ProviderInstanceId,
+): boolean {
+  return (
+    projectProviderInstanceOverride(settings, projectId, instanceId) ??
+    isModelSelectionProviderEnabled(settings, { instanceId })
+  );
+}
+
+/**
+ * The text generation model a project runs: the machine's, unless the project turned its
+ * instance off. Then the first built-in default instance, then configured instance, that the
+ * project leaves on, so text generation never runs on an instance the project turned off.
+ */
+export function resolveProjectTextGenerationModelSelection(
+  settings: ProjectProviderSettings & Pick<ServerSettings, "textGenerationModelSelection">,
+  projectId: ProjectId | null,
+): ModelSelection {
+  const selection = settings.textGenerationModelSelection;
+  // Outside a project the server already resolved the machine's own fallback.
+  if (
+    projectId === null ||
+    resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
+  ) {
+    return selection;
+  }
+  const drivers = Object.keys(settings.providers).map((driver) => ProviderDriverKind.make(driver));
+  const candidates = [
+    ...drivers.map((driver) => [defaultInstanceIdForDriver(driver), driver] as const),
+    ...Object.entries(settings.providerInstances).flatMap(([instanceId, instance]) =>
+      drivers.includes(instance.driver)
+        ? [[ProviderInstanceId.make(instanceId), instance.driver] as const]
+        : [],
+    ),
+  ];
+  const match = candidates.find(([instanceId]) =>
+    resolveProjectProviderInstanceEnabled(settings, projectId, instanceId),
+  );
+  if (match === undefined) return selection;
+  const [instanceId, driver] = match;
+  return {
+    instanceId,
+    model:
+      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
+      DEFAULT_MODEL_BY_PROVIDER[driver] ??
+      DEFAULT_TEXT_GENERATION_MODEL,
+  };
+}
+
+/**
+ * `projectId` has no default: a caller that forgot it would silently ignore a project that
+ * turned the writer's instance off. Pass `null` explicitly outside a project's scope.
+ */
 export function resolveSourceControlWriterModelSelection(
   settings: ServerSettings,
-  providers?: ReadonlyArray<ServerProvider>,
+  providers: ReadonlyArray<ServerProvider> | undefined,
+  projectId: ProjectId | null,
 ): ModelSelection {
   const selection = settings.sourceControlWriterModelSelection;
-  if (!selection || !isModelSelectionProviderEnabled(settings, selection)) {
-    return settings.textGenerationModelSelection;
+  const fallback = resolveProjectTextGenerationModelSelection(settings, projectId);
+  if (
+    !selection ||
+    !resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
+  ) {
+    return fallback;
   }
   if (providers === undefined) {
     return selection;
@@ -110,7 +201,34 @@ export function resolveSourceControlWriterModelSelection(
     isProviderAvailable(provider) &&
     isProviderTextGenerationCapable(provider)
     ? selection
-    : settings.textGenerationModelSelection;
+    : fallback;
+}
+
+/**
+ * The model that writes review guides: its own setting when that provider can still run it,
+ * otherwise whatever writes source control text.
+ */
+export function resolveReviewGuideModelSelection(
+  settings: ServerSettings,
+  providers: ReadonlyArray<ServerProvider> | undefined,
+  projectId: ProjectId | null,
+): ModelSelection {
+  const selection = settings.reviewGuideModelSelection;
+  if (
+    selection &&
+    resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
+  ) {
+    const provider = providers?.find((candidate) => candidate.instanceId === selection.instanceId);
+    if (
+      providers === undefined ||
+      (provider?.enabled === true &&
+        isProviderAvailable(provider) &&
+        isProviderTextGenerationCapable(provider))
+    ) {
+      return selection;
+    }
+  }
+  return resolveSourceControlWriterModelSelection(settings, providers, projectId);
 }
 
 export interface PersistedServerObservabilitySettings {
@@ -177,6 +295,12 @@ export function applyServerSettingsPatch(
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
   const {
+    favorites: favoritesPatch,
+    migrateModelPreferences,
+    setModelFavorites,
+    setModelsHidden,
+    setProviderModelOrder,
+    providerModelPreferences: modelPreferencesPatch,
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
     backgroundActivityProfile,
@@ -190,6 +314,7 @@ export function applyServerSettingsPatch(
     projectAgentBrowserAccessOverrides: browserAccessPatch,
     projectPullRequestMergeMethodOverrides: mergeMethodPatch,
     projectRemoveAgentCreditsOnMergeOverrides: agentCreditsPatch,
+    projectProviderInstanceOverrides: providerOverridesPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -227,6 +352,15 @@ export function applyServerSettingsPatch(
             },
           }
         : undefined;
+  const favorites = applyModelFavoriteChanges(
+    favoritesPatch ?? current.favorites ?? migrateModelPreferences?.favorites ?? null,
+    setModelFavorites,
+  );
+  const providerModelPreferences = applyModelPreferenceChanges(
+    modelPreferencesPatch ?? current.providerModelPreferences,
+    setModelsHidden,
+    setProviderModelOrder,
+  );
   const next = deepMerge(current, patchForMerge);
   const usageLimitSources = { ...current.usageLimitSources };
   for (const [id, source] of Object.entries(usageSourcesPatch ?? {})) {
@@ -267,6 +401,10 @@ export function applyServerSettingsPatch(
     if (enabled === null) delete projectRemoveAgentCreditsOnMergeOverrides[projectId as ProjectId];
     else projectRemoveAgentCreditsOnMergeOverrides[projectId as ProjectId] = enabled;
   }
+  const projectProviderInstanceOverrides = applyProjectProviderInstanceOverrides(
+    current.projectProviderInstanceOverrides,
+    providerOverridesPatch,
+  );
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
@@ -278,6 +416,7 @@ export function applyServerSettingsPatch(
     projectAgentBrowserAccessOverrides,
     projectPullRequestMergeMethodOverrides,
     projectRemoveAgentCreditsOnMergeOverrides,
+    projectProviderInstanceOverrides,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {
@@ -323,14 +462,16 @@ export function applyServerSettingsPatch(
     // instance keys the settings editor deleted (it drops an entry once both
     // its lists are empty) and could union the arrays, so un-hiding a model
     // would never actually un-hide it.
-    ...(patch.providerModelPreferences !== undefined
-      ? { providerModelPreferences: patch.providerModelPreferences }
-      : {}),
+    providerModelPreferences,
+    favorites,
     ...(patch.defaultModelSelection !== undefined
       ? { defaultModelSelection: patch.defaultModelSelection }
       : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
+      : {}),
+    ...(patch.reviewGuideModelSelection !== undefined
+      ? { reviewGuideModelSelection: patch.reviewGuideModelSelection }
       : {}),
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
     ...(providerHealthRefreshInterval !== undefined ? { providerHealthRefreshInterval } : {}),
@@ -365,4 +506,115 @@ export function applyServerSettingsPatch(
     ...nextWithReplacements,
     textGenerationModelSelection: createModelSelection(instanceId, model, options),
   };
+}
+
+/**
+ * Sparse per project and per instance, so concurrent edits to other projects or instances
+ * survive. A project left with no overrides drops out of the map.
+ */
+function applyProjectProviderInstanceOverrides(
+  current: ServerSettings["projectProviderInstanceOverrides"],
+  patch: ServerSettingsPatch["projectProviderInstanceOverrides"],
+): ServerSettings["projectProviderInstanceOverrides"] {
+  if (patch === undefined) return current;
+  const next = { ...current };
+  for (const [rawProjectId, instancesPatch] of Object.entries(patch)) {
+    const projectId = rawProjectId as ProjectId;
+    if (instancesPatch === null) {
+      delete next[projectId];
+      continue;
+    }
+    const instances = { ...next[projectId] };
+    for (const [rawInstanceId, override] of Object.entries(instancesPatch)) {
+      const instanceId = rawInstanceId as ProviderInstanceId;
+      if (override === null || override.enabled === undefined) delete instances[instanceId];
+      else instances[instanceId] = override;
+    }
+    if (Object.keys(instances).length === 0) delete next[projectId];
+    else next[projectId] = instances;
+  }
+  return next;
+}
+
+type ModelFavoriteList = NonNullable<ServerSettings["favorites"]>;
+type ProviderModelPreferenceMap = ServerSettings["providerModelPreferences"];
+
+/** Idempotent per-entry favorite edits; the list stays unset until something claims it. */
+function applyModelFavoriteChanges(
+  initial: ModelFavoriteList | null,
+  changes: ServerSettingsPatch["setModelFavorites"],
+): ModelFavoriteList | null {
+  if (changes === undefined) return initial;
+  const favorites = [...(initial ?? [])];
+  for (const change of changes) {
+    const index = favorites.findIndex(
+      (favorite) => favorite.provider === change.provider && favorite.model === change.model,
+    );
+    if (change.favorite && index === -1) {
+      favorites.push({ provider: change.provider, model: change.model });
+    } else if (!change.favorite && index !== -1) {
+      favorites.splice(index, 1);
+    }
+  }
+  return favorites;
+}
+
+/** Per-model visibility and per-instance order edits that leave every other entry alone. */
+function applyModelPreferenceChanges(
+  initial: ProviderModelPreferenceMap,
+  hiddenChanges: ServerSettingsPatch["setModelsHidden"],
+  orderChange: ServerSettingsPatch["setProviderModelOrder"],
+): ProviderModelPreferenceMap {
+  if (hiddenChanges === undefined && orderChange === undefined) return initial;
+  const next: Record<ProviderInstanceId, ProviderModelPreferenceMap[ProviderInstanceId]> = {
+    ...initial,
+  };
+  const entryFor = (provider: ProviderInstanceId) =>
+    next[provider] ?? { hiddenModels: [], modelOrder: [] };
+  for (const change of hiddenChanges ?? []) {
+    const entry = entryFor(change.provider);
+    const hiddenModels = entry.hiddenModels.filter((model) => model !== change.model);
+    if (change.hidden) hiddenModels.push(change.model);
+    next[change.provider] = { ...entry, hiddenModels };
+  }
+  if (orderChange !== undefined) {
+    next[orderChange.provider] = {
+      ...entryFor(orderChange.provider),
+      modelOrder: [...orderChange.modelOrder],
+    };
+  }
+  return next;
+}
+
+/**
+ * Model preferences as clients read them: the environment's favorites once
+ * any client has seeded them, this device's legacy list until then.
+ */
+export function resolveModelPreferences(
+  settings: Pick<ServerSettings, "favorites" | "providerModelPreferences">,
+  legacy: { readonly favorites?: ModelFavoriteList } = {},
+): {
+  readonly favorites: ModelFavoriteList;
+  readonly providerModelPreferences: ProviderModelPreferenceMap;
+} {
+  return {
+    favorites: settings.favorites ?? legacy.favorites ?? [],
+    providerModelPreferences: settings.providerModelPreferences,
+  };
+}
+
+/**
+ * Seeds this device's legacy favorites while the environment has none. An
+ * empty legacy list does not claim the environment, so another device can
+ * still seed the list it actually holds; the server applies the seed only
+ * while still unset, so a delayed seed cannot undo a later clear.
+ */
+export function modelPreferencesMigrationPatch(
+  settings: Pick<ServerSettings, "favorites">,
+  legacy: { readonly favorites?: ModelFavoriteList },
+): ServerSettingsPatch | null {
+  const favorites = legacy.favorites ?? [];
+  return settings.favorites === null && favorites.length > 0
+    ? { migrateModelPreferences: { favorites } }
+    : null;
 }

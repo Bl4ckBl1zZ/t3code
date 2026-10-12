@@ -1,4 +1,9 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   applyProviderInstanceSettings,
@@ -133,15 +138,20 @@ describe("applyProviderInstanceSettings", () => {
     const entries = deriveProviderInstanceEntries([
       provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
     ]);
-    const [entry] = applyProviderInstanceSettings(entries, {
-      providerInstances: {
-        [ProviderInstanceId.make("codex")]: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: false,
+    const [entry] = applyProviderInstanceSettings(
+      entries,
+      {
+        providerInstances: {
+          [ProviderInstanceId.make("codex")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: false,
+          },
         },
+        providers: {} as never,
+        projectProviderInstanceOverrides: {},
       },
-      providers: {} as never,
-    });
+      null,
+    );
 
     expect(entry?.enabled).toBe(false);
   });
@@ -153,10 +163,15 @@ describe("applyProviderInstanceSettings", () => {
         instanceId: "claude_work",
       }),
     ]);
-    const [entry] = applyProviderInstanceSettings(entries, {
-      providerInstances: {},
-      providers: {} as never,
-    });
+    const [entry] = applyProviderInstanceSettings(
+      entries,
+      {
+        providerInstances: {},
+        providers: {} as never,
+        projectProviderInstanceOverrides: {},
+      },
+      null,
+    );
 
     expect(entry?.enabled).toBe(false);
   });
@@ -170,10 +185,15 @@ describe("applyProviderInstanceSettings", () => {
           instanceId,
         }),
       ]);
-      const [entry] = applyProviderInstanceSettings(entries, {
-        providerInstances: {},
-        providers: {} as never,
-      });
+      const [entry] = applyProviderInstanceSettings(
+        entries,
+        {
+          providerInstances: {},
+          providers: {} as never,
+          projectProviderInstanceOverrides: {},
+        },
+        null,
+      );
 
       expect(entry?.enabled).toBe(false);
     },
@@ -187,15 +207,20 @@ describe("applyProviderInstanceSettings", () => {
         instanceId,
       }),
     ]);
-    const [entry] = applyProviderInstanceSettings(entries, {
-      providerInstances: {
-        [instanceId]: {
-          driver: ProviderDriverKind.make("claudeAgent"),
-          enabled: false,
+    const [entry] = applyProviderInstanceSettings(
+      entries,
+      {
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: false,
+          },
         },
+        providers: {} as never,
+        projectProviderInstanceOverrides: {},
       },
-      providers: {} as never,
-    });
+      null,
+    );
 
     expect(entry?.enabled).toBe(false);
   });
@@ -208,10 +233,15 @@ describe("applyProviderInstanceSettings", () => {
         instanceId: "constructor",
       }),
     ]);
-    const [entry] = applyProviderInstanceSettings(entries, {
-      providerInstances: {},
-      providers: {} as never,
-    });
+    const [entry] = applyProviderInstanceSettings(
+      entries,
+      {
+        providerInstances: {},
+        providers: {} as never,
+        projectProviderInstanceOverrides: {},
+      },
+      null,
+    );
 
     expect(entry?.isDefault).toBe(true);
     expect(entry?.enabled).toBe(false);
@@ -224,12 +254,51 @@ describe("applyProviderInstanceSettings", () => {
         instanceId: "codex",
       }),
     ]);
-    const [entry] = applyProviderInstanceSettings(entries, {
-      providerInstances: {},
-      providers: { codex: { enabled: false } } as never,
-    });
+    const [entry] = applyProviderInstanceSettings(
+      entries,
+      {
+        providerInstances: {},
+        providers: { codex: { enabled: false } } as never,
+        projectProviderInstanceOverrides: {},
+      },
+      null,
+    );
 
     expect(entry?.enabled).toBe(false);
+  });
+});
+
+describe("applyProviderInstanceSettings with a project in scope", () => {
+  const projectId = ProjectId.make("project-a");
+  const codex = ProviderInstanceId.make("codex");
+  const entries = deriveProviderInstanceEntries([
+    provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
+  ]);
+  const settings = (machineEnabled: boolean, projectEnabled: boolean | undefined) => ({
+    providerInstances: {
+      [codex]: { driver: ProviderDriverKind.make("codex"), enabled: machineEnabled },
+    },
+    providers: {} as never,
+    projectProviderInstanceOverrides:
+      projectEnabled === undefined ? {} : { [projectId]: { [codex]: { enabled: projectEnabled } } },
+  });
+
+  it("follows the project's switch in either direction", () => {
+    expect(
+      applyProviderInstanceSettings(entries, settings(false, true), projectId)[0]?.enabled,
+    ).toBe(true);
+    expect(
+      applyProviderInstanceSettings(entries, settings(true, false), projectId)[0]?.enabled,
+    ).toBe(false);
+  });
+
+  it("inherits the machine without an override and ignores overrides outside a project", () => {
+    expect(
+      applyProviderInstanceSettings(entries, settings(false, undefined), projectId)[0]?.enabled,
+    ).toBe(false);
+    expect(applyProviderInstanceSettings(entries, settings(true, false), null)[0]?.enabled).toBe(
+      true,
+    );
   });
 });
 

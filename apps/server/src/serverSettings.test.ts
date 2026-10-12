@@ -93,6 +93,63 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("serializes concurrent model preference edits without cancelling duplicate adds", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const provider = ProviderInstanceId.make("codex_work");
+      yield* Effect.all(
+        [
+          service.updateSettings({
+            setModelFavorites: [{ provider, model: "sol", favorite: true }],
+          }),
+          service.updateSettings({
+            setModelFavorites: [{ provider, model: "sol", favorite: true }],
+          }),
+          service.updateSettings({
+            setModelFavorites: [{ provider, model: "luna", favorite: true }],
+          }),
+          service.updateSettings({ setModelsHidden: [{ provider, model: "astra", hidden: true }] }),
+          service.updateSettings({ setModelsHidden: [{ provider, model: "luna", hidden: true }] }),
+          service.updateSettings({
+            setProviderModelOrder: { provider, modelOrder: ["luna", "sol"] },
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const settings = yield* service.getSettings;
+      assert.deepEqual(settings.favorites?.map((entry) => entry.model).toSorted(), ["luna", "sol"]);
+      assert.deepEqual(settings.providerModelPreferences[provider]?.hiddenModels.toSorted(), [
+        "astra",
+        "luna",
+      ]);
+      assert.deepEqual(settings.providerModelPreferences[provider]?.modelOrder, ["luna", "sol"]);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("persists and broadcasts favorites, and keeps a clear against a delayed seed", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const provider = ProviderInstanceId.make("codex_work");
+        const favorites = [{ provider, model: "sol" }];
+        const changes = yield* service.subscribeChanges;
+        yield* service.updateSettings({ favorites });
+        const received = Option.getOrThrow(yield* Stream.runHead(changes));
+        assert.deepEqual(received.favorites, favorites);
+        const saved = yield* decodeServerSettingsJson(
+          yield* fs.readFileString(config.settingsPath),
+        );
+        assert.deepEqual(saved.favorites, favorites);
+        yield* service.updateSettings({ favorites: [] });
+        // An older device's delayed seed cannot undo a clear, even after persistence.
+        const seeded = yield* service.updateSettings({ migrateModelPreferences: { favorites } });
+        assert.deepEqual(seeded.favorites, []);
+      }),
+    ).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   for (const inline of [false, true]) {
     it.effect(`keeps hub keys secret across redacted edits and deletion (inline=${inline})`, () =>
       Effect.gen(function* () {
@@ -623,7 +680,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
         assert.deepEqual(next.sourceControlWriterModelSelection, sourceControlWriterModelSelection);
         assert.deepEqual(
-          ServerSettingsModule.resolveSourceControlWriterModelSelection(next),
+          ServerSettingsModule.resolveSourceControlWriterModelSelection(next, undefined, null),
           next.textGenerationModelSelection,
         );
         assert.deepEqual(
@@ -647,7 +704,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         });
         assert.deepEqual(
-          ServerSettingsModule.resolveSourceControlWriterModelSelection(restored),
+          ServerSettingsModule.resolveSourceControlWriterModelSelection(restored, undefined, null),
           sourceControlWriterModelSelection,
         );
       }).pipe(Effect.provide(makeServerSettingsLayer())),
@@ -861,7 +918,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       yield* fileSystem.writeFileString(
         serverConfig.settingsPath,
-        '{"addProjectBaseDirectory":42,"providers":{"cursor":{"enabled":false},"grok":{"enabled":true}}}',
+        '{"addProjectBaseDirectory":42,"continueThreadsAfterServerUpdate":"false","providers":{"cursor":{"enabled":false},"grok":{"enabled":true}}}',
       );
       yield* recordProviderUsage("cursor");
 
@@ -870,6 +927,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.isFalse(settings.providers.cursor.enabled);
       assert.isTrue(settings.providers.grok.enabled);
       assert.isFalse(settings.providers.opencode.enabled);
+      // An unreadable file may hold an opt-out, so threads are not resumed on a guess.
+      assert.isFalse(settings.continueThreadsAfterServerUpdate);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

@@ -237,6 +237,42 @@ not auto-settle. Agents stop watching when they hand the work back to you, and t
 returns to your inbox. On web and desktop, the Stop shortcut ends a thread's watches when it has
 nothing else running.
 
+## Review guides
+
+Review guides are in beta. Turn on **Review guides** in Settings → Source Control to add the
+**Guide** tab to pull requests on that server. On iPhone and iPad, open a stop from the outline and
+move between stops with **Next** or the arrows at the top; tap an excerpt's file name to see it in
+the full diff. A stale guide offers **Rewrite Guide** and hides excerpts that no longer match the
+change. While a guide is being written, stay on the tab or come back later to see it.
+
+The **Guide** tab gives you a tour of a pull request without reading it line by line: stops
+through the change in reading order. Each stop points at the lines worth reading, and a stop marked
+**Look closely** has a call only a maintainer can make. Mechanical changes such as renames and
+snapshots are grouped at the end, and every changed file appears somewhere on the tour.
+Conversations already resolved in review are left out. For a pull request in a stack, the guide
+covers that layer only, and may point out what a lower layer introduced or what a higher one uses.
+
+Choose **Write guide** to have the review guide model from Settings → Source Control read the
+change in a temporary checkout; without one set, the source control writer model is used. Nothing
+in the checkout is changed, and a large pull request takes a few minutes; you can go elsewhere in
+the app and you are told when the guide is ready. Claude and Codex can write guides. The guide is
+kept for everyone using this server. To write it again, for example after a push or after changing
+the model or instructions, choose **Rewrite guide** from the pull request's **⋯** menu.
+
+While reading a stop, select lines in an excerpt to add a comment to your review or ask an agent
+about them; comments wait with the ones from the **Code** tab until you send the review. Choose a
+suggested question, or **Ask about this stop**, to open a thread that already knows which stop you
+are on. **Finish review** on the last stop opens the review form on the **Code** tab with
+everything you collected. On the **Pull requests** page, opening a guide maximizes the panel; use
+the maximize control or its shortcut to restore it.
+
+Agents can write guides too: ask one to prepare guides for a set of pull requests, and it starts
+them for you. Each is read through the project whose checkout has that repository.
+
+To shape guides to your taste, write **Review guide instructions** in Settings → Source Control,
+such as what to show first or what to skip. They change emphasis and ordering, not the guide's
+layout or which files it covers.
+
 ## Completing and reversing a review
 
 To keep agent co-author and generated-by lines out of GitHub merge and squash messages, turn on
@@ -259,5 +295,14 @@ a rejected push suggests pulling first. Publishing directly to the default branc
 confirm first. When the branch has conflicts, commit actions hide and
 **Ask Agent to Resolve** hands the conflict to the thread's agent. Tap a changed file to open it in
 **Review**.
+
+On iPhone and iPad, pull request descriptions and comments show images dropped into them on
+GitHub, and a dropped video as a link that plays in the browser. Template comments stay hidden as
+they do on GitHub, bot and CI badges are left out, and on GitHub `#123`, commit SHAs and
+`@mentions` link to the host.
+
+A pull request you have opened on iPhone or iPad before stays readable when its environment is
+offline: it shows the copy saved on the device, marked **Offline** with when it was saved. Lists,
+diffs and guides still need a connection, and so does any change.
 
 Pull-request links can open another repository on a Git host configured in the same environment, even when that repository has no local project. Web and native iOS keep the linked repository selected throughout review, comments, diffs and actions. Your existing checkout is used to contact the host.

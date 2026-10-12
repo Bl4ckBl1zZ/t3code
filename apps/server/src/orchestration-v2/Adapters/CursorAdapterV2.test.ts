@@ -54,6 +54,18 @@ describe("CursorAdapterV2", () => {
         });
         const instanceId = ProviderInstanceId.make("cursor");
         const threadId = ThreadId.make("cursor-lifecycle-thread");
+        McpProviderSession.setMcpProviderSession({
+          environmentId: EnvironmentId.make("cursor-lifecycle-environment"),
+          threadId,
+          providerSessionId: "cursor-lifecycle-session",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer synthetic-cursor-token",
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+        );
+        let sentWithMcpOverride = true;
         const modelSelection = { instanceId, model: "composer-2.5" };
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: "full-access",
@@ -80,6 +92,7 @@ describe("CursorAdapterV2", () => {
                 close: Effect.void,
                 send: (input) =>
                   Effect.gen(function* () {
+                    sentWithMcpOverride = Object.hasOwn(input.options ?? {}, "mcpServers");
                     const updates =
                       lateModel !== undefined
                         ? (["tool-call-started", "tool-call-completed"] as const)
@@ -176,6 +189,8 @@ describe("CursorAdapterV2", () => {
           Stream.takeUntil((event) => event.type === "turn.terminal"),
           Stream.runCollect,
         );
+        // Keep injected MCP at agent creation so sends preserve Cursor's ambient servers.
+        assert.isFalse(sentWithMcpOverride);
         const rows = events.filter((event) => event.type === "subagent.updated");
         assert.equal(rows[0]?.subagent.status, "running");
         assert.equal(rows[0]?.subagent.model, model ?? null);

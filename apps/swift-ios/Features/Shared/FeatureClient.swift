@@ -801,6 +801,13 @@ public protocol FeatureSubagentStopping {
     func stopSubagent(threadID: String, runID: String, subagentID: String) async throws
 }
 
+/// Stops a workflow and every member it still has going, through the thread
+/// that spawned it. `threadID` is that thread's feature id; `subagentID` is
+/// the coordinator's wire id.
+public protocol FeatureWorkflowStopping {
+    func stopWorkflow(threadID: String, subagentID: String) async throws
+}
+
 
 extension FeatureClient {
     public func hostResources(environmentID: String) async throws -> HostResourcesSnapshot {

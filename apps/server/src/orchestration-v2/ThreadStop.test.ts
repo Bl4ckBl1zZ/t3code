@@ -19,6 +19,8 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import { CLAUDE_PROVIDER } from "./Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -44,6 +46,8 @@ const testLayer = ThreadManagementService.layer.pipe(
     Layer.mergeAll(
       database,
       ProjectionStore.layer.pipe(Layer.provide(database)),
+      CommandReceiptStore.layer.pipe(Layer.provide(database)),
+      ServerSettings.layerTest(),
       makeOrchestratorV2ReplayLayerWithRegistry(
         { name: "thread-stop" },
         ProviderAdapterRegistry.makeLayer([adapter]),

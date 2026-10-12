@@ -201,6 +201,10 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
         return count === 1
           ? "Checked linked pull requests"
           : `Checked linked pull requests ${count} times`;
+      case "write-pr-guides":
+        return count === 1 ? "Started review guides" : `Started review guides ${count} times`;
+      case "read-pr-guide":
+        return `Read ${count} ${count === 1 ? "review guide" : "review guides"}`;
       case "browser":
         return `Used browser ${count} ${count === 1 ? "time" : "times"}`;
       case "edit":

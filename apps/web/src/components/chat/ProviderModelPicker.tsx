@@ -1,4 +1,5 @@
 import {
+  type EnvironmentId,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
@@ -26,6 +27,8 @@ import { composerFloatingLayerProps } from "./composerEventScope";
 import { shortcutLabelForCommand } from "../../keybindings";
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
+  /** The environment whose favorites the picker shows and edits. */
+  environmentId: EnvironmentId | null;
   /**
    * The instance currently selected in the composer. Drives the trigger
    * icon, label and the default-highlighted combobox row.
@@ -225,6 +228,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         padding="none"
       >
         <ModelPickerContent
+          environmentId={props.environmentId}
           activeInstanceId={activeInstanceId}
           model={props.model}
           lockedProvider={props.lockedProvider}

@@ -37,6 +37,8 @@ export const AssetResource = Schema.Union([
     fileName: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
     mimeType: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
     disposition: Schema.optionalKey(Schema.Literals(["inline", "attachment"])),
+    /** Render an MCP App snapshot with the host theme bootstrap. */
+    renderIntent: Schema.optionalKey(Schema.Literal("mcp-app")),
   }),
   // An image a tool returned inline, such as a preview screenshot, by its
   // order in the stored output. The timeline never carries these bytes.

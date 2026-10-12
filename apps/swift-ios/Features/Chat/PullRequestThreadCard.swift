@@ -118,7 +118,7 @@ struct PullRequestThreadCard: View {
                     Text(relative).font(T3Typography.supporting).foregroundStyle(T3Colors.textTertiary)
                 }
             }
-            MarkdownMessageView(comment.body)
+            PullRequestMarkdownView(comment.body, pullRequestURL: nil)
             if reactions.canReact || !(comment.reactions ?? []).isEmpty {
                 PullRequestReactionBar(reactions: comment.reactions ?? [], subjectID: comment.id, context: reactions)
             }

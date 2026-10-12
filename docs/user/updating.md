@@ -16,14 +16,15 @@ update the server, and the version difference remains visible in Connections.
 ## Before You Update
 
 Updating restarts the server, so the connection disappears briefly. **Settings → General → Continue
-threads after restarts** is off by default. Edits apply to connected machines that support the setting. When enabled, interrupted threads resume after an update,
+threads after restarts** is on by default. Edits apply to connected machines that support the setting. Interrupted threads resume after an update,
 crash or machine restart once T3 starts again. This setting does not start T3 automatically.
 
 Recovery requires a saved provider session. Codex continues without a synthetic prompt; other
 providers receive a short instruction to continue after checking the current state. Completed,
-archived, explicitly settled and superseded work stays stopped. If the saved session cannot resume,
-the thread reports the failure and waits for a new message. Terminal commands may still be
-interrupted.
+archived, snoozed, explicitly settled and superseded work stays stopped, and so does a thread
+waiting for your approval, answer or secret. After three automatic resumes in a row, the thread
+waits for your next message. If the saved session cannot resume, the thread reports the failure and
+waits for a new message. Terminal commands may still be interrupted.
 
 The update does not remove saved threads, settings, or project files.
 

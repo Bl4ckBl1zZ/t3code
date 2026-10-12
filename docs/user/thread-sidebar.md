@@ -86,7 +86,8 @@ id, like `2026-09-25-convert-these-pngs-to-webp-a1b2c3d4`. Deleting a thread kee
 the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay
 hidden because these folders are not Git repositories. This is unavailable when the data directory
 itself sits inside a Git checkout. In the sidebar, these threads appear under a project named **No
-project**.
+project**; with several machines connected, it holds the threads without a project from all of
+them, and filtering by it shows them all.
 
 ## Delete threads on web and desktop
 

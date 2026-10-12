@@ -297,3 +297,10 @@ saved shell drops threads it no longer lists as active.
 `[conn] thread-open` log lines (and a `thread-open` signpost interval) report
 milliseconds to `cache-hit`/`cache-miss`/`seeded`/`kept-alive`, `first-paint`
 and `live`.
+
+`PullRequestOverviewCache` (`apps/swift-ios/Core`) keeps the last pull-request
+detail and activity read per environment, project, repository and number: 40
+entries across environments, least recently saved evicted first, none over
+1 MB. It is read only when the live read fails for want of a connection, and the
+detail screen then labels the copy with when it was saved. Lists, diffs and
+review guides are not cached.

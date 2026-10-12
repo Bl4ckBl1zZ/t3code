@@ -64,21 +64,30 @@ public enum ModelOptions {
     /// the selection unchanged when usable, otherwise `nil` so callers fall
     /// through to the server's default model. A missing config (environment
     /// offline) cannot be validated, so stored selections pass through
-    /// untouched.
+    /// untouched. `projectID` (wire id) also rejects an instance that project
+    /// turned off.
     public static func selectable(
         _ selection: ModelSelection?,
-        in config: ServerConfigSnapshot?
+        in config: ServerConfigSnapshot?,
+        projectID: String? = nil
     ) -> ModelSelection? {
         guard let selection, let config else { return selection }
         guard let provider = config.providers.first(where: {
             $0.instanceId == selection.instanceId
         }), isUsable(provider) else { return nil }
+        if let projectID,
+           config.providerInstancesOff(inProject: projectID)?.contains(selection.instanceId) == true {
+            return nil
+        }
         return selection
     }
 
+    /// `projectID` (wire id) drops the instances that project turned off, the
+    /// way web's pickers fold in a project's provider switches.
     public static func build(
         config: ServerConfigSnapshot?,
-        fallbackSelection: ModelSelection?
+        fallbackSelection: ModelSelection?,
+        projectID: String? = nil
     ) -> [ModelOption] {
         // Insertion-ordered by key: a fallback selection that names a model the
         // catalog already lists refreshes it in place rather than repeating it
@@ -89,8 +98,9 @@ public enum ModelOptions {
             if byKey.updateValue(option, forKey: option.key) == nil { order.append(option.key) }
         }
 
+        let off = projectID.flatMap { config?.providerInstancesOff(inProject: $0) } ?? []
         for provider in config?.providers ?? [] {
-            guard isUsable(provider) else { continue }
+            guard isUsable(provider), !off.contains(provider.instanceId) else { continue }
             let providerLabel = displayLabel(provider)
             // This builder reads the raw config rather than the mapped
             // `FeatureProvider` catalog, so it has to apply model visibility

@@ -10,7 +10,11 @@ import {
   type ProviderContinuationRequest,
   ProviderContinuationRequests,
 } from "./ProviderContinuationRequests.ts";
-import { isActiveRun, ThreadManagementService } from "./ThreadManagementService.ts";
+import {
+  isActiveRun,
+  type ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementService,
+} from "./ThreadManagementService.ts";
 
 const CONTINUATION_MESSAGE_TEXT = "Background task completed.";
 
@@ -150,22 +154,73 @@ export const workerLive = Layer.effectDiscard(
             fixtureName: "delegated-completion",
             commandName: "dispatch",
           });
-          yield* threads.dispatch({
-            type: "message.dispatch",
-            commandId,
-            threadId: request.threadId,
-            messageId: delivery.messageId,
-            text: delegatedCompletionText(projection, delivery.taskIds),
-            attachments: [],
-            dispatchMode: { type: "queue_after_active" },
-            createdBy: "agent",
-            creationSource: "server",
-            delegatedCompletion: {
-              parentRunId: request.delegatedCompletion.parentRunId,
-              generation: delivery.generation,
-              taskIds: delivery.taskIds,
-            },
-          });
+          yield* threads
+            .dispatch({
+              type: "message.dispatch",
+              commandId,
+              threadId: request.threadId,
+              messageId: delivery.messageId,
+              text: delegatedCompletionText(projection, delivery.taskIds),
+              attachments: [],
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: "agent",
+              creationSource: "server",
+              delegatedCompletion: {
+                parentRunId: request.delegatedCompletion.parentRunId,
+                generation: delivery.generation,
+                taskIds: delivery.taskIds,
+              },
+            })
+            .pipe(
+              // The project turned the target instance off. The children's
+              // results are already in the parent's history, so nothing is
+              // lost: acknowledge each task administratively (no run observed
+              // it) to consume this delivery instead of retrying a refusal
+              // that retrying cannot change. The parent's next turn on an
+              // enabled instance reads those results from history.
+              Effect.catchTags({
+                ThreadManagementProviderInstanceDisabledError: (error) =>
+                  Effect.logInfo(
+                    "orchestration-v2.provider-continuation.delegated-completion-disabled",
+                    {
+                      threadId: request.threadId,
+                      projectId: error.projectId,
+                      instanceId: error.instanceId,
+                    },
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.forEach(
+                        delivery.taskIds,
+                        (taskId) =>
+                          ids.allocate
+                            .command({
+                              fixtureName: "delegated-completion",
+                              commandName: "acknowledge-disabled",
+                            })
+                            .pipe(
+                              Effect.flatMap((ackCommandId) =>
+                                threads.dispatch({
+                                  type: "delegated_task.completion-delivery.acknowledge",
+                                  commandId: ackCommandId,
+                                  parentThreadId: request.threadId,
+                                  taskId,
+                                  observedByRunId: null,
+                                }),
+                              ),
+                            ),
+                        { discard: true },
+                      ),
+                    ),
+                    Effect.andThen(
+                      request.clearIfCurrent !== undefined
+                        ? request.clearIfCurrent()
+                        : request.dispatchIfCurrent !== undefined
+                          ? request.dispatchIfCurrent(Effect.void)
+                          : Effect.void,
+                    ),
+                  ),
+              }),
+            );
           yield* clearRetryAttempt(retryKey);
           return;
         }
@@ -211,11 +266,36 @@ export const workerLive = Layer.effectDiscard(
                   }).pipe(Effect.andThen(dispatchWith({ type: "queue_after_active" }))),
                 ),
               );
+        // The adapter's buffered wake has nowhere else to go once the
+        // instance is off: drop it rather than warn, since nothing retries it
+        // either way. This catch sits outside dispatchIfCurrent so an adapter
+        // that clears its own sticky offer flag on dispatch failure observes
+        // the raw failure first; clearIfCurrent is idempotent, so it is
+        // called here too for adapters that do not.
+        const logInstanceDisabled = (error: ThreadManagementProviderInstanceDisabledError) =>
+          Effect.logInfo("orchestration-v2.provider-continuation.instance-disabled", {
+            threadId: request.threadId,
+            providerThreadId: request.providerThreadId,
+            projectId: error.projectId,
+            instanceId: error.instanceId,
+          }).pipe(
+            Effect.andThen(
+              request.clearIfCurrent !== undefined ? request.clearIfCurrent() : Effect.void,
+            ),
+          );
         if (request.dispatchIfCurrent === undefined) {
-          yield* dispatch;
+          yield* dispatch.pipe(
+            Effect.catchTags({
+              ThreadManagementProviderInstanceDisabledError: logInstanceDisabled,
+            }),
+          );
           return;
         }
-        yield* request.dispatchIfCurrent(dispatch);
+        yield* request.dispatchIfCurrent(dispatch).pipe(
+          Effect.catchTags({
+            ThreadManagementProviderInstanceDisabledError: logInstanceDisabled,
+          }),
+        );
       },
     );
 

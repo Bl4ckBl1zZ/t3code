@@ -102,6 +102,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   pullRequestMergeMethodDefaults: Schema.optionalKey(Schema.Boolean),
   /** Server stores `removeAgentCreditsOnMerge` and its per-project overrides. */
   pullRequestAgentCreditRemoval: Schema.optionalKey(Schema.Boolean),
+  /** Server stores and enforces `projectProviderInstanceOverrides`. Older servers decode the
+      key away, so the per-project provider switch would silently do nothing; clients hide it. */
+  projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
   fileDocumentPreviews: Schema.optionalKey(Schema.Boolean),
   /** Bounded CLI transcript discovery and V2 history import. */
   agentSessionImport: Schema.optionalKey(Schema.Boolean),

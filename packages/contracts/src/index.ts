@@ -32,6 +32,7 @@ export * from "./applicationEvent.ts";
 export * from "./orchestratorMcp.ts";
 export * from "./threadMetadataMcp.ts";
 export * from "./pullRequest.ts";
+export * from "./pullRequestReviewGuide.ts";
 export * from "./orchestration.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";

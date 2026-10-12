@@ -281,5 +281,8 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     );
   });
 
-  return TextGenerationOperations.fromRunner("MuseTextGeneration", runMuseJson);
+  return TextGenerationOperations.fromRunner(
+    "MuseTextGeneration",
+    TextGenerationOperations.withoutInvestigation("Muse Code", runMuseJson),
+  );
 });

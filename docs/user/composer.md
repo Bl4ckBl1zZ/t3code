@@ -49,6 +49,11 @@ and shows **Attach again** next to it. Attach the file again or remove it, then 
 On web and desktop, HEIC and HEIF photos are automatically converted to JPEG when you drag them into
 the composer or paste them into a message.
 
+Favorite models, hidden models, and model order are saved on the environment, so every device
+connected to it shows the same picker. Favorites a device saved before they were synced carry over
+to any environment that has no favorites yet. Models you hide also stay out of the model list agents see
+when they delegate tasks.
+
 On mobile, the model picker shows each OpenCode model's upstream provider, such as Anthropic,
 GitHub Copilot, or OpenCode Zen, beneath its name. Search by that provider name to narrow the list
 when starting a thread or changing an existing thread's model.

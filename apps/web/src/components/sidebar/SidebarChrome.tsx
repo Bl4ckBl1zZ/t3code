@@ -56,19 +56,23 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     <SidebarHeader
       data-on-backdrop={onBackdrop || undefined}
       className={cn(
-        "relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:pl-0",
+        "relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center py-0 pr-3 pl-0",
         isElectron && "drag-region",
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
-      <SidebarTrigger
-        className={cn(
-          "relative z-10 md:hidden",
-          backdropVariant &&
-            "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
-          backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
-        )}
-      />
+      {/* Match the fixed control's inset and border compensation inside the sheet's safe area. */}
+      <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
+        <SidebarTrigger
+          className={cn(
+            "relative",
+            backdropVariant &&
+              "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
+            backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
+          )}
+          aria-label="Toggle main sidebar"
+        />
+      </div>
       {/* One visible line: the pill wraps onto the clipped second line once it no longer fits.
           The padding keeps the brand's focus ring inside the clip. */}
       <div className="relative z-10 flex h-9 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">

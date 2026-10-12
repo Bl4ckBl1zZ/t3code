@@ -20,6 +20,7 @@ struct ComposerModelChip: View {
 
     @AppStorage(ModelPickerMemory.favoritesKey) private var favoriteStorage = ""
     @AppStorage(ModelPickerMemory.recentsKey) private var recentStorage = ""
+    @SwiftUI.Environment(\.modelFavorites) private var syncedFavorites
 
     var body: some View {
         // Resolved once per render: the chip re-renders with the composer on
@@ -222,7 +223,9 @@ struct ComposerModelChip: View {
         if resolved.isLocked {
             return currentID.flatMap { byID[$0] }.map { [$0] } ?? []
         }
-        var ids = ModelPickerMemory.ids(in: favoriteStorage) + ModelPickerMemory.ids(in: recentStorage)
+        let favoriteIDs = syncedFavorites?.ids(localStorage: favoriteStorage)
+            ?? ModelPickerMemory.ids(in: favoriteStorage)
+        var ids = favoriteIDs + ModelPickerMemory.ids(in: recentStorage)
         if let currentID { ids.append(currentID) }
         var seen = Set<String>()
         var options = ids.compactMap { id -> DailyUXModelOption? in

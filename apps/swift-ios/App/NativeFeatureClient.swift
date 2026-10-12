@@ -15,9 +15,9 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
+    FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeaturePullRequestReviewGuiding, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureUsageReading, FeatureUsageLimitsReading,
-    FeatureMcpAppHosting, FeatureThreadFinding, FeatureSubagentStopping, T3ConnectCapable
+    FeatureMcpAppHosting, FeatureThreadFinding, FeatureSubagentStopping, FeatureWorkflowStopping, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -136,6 +136,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// Last-known shells and thread projections on disk. Nil keeps every open,
     /// launch and cold start on the network path.
     private let syncCache: SyncSnapshotCache?
+    private let pullRequestCache: PullRequestOverviewCache?
     /// How long a closed thread keeps its stream so going back to it neither
     /// refetches nor resubscribes. One thread at most: opening another
     /// thread, a memory warning, or backgrounding releases it.
@@ -164,6 +165,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             try await $0.environments()
         },
         syncCache: SyncSnapshotCache? = nil,
+        pullRequestCache: PullRequestOverviewCache? = nil,
         threadKeepAlive: Duration = .seconds(180)
     ) {
         let controller: T3ConnectController
@@ -192,6 +194,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         self.environmentShellTimeoutInterval = environmentShellTimeoutInterval
         self.aggregateEnvironmentLoader = aggregateEnvironmentLoader
         self.syncCache = syncCache
+        self.pullRequestCache = pullRequestCache
         self.threadKeepAlive = threadKeepAlive
         let pair = AsyncStream<FeatureEvent>.makeStream()
         stream = pair.stream
@@ -634,6 +637,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await runtime.remove(id: id)
         environmentThemesByEnvironmentID[id] = nil
         await syncCache?.removeEnvironment(id)
+        await pullRequestCache?.removeEnvironment(id)
         if removesActiveEnvironment {
             await clearActiveEnvironment(disconnectClient: false)
         }
@@ -1021,7 +1025,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func mcpAppDocumentURL(threadID: String, app: McpAppReference) async throws -> URL {
         let route = try threadRoute(for: threadID)
         return try await route.client.resolvedAssetURL(
-            resource: .documentAttachment(id: app.attachmentID, name: app.documentFileName, mimeType: "text/html")
+            resource: .mcpAppDocument(id: app.attachmentID, name: app.documentFileName)
         )
     }
 
@@ -1400,6 +1404,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             shell: shellsByEnvironmentID[environment.id]
         )
         let title = Self.title(from: prompt, hasAttachments: !attachments.isEmpty)
+        let wirePrompt = ComposerPromptHistory.wireText(prompt, hasAttachments: !attachments.isEmpty)
         let uploads = try makeUploadAttachments(attachments)
         let runtime = coreRuntimeMode(runtimeMode)
         let interaction = coreInteractionMode(interactionMode)
@@ -1447,7 +1452,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 threadID: pending.threadID,
                 projectID: route.wireID,
                 title: title,
-                text: prompt,
+                text: wirePrompt,
                 model: model,
                 runtimeMode: runtime,
                 interactionMode: interaction,
@@ -1476,7 +1481,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 client: client,
                 pending: pending,
                 projectID: route.wireID,
-                text: prompt,
+                text: wirePrompt,
                 model: model,
                 attachments: uploads
             )
@@ -2617,7 +2622,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         do {
             _ = try await client.sendTurn(
                 threadID: submissionIdentity?.threadID ?? route.wireID,
-                text: text,
+                text: ComposerPromptHistory.wireText(text, hasAttachments: !attachments.isEmpty),
                 model: model,
                 attachments: uploads,
                 // The shell is live, so a steer whose run just ended goes out
@@ -2671,6 +2676,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func stopSubagent(threadID: String, runID: String, subagentID: String) async throws {
         let route = try threadRoute(for: threadID)
         _ = try await route.client.stopSubagent(threadID: route.wireID, runID: runID, subagentID: subagentID)
+        try? await refreshUnlessStreamed(client: route.client)
+    }
+
+    func stopWorkflow(threadID: String, subagentID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        do {
+            try await route.client.stopWorkflow(threadID: route.wireID, subagentID: subagentID)
+        } catch let error as RPCError {
+            if case .unsupportedMethod = error { throw FeatureCapabilityUnavailable("Stopping workflows") }
+            throw error
+        }
         try? await refreshUnlessStreamed(client: route.client)
     }
 
@@ -3315,11 +3331,46 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return settings.projectPullRequestMergeMethodOverrides[projectWireID] ?? settings.pullRequestMergeMethod
     }
 
+    func pullRequestReviewGuidesEnabled(scope: FeaturePullRequestScope) -> Bool {
+        guard let client = try? pullRequestRoute(scope: scope).client else { return false }
+        return serverConfigsByEnvironmentID[client.environment.id]?.settings?.reviewGuidesEnabled == true
+    }
+
+    func pullRequestReviewGuide(scope: FeaturePullRequestScope, number: Int) async throws -> PullRequestReviewGuideResult {
+        let route = try pullRequestRoute(scope: scope)
+        return try await route.client.pullRequestReviewGuide(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
+    }
+
+    func generatePullRequestReviewGuide(scope: FeaturePullRequestScope, number: Int) async throws -> PullRequestReviewGuideResult {
+        let route = try pullRequestRoute(scope: scope)
+        try await requireScope(AuthScope.orchestrationOperate, client: route.client)
+        return try await route.client.generatePullRequestReviewGuide(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
+    }
+
     func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {
         let (route, repository) = try projectPullRequestRoute(scope)
-        let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, host: scope.host, number: number)
-        let activity = try? await route.client.pullRequestActivity(projectID: route.wireID, repository: repository, host: scope.host, number: number)
-        return FeaturePullRequestOverview(detail: detail, activity: activity)
+        let key = PullRequestOverviewCache.Key(environmentID: route.environmentID, projectID: route.wireID, repository: repository, number: number)
+        return try await savingPullRequestOverview(key) {
+            let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, host: scope.host, number: number)
+            let activity = try? await route.client.pullRequestActivity(projectID: route.wireID, repository: repository, host: scope.host, number: number)
+            return FeaturePullRequestOverview(detail: detail, activity: activity)
+        }
+    }
+
+    /// Saves each live overview and, when the environment is out of reach,
+    /// answers with the last saved one instead of the connection error.
+    private func savingPullRequestOverview(
+        _ key: PullRequestOverviewCache.Key,
+        read: () async throws -> FeaturePullRequestOverview
+    ) async throws -> FeaturePullRequestOverview {
+        do {
+            let overview = try await read()
+            if let pullRequestCache { Task.detached(priority: .utility) { await pullRequestCache.save(overview, for: key) } }
+            return overview
+        } catch where PullRequestOverviewCache.isOffline(error) {
+            if let saved = await pullRequestCache?.overview(for: key) { return saved }
+            throw error
+        }
     }
 
     func projectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestLabelCandidateList {
@@ -3365,19 +3416,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               !repository.isEmpty else {
             throw NativeFeatureClientError.repositoryIdentityUnavailable
         }
-        let detail = try await route.client.pullRequestDetail(
-            projectID: project.id,
-            repository: repository,
-            number: number
-        )
-        // The conversation is an enrichment: a host that cannot answer it
-        // still has a summary worth showing.
-        let activity = try? await route.client.pullRequestActivity(
-            projectID: project.id,
-            repository: repository,
-            number: number
-        )
-        return FeaturePullRequestOverview(detail: detail, activity: activity)
+        let key = PullRequestOverviewCache.Key(environmentID: route.environmentID, projectID: project.id, repository: repository, number: number)
+        return try await savingPullRequestOverview(key) {
+            let detail = try await route.client.pullRequestDetail(
+                projectID: project.id,
+                repository: repository,
+                number: number
+            )
+            // The conversation is an enrichment: a host that cannot answer it
+            // still has a summary worth showing.
+            let activity = try? await route.client.pullRequestActivity(
+                projectID: project.id,
+                repository: repository,
+                number: number
+            )
+            return FeaturePullRequestOverview(detail: detail, activity: activity)
+        }
     }
 
     /// One subscription per checkout, not per thread: threads that share a
@@ -5764,7 +5818,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     previewUrl: pinnedPreviewURLs[uiID],
                     faviconPath: project.faviconPath,
                     projectIcon: project.projectIcon,
-                    repositoryCanonicalKey: project.repositoryIdentity?.canonicalKey
+                    repositoryCanonicalKey: project.repositoryIdentity?.canonicalKey,
+                    providerInstancesOff: serverConfigsByEnvironmentID[environment.id]?
+                        .providerInstancesOff(inProject: project.id)
                 )
             }
         }
@@ -5796,6 +5852,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 claudeAutoCompactWindow: serverSettings.claudeAutoCompactWindow
             )
             mapped.newProjectsRoot = serverConfigsByEnvironmentID[environment.id]?.newProjectsRoot
+            if serverSettings.syncsModelFavorites {
+                mapped.syncsModelFavorites = true
+                mapped.modelFavorites = serverSettings.favorites
+            }
             mapped.setPullRequestMergeMethod(serverSettings.pullRequestMergeMethod,
                 supported: serverConfigsByEnvironmentID[environment.id]?.environment?.capabilities.pullRequestMergeMethodDefaults == true)
             preferences[environment.id] = mapped
@@ -6151,9 +6211,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         let subagents = projection.subagents.map { subagent -> ThreadRelationshipSubagentLink in
-            let link = ThreadRelationshipSubagentLink(subagent)
-            guard let childThreadID = link.childThreadID else { return link }
-            return link.withChildThreadID(scoped(childThreadID))
+            ThreadRelationshipSubagentLink(subagent).scopingThreadIDs(scoped)
         }
 
         let transfers = projection.contextTransfers.map { transfer in

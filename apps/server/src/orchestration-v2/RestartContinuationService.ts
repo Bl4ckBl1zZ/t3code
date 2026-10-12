@@ -1,6 +1,7 @@
 import { CommandId, MessageId, type RunId, type ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -10,6 +11,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 import {
   canContinueAfterRestart,
+  isSnoozedForRestart,
   RESTART_CONTINUATION_PROMPT,
 } from "./RestartContinuationPolicy.ts";
 
@@ -65,6 +67,7 @@ export const make = Effect.gen(function* () {
           if (shell.archivedAt !== null || shell.deletedAt !== null || shell.status !== "running")
             continue;
           const projection = yield* threads.getThreadProjection(shell.id);
+          if (isSnoozedForRestart(projection.thread, yield* DateTime.now)) continue;
           const run = projection.runs.find((candidate) =>
             canContinueAfterRestart(projection, candidate, "prepare"),
           );
@@ -97,6 +100,7 @@ export const make = Effect.gen(function* () {
       (shell) =>
         Effect.gen(function* () {
           const projection = yield* threads.getThreadProjection(shell.id);
+          const snoozed = isSnoozedForRestart(projection.thread, yield* DateTime.now);
           for (const run of projection.runs) {
             if (run.restartContinuation?.status !== "pending") continue;
             const marker = {
@@ -106,6 +110,7 @@ export const make = Effect.gen(function* () {
             };
             if (
               (!enabled && run.restartContinuation.reason !== "update") ||
+              snoozed ||
               !canContinueAfterRestart(projection, run, "resume")
             ) {
               yield* clear([marker]);
@@ -125,6 +130,20 @@ export const make = Effect.gen(function* () {
                 dispatchMode: { type: "start_immediately" },
               })
               .pipe(
+                // The project turned this instance off since the restart: no
+                // turn resumes, and that is expected rather than a failure.
+                Effect.catchTags({
+                  ThreadManagementProviderInstanceDisabledError: (error) =>
+                    clear([marker]).pipe(
+                      Effect.andThen(
+                        Effect.logInfo("restart continuation skipped: provider off for project", {
+                          threadId: shell.id,
+                          projectId: error.projectId,
+                          instanceId: error.instanceId,
+                        }),
+                      ),
+                    ),
+                }),
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
                     ? Effect.interrupt

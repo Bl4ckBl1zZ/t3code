@@ -243,6 +243,7 @@ public struct NewThreadView: View {
                     },
                     onDidStash: { isSwappingDraft = false }
                 )
+                .modelFavorites(model, environmentID: executionProject?.environmentID)
             }
             .background(T3Colors.background.ignoresSafeArea())
         }

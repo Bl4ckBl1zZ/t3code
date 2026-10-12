@@ -8,7 +8,11 @@ import { PullRequestMergeMethodSettings } from "./PullRequestMergeMethodSettings
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { type EnvironmentId } from "@t3tools/contracts";
 import { useEnvironments } from "../../state/environments";
-import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import {
+  useEnvironmentSettings,
+  useUpdateEnvironmentModelPreferences,
+  useUpdateEnvironmentSettings,
+} from "../../hooks/useSettings";
 import { ConnectedEnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { useEnvironmentOperateAccess } from "./EnvironmentIconPicker";
 import {
@@ -364,6 +368,15 @@ function withoutProviderInstanceKey<V>(
   const next = { ...record } as Record<ProviderInstanceId, V>;
   delete next[key];
   return next;
+}
+
+/** The entries a list edit adds or removes, so each saves as its own per-model change. */
+function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<string>) {
+  const currentSet = new Set(current);
+  const nextSet = new Set(next.map((model) => model.trim()).filter((model) => model.length > 0));
+  return [...new Set([...currentSet, ...nextSet])]
+    .filter((model) => currentSet.has(model) !== nextSet.has(model))
+    .map((model) => ({ model, selected: nextSet.has(model) }));
 }
 
 function withoutProviderInstanceFavorites(
@@ -2419,6 +2432,7 @@ export function GeneralSettingsPanel() {
         serverProviders.filter((provider) => provider.supportsTextGeneration !== false),
       ),
       settings,
+      null,
     ),
   );
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(
@@ -3473,6 +3487,7 @@ export function GeneralSettingsPanel() {
           control={
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               <ProviderModelPicker
+                environmentId={primaryEnvironment?.environmentId ?? null}
                 activeInstanceId={textGenInstanceId}
                 model={textGenModel}
                 lockedProvider={null}
@@ -3637,6 +3652,11 @@ function EnvironmentProviderSettings(
   const readOnly = operateAccess !== "granted";
   const updateSettings: typeof persistSettings = (patch) => {
     if (!readOnly) persistSettings(patch);
+  };
+  const persistModelPreferences = useUpdateEnvironmentModelPreferences(props.environmentId);
+  // Per-model edits merge with other clients' changes instead of replacing whole lists.
+  const updateModelPreferences = (patch: Parameters<typeof persistModelPreferences>[0]) => {
+    if (!readOnly) void persistModelPreferences(patch);
   };
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
   const serverProviders = serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
@@ -3896,50 +3916,6 @@ function EnvironmentProviderSettings(
     });
   };
 
-  const updateProviderModelPreferences = (
-    instanceId: ProviderInstanceId,
-    next: {
-      readonly hiddenModels: ReadonlyArray<string>;
-      readonly modelOrder: ReadonlyArray<string>;
-    },
-  ) => {
-    const hiddenModels = [...new Set(next.hiddenModels.filter((slug) => slug.trim().length > 0))];
-    const modelOrder = [...new Set(next.modelOrder.filter((slug) => slug.trim().length > 0))];
-    const rest = withoutProviderInstanceKey(settings.providerModelPreferences, instanceId);
-    updateSettings({
-      providerModelPreferences:
-        hiddenModels.length === 0 && modelOrder.length === 0
-          ? rest
-          : {
-              ...rest,
-              [instanceId]: {
-                hiddenModels,
-                modelOrder,
-              },
-            },
-    });
-  };
-
-  const updateProviderFavoriteModels = (
-    instanceId: ProviderInstanceId,
-    nextFavoriteModels: ReadonlyArray<string>,
-  ) => {
-    const favoriteModels = [
-      ...new Set(
-        Arr.filterMap(nextFavoriteModels, (slug) => {
-          const trimmedSlug = slug.trim();
-          return trimmedSlug.length > 0 ? Result.succeed(trimmedSlug) : Result.failVoid;
-        }),
-      ),
-    ];
-    updateSettings({
-      favorites: [
-        ...withoutProviderInstanceFavorites(settings.favorites ?? [], instanceId),
-        ...favoriteModels.map((model) => ({ provider: instanceId, model })),
-      ],
-    });
-  };
-
   const resetDefaultInstance = (driverKind: ProviderDriverKind) => {
     type LegacyProviderSettings = (typeof settings.providers)[keyof typeof settings.providers];
     const defaultLegacyProviders = DEFAULT_UNIFIED_SETTINGS.providers as Record<
@@ -4039,19 +4015,36 @@ function EnvironmentProviderSettings(
         hiddenModels={modelPreferences.hiddenModels}
         favoriteModels={favoriteModels}
         modelOrder={modelPreferences.modelOrder}
-        onHiddenModelsChange={(hiddenModels) =>
-          updateProviderModelPreferences(row.instanceId, {
-            ...modelPreferences,
-            hiddenModels,
-          })
-        }
-        onFavoriteModelsChange={(favoriteModels) =>
-          updateProviderFavoriteModels(row.instanceId, favoriteModels)
-        }
+        onHiddenModelsChange={(next) => {
+          const changes = modelListChanges(modelPreferences.hiddenModels, next);
+          if (changes.length === 0) return;
+          updateModelPreferences({
+            setModelsHidden: changes.map(({ model, selected }) => ({
+              provider: row.instanceId,
+              model,
+              hidden: selected,
+            })),
+          });
+        }}
+        onFavoriteModelsChange={(next) => {
+          const changes = modelListChanges(favoriteModels, next);
+          if (changes.length === 0) return;
+          updateModelPreferences({
+            setModelFavorites: changes.map(({ model, selected }) => ({
+              provider: row.instanceId,
+              model,
+              favorite: selected,
+            })),
+          });
+        }}
         onModelOrderChange={(modelOrder) =>
-          updateProviderModelPreferences(row.instanceId, {
-            ...modelPreferences,
-            modelOrder,
+          updateModelPreferences({
+            setProviderModelOrder: {
+              provider: row.instanceId,
+              modelOrder: [
+                ...new Set(modelOrder.map((slug) => slug.trim()).filter((slug) => slug.length > 0)),
+              ],
+            },
           })
         }
         onInstallRecommended={

@@ -5,6 +5,7 @@ import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSki
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
+import { resolveProjectProviderInstanceEnabled } from "@t3tools/shared/serverSettings";
 import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { resolveRestingComposerInset } from "./chat/composerRestingState";
@@ -509,12 +510,11 @@ import {
   supportsDesktopAppUpdate,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "./chat/composerPromptHistory";
 import { observeResize } from "~/lib/observeResize";
 
 // Never part of timeline row data — see cancelTimelineLiveFollowForUserNavigation.
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
-const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more files without additional text. Respond using the conversation context and the attachment(s).]";
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 // During an active turn the thread's updatedAt advances several times per
@@ -3385,6 +3385,7 @@ function ChatViewContent(props: ChatViewProps) {
         providers: applyProviderInstanceSettings(
           deriveProviderInstanceEntries(providerStatuses),
           settings,
+          activeProject?.id ?? null,
         ),
         instanceId: activeProviderInstanceId,
         lockedInstanceId: lockedProvider
@@ -3398,6 +3399,7 @@ function ChatViewContent(props: ChatViewProps) {
       lockedProvider,
       providerStatuses,
       settings,
+      activeProject?.id,
     ],
   );
   // Answering Claude's own resume prompt with "Don't ask again" also stops
@@ -3596,7 +3598,14 @@ function ChatViewContent(props: ChatViewProps) {
                     (activeProviderInstanceId === null ||
                       provider.instanceId === activeProviderInstanceId) &&
                     provider.driver === selectedProvider &&
-                    provider.enabled &&
+                    // The destination project may override the machine switch.
+                    (environment.serverConfig?.settings
+                      ? resolveProjectProviderInstanceEnabled(
+                          environment.serverConfig.settings,
+                          candidate.projectId,
+                          provider.instanceId,
+                        )
+                      : provider.enabled) &&
                     provider.installed &&
                     provider.status !== "error" &&
                     provider.auth.status !== "unauthenticated" &&
@@ -8663,6 +8672,39 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  // The memoized composer gets call-time stable handlers, so a panel toggle that
+  // re-renders ChatView does not re-render the composer with it.
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
+  const onComposerSend = useCallback(
+    (...args: Parameters<typeof onSend>) => onSendRef.current(...args),
+    [],
+  );
+  const composerAttachments = useMemo(
+    () => (
+      <>
+        <ComposerBannerStack items={composerBannerItems} />
+        {composerTasks &&
+          (tasksDrawerExpanded ? (
+            <ComposerTasksDrawer
+              onCollapse={() => setTasksDrawerExpanded(false)}
+              progress={composerTasks.progress}
+              steps={composerTasks.steps}
+            />
+          ) : (
+            <ComposerBanner.Attachment>
+              <ComposerTasksBadge
+                expanded={false}
+                onToggle={() => setTasksDrawerExpanded(true)}
+                progress={composerTasks.progress}
+                steps={composerTasks.steps}
+              />
+            </ComposerBanner.Attachment>
+          ))}
+      </>
+    ),
+    [composerBannerItems, composerTasks, tasksDrawerExpanded],
+  );
 
   // Files dropped on a sidebar row land here once the dropped-on thread is
   // actually open, then take the exact same path as a workspace drop:
@@ -9265,28 +9307,7 @@ function ChatViewContent(props: ChatViewProps) {
                               expandedTaskDrawer={tasksDrawerExpanded}
                               onRestingChange={setComposerResting}
                               onOverlayHeightChange={publishComposerOverlayHeight}
-                              attachments={
-                                <>
-                                  <ComposerBannerStack items={composerBannerItems} />
-                                  {composerTasks &&
-                                    (tasksDrawerExpanded ? (
-                                      <ComposerTasksDrawer
-                                        onCollapse={() => setTasksDrawerExpanded(false)}
-                                        progress={composerTasks.progress}
-                                        steps={composerTasks.steps}
-                                      />
-                                    ) : (
-                                      <ComposerBanner.Attachment>
-                                        <ComposerTasksBadge
-                                          expanded={false}
-                                          onToggle={() => setTasksDrawerExpanded(true)}
-                                          progress={composerTasks.progress}
-                                          steps={composerTasks.steps}
-                                        />
-                                      </ComposerBanner.Attachment>
-                                    ))}
-                                </>
-                              }
+                              attachments={composerAttachments}
                               promptHistoryMessages={serverProjection?.messages ?? []}
                               composerRef={composerRef}
                               composerDraftTarget={composerDraftTarget}
@@ -9348,6 +9369,7 @@ function ChatViewContent(props: ChatViewProps) {
                                 activeProject?.defaultModelSelection
                               }
                               activeThreadModelSelection={activeThread?.modelSelection}
+                              activeProjectId={activeProject?.id ?? null}
                               onThreadModelOptionsChange={onThreadModelOptionsChange}
                               threadDetailLoading={isServerThread && serverProjection === null}
                               activeContextWindow={activeContextWindow}
@@ -9368,7 +9390,7 @@ function ChatViewContent(props: ChatViewProps) {
                               composerElementContextsRef={composerElementContextsRef}
                               shouldAutoScrollRef={composerShouldStickToEndRef}
                               scheduleStickToBottom={scrollToEnd}
-                              onSend={onSend}
+                              onSend={onComposerSend}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}

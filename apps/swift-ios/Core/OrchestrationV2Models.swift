@@ -185,6 +185,28 @@ public struct OrchestrationV2WorkflowPhase: Codable, Equatable, Sendable {
     }
 }
 
+/// One member of a workflow's roster, mirroring `OrchestrationV2WorkflowAgent`
+/// in packages/contracts/src/orchestrationV2.ts. `state` stays a string so a
+/// state this build predates still decodes; times are epoch milliseconds.
+public struct OrchestrationV2WorkflowAgent: Codable, Equatable, Hashable, Sendable {
+    /// Spawn ordinal within the run, the member's stable identity.
+    public let index: Int
+    public let label: String
+    /// The member's own thread, once it has one.
+    public var childThreadId: String? = nil
+    /// `queued`, `running`, `completed` or `failed`.
+    public let state: String
+    public var phaseIndex: Int? = nil
+    public var phaseTitle: String? = nil
+    public var model: String? = nil
+    public var totalTokens: Int? = nil
+    public var toolCalls: Int? = nil
+    public var durationMs: Int? = nil
+    public var startedAt: Int? = nil
+    public var prompt: String? = nil
+    public var result: String? = nil
+}
+
 /// Workflow-shaped progress for a subagent that runs a script rather than a
 /// single prompt. Absent on ordinary subagents, which is the common case.
 public struct OrchestrationV2WorkflowProgress: Codable, Equatable, Sendable {
@@ -195,23 +217,29 @@ public struct OrchestrationV2WorkflowProgress: Codable, Equatable, Sendable {
     public let currentPhase: String?
     /// Agents spawned so far by this workflow; drives the fan-out count.
     public let spawnedCount: Int?
+    /// The provider's member roster, when it reports one. Nil on ordinary
+    /// subagents and older servers; a roster that fails to decode is dropped
+    /// rather than failing the projection around it.
+    public let agents: [OrchestrationV2WorkflowAgent]?
 
     public init(
         name: String? = nil,
         description: String? = nil,
         phases: [OrchestrationV2WorkflowPhase] = [],
         currentPhase: String? = nil,
-        spawnedCount: Int? = nil
+        spawnedCount: Int? = nil,
+        agents: [OrchestrationV2WorkflowAgent]? = nil
     ) {
         self.name = name
         self.description = description
         self.phases = phases
         self.currentPhase = currentPhase
         self.spawnedCount = spawnedCount
+        self.agents = agents
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, description, phases, currentPhase, spawnedCount
+        case name, description, phases, currentPhase, spawnedCount, agents
     }
 
     public init(from decoder: any Decoder) throws {
@@ -223,6 +251,7 @@ public struct OrchestrationV2WorkflowProgress: Codable, Equatable, Sendable {
         ) ?? []
         currentPhase = try container.decodeIfPresent(String.self, forKey: .currentPhase)
         spawnedCount = try container.decodeIfPresent(Int.self, forKey: .spawnedCount)
+        agents = (try? container.decodeIfPresent([OrchestrationV2WorkflowAgent].self, forKey: .agents)) ?? nil
     }
 }
 

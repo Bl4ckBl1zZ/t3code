@@ -21,6 +21,14 @@ struct ComposerPromptHistoryTests {
         #expect(ComposerPromptHistory.recallable("PLEASE IMPLEMENT THIS PLAN:\nGenerated plan") == "")
     }
 
+    @Test func attachmentOnlySendsAskTheAgentToRespond() {
+        let bootstrap = ComposerPromptHistory.attachmentOnlyBootstrapPrompt
+        #expect(ComposerPromptHistory.wireText("  \n", hasAttachments: true) == bootstrap)
+        #expect(ComposerPromptHistory.wireText("", hasAttachments: false) == "")
+        #expect(ComposerPromptHistory.wireText("Look", hasAttachments: true) == "Look")
+        #expect(ComposerPromptHistory.recallable(bootstrap) == "")
+    }
+
     @Test func stashSwapSurvivesRestartAndPreservesAttachments() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

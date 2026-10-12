@@ -9,6 +9,7 @@ import {
   ProviderInstanceId,
   DEFAULT_SERVER_SETTINGS,
   AuthOrchestrationOperateScope,
+  ORCHESTRATION_V2_WS_METHODS,
   AuthOrchestrationReadScope,
   AuthSourceControlWriteScope,
   AuthPreviewOperateScope,
@@ -36,6 +37,12 @@ import {
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
+  });
+
+  it("requires operate access to stop a workflow", () => {
+    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.stopWorkflow)).toBe(
+      AuthOrchestrationOperateScope,
+    );
   });
 
   it("authorizes background policy reporting and observation deliberately", () => {
@@ -84,6 +91,16 @@ describe("RPC authorization scopes", () => {
     );
     expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsRequestReviewers)).toBe(
       requiredScopeForRpcMethod(WS_METHODS.pullRequestsComment),
+    );
+  });
+
+  it("reads a review guide like the pull request, but writing one operates the environment", () => {
+    // Writing a guide runs a model on this environment's providers; reading one does not.
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsReviewGuide)).toBe(
+      requiredScopeForRpcMethod(WS_METHODS.pullRequestsDetail),
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsGenerateReviewGuide)).toBe(
+      AuthOrchestrationOperateScope,
     );
   });
 

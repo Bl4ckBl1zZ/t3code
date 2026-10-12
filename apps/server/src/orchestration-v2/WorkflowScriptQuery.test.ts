@@ -1,10 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import type { OrchestrationV2GetWorkflowScriptError } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import { readWorkflowScript } from "./WorkflowScriptQuery.ts";
 
@@ -110,6 +112,21 @@ describe("readWorkflowScript", () => {
       );
       expect(reason).toBe("not-regular-file");
     }),
+  );
+
+  it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+    "rejects a FIFO without waiting for a writer",
+    () =>
+      Effect.gen(function* () {
+        const reason = yield* withScriptDir("fifo", (dir) =>
+          Effect.gen(function* () {
+            const fifo = NodePath.join(dir, "pipe.js");
+            NodeChildProcess.execFileSync("mkfifo", [fifo]);
+            return yield* failureReason(readWorkflowScript({ scriptPath: fifo }));
+          }),
+        );
+        expect(reason).toBe("not-regular-file");
+      }),
   );
 
   it.effect("reports not-found for a missing script rather than a read failure", () =>

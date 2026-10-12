@@ -70,6 +70,9 @@ import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts"
 import { ThreadSearchQuery } from "../orchestration-v2/ThreadSearchQuery.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -513,7 +516,15 @@ describe("orchestrator MCP toolkit", () => {
           ).pipe(Layer.provide(continuationProbeLayer));
           const orchestrationLayer = Layer.merge(
             orchestratorLayer,
-            threadManagementServiceLayer.pipe(Layer.provide(orchestratorLayer)),
+            threadManagementServiceLayer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  orchestratorLayer,
+                  ServerSettings.layerTest(),
+                  CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
+                ),
+              ),
+            ),
           );
           const providerRegistryLayer = makeProviderRegistryLayer([
             makeProviderSnapshot({
@@ -582,6 +593,7 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provideMerge(orchestrationLayer),
             Layer.provide(providerRegistryLayer),
             Layer.provide(scheduledTaskStubLayer),
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(
               Layer.mock(ProjectService)({
                 getById: (id) =>
@@ -683,6 +695,12 @@ describe("orchestrator MCP toolkit", () => {
             expect(threadListTool?.tool.annotations?.idempotentHint).toBe(true);
             const threadReadTool = server.tools.find(({ tool }) => tool.name === "t3_thread_read");
             expect(threadReadTool?.tool.annotations?.readOnlyHint).toBe(true);
+            expect(threadReadTool?.tool.inputSchema).toMatchObject({ additionalProperties: false });
+            const unknownPagingParamError = yield* invoke("t3_thread_read", {
+              threadId: parentThreadId,
+              cursor: 90,
+            }).pipe(Effect.flip);
+            expect(unknownPagingParamError.message).toContain("Expected no excess property");
             const threadSendTool = server.tools.find(({ tool }) => tool.name === "t3_thread_send");
             expect(threadSendTool?.tool.annotations?.destructiveHint).toBe(true);
             const threadWaitTool = server.tools.find(({ tool }) => tool.name === "t3_thread_wait");

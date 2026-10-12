@@ -413,14 +413,46 @@ export const layer: Layer.Layer<
     const normalize: ProviderEventIngestorV2Shape["normalize"] = (input) =>
       Effect.gen(function* () {
         switch (input.event.type) {
-          case "app_thread.created":
+          case "app_thread.created": {
+            // Providers re-offer a child thread when its title or model changes
+            // (a workflow member renamed or moved to another model). An existing
+            // thread keeps its own state and takes only those two.
+            const offered = input.event.appThread;
+            const existing = yield* projections.getThreadRecords(offered.id, []).pipe(
+              Effect.map(({ thread }) => thread),
+              Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
+            );
+            if (
+              existing !== null &&
+              existing.title === offered.title &&
+              modelSelectionsEqual(existing.modelSelection, offered.modelSelection)
+            ) {
+              return [];
+            }
+            if (existing === null) {
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "thread.created",
+                  threadId: offered.id,
+                  payload: offered,
+                }),
+              ];
+            }
+            const now = yield* DateTime.now;
             return [
               yield* makeDomainEvent(input, {
-                type: "thread.created",
-                threadId: input.event.appThread.id,
-                payload: input.event.appThread,
+                type: "thread.metadata-updated",
+                threadId: offered.id,
+                payload: {
+                  ...existing,
+                  title: offered.title,
+                  modelSelection: offered.modelSelection,
+                  updatedAt: now,
+                },
+                occurredAt: now,
               }),
             ];
+          }
           case "app_thread.title_reconciled":
             return [
               yield* makeDomainEvent(input, {
@@ -630,6 +662,12 @@ export const layer: Layer.Layer<
                   ),
                 ),
           ),
+          // A re-offered thread is read and rewritten whole, like a thread
+          // command does, so it takes the thread's lock too.
+          (effect) =>
+            input.event.type === "app_thread.created"
+              ? threadCommands.withLock(input.event.appThread.id, effect)
+              : effect,
         ),
     });
   }),

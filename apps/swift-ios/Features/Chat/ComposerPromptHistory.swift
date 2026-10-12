@@ -9,6 +9,20 @@ struct ComposerPromptHistory {
     }
     private(set) var position: Entry?
 
+    /// Sent in place of an empty prompt when a message is attachments only, so
+    /// the agent is still asked to respond. Mirrors
+    /// `ATTACHMENT_ONLY_BOOTSTRAP_PROMPT` in
+    /// `apps/web/src/components/chat/composerPromptHistory.ts`.
+    static let attachmentOnlyBootstrapPrompt = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]"
+
+    /// The text a send puts on the wire: the composer's own, or the bootstrap
+    /// prompt when the reader sent only attachments.
+    static func wireText(_ text: String, hasAttachments: Bool) -> String {
+        hasAttachments && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? attachmentOnlyBootstrapPrompt
+            : text
+    }
+
     static func entries(_ messages: [FeatureMessage]) -> [Entry] {
         var result: [Entry] = []
         for message in messages where message.role == .user && !message.isAgentAuthored {
@@ -44,7 +58,7 @@ struct ComposerPromptHistory {
             }
         }
         let result = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if result.hasPrefix("PLEASE IMPLEMENT THIS PLAN:") || result == "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]" { return "" }
+        if result.hasPrefix("PLEASE IMPLEMENT THIS PLAN:") || result == attachmentOnlyBootstrapPrompt { return "" }
         return result
     }
 
