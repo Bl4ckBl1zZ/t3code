@@ -227,13 +227,19 @@ export const ThreadListTool = Tool.make("t3_thread_list", {
 export const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
     "Read durable state and a paginated timeline from any T3 thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition. The thread also reports its snooze state. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
-  parameters: OrchestratorMcpThreadReadInput,
+  // This Effect version only marks Tool.Strict in the JSON schema, so the
+  // decoder is made strict here too.
+  parameters: OrchestratorMcpThreadReadInput.annotate({
+    parseOptions: { onExcessProperty: "error" },
+  }),
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies,
 })
   .annotate(Tool.Title, "Read a T3 thread")
+  // Strict so a misspelled paging param fails instead of silently reading from position 0.
+  .annotate(Tool.Strict, true)
   // See TaskStatusTool: the acknowledgement side effect is bookkeeping only.
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
