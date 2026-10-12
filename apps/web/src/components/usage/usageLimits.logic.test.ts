@@ -224,6 +224,20 @@ describe("quota pooling", () => {
     expect(paceOf(window({ usedPercent: 80 }), now)).toBe("ahead");
     expect(formatResetsIn(window({ resetsAt: "2026-09-10T11:00:00Z" }), now)).toBe("resets now");
   });
+
+  it.each([
+    ["2026-09-10T12:01:00.000Z", "resets in 1m"],
+    ["2026-09-10T12:00:59.999Z", "Resets momentarily"],
+    ["2026-09-10T12:00:00.001Z", "Resets momentarily"],
+    ["2026-09-10T12:00:00.000Z", "resets now"],
+    ["2026-09-10T11:59:59.999Z", "resets now"],
+  ])("formats the reset boundary at %s", (resetsAt, label) => {
+    expect(formatResetsIn(window({ resetsAt }), now)).toBe(label);
+  });
+
+  it("ignores invalid reset timestamps", () => {
+    expect(formatResetsIn(window({ resetsAt: "invalid" }), now)).toBeNull();
+  });
 });
 
 it("deduplicates a hub account with a local account and redeems the displayed hub credit", () => {
