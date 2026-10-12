@@ -520,12 +520,11 @@ import {
   supportsDesktopAppUpdate,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "./chat/composerPromptHistory";
 import { observeResize } from "~/lib/observeResize";
 
 // Never part of timeline row data — see cancelTimelineLiveFollowForUserNavigation.
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
-const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more files without additional text. Respond using the conversation context and the attachment(s).]";
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 // During an active turn the thread's updatedAt advances several times per
