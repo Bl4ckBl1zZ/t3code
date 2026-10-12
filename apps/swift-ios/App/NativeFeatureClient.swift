@@ -1404,6 +1404,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             shell: shellsByEnvironmentID[environment.id]
         )
         let title = Self.title(from: prompt, hasAttachments: !attachments.isEmpty)
+        let wirePrompt = ComposerPromptHistory.wireText(prompt, hasAttachments: !attachments.isEmpty)
         let uploads = try makeUploadAttachments(attachments)
         let runtime = coreRuntimeMode(runtimeMode)
         let interaction = coreInteractionMode(interactionMode)
@@ -1451,7 +1452,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 threadID: pending.threadID,
                 projectID: route.wireID,
                 title: title,
-                text: prompt,
+                text: wirePrompt,
                 model: model,
                 runtimeMode: runtime,
                 interactionMode: interaction,
@@ -1480,7 +1481,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 client: client,
                 pending: pending,
                 projectID: route.wireID,
-                text: prompt,
+                text: wirePrompt,
                 model: model,
                 attachments: uploads
             )
@@ -2631,7 +2632,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         do {
             _ = try await client.sendTurn(
                 threadID: submissionIdentity?.threadID ?? route.wireID,
-                text: text,
+                text: ComposerPromptHistory.wireText(text, hasAttachments: !attachments.isEmpty),
                 model: model,
                 attachments: uploads,
                 // The shell is live, so a steer whose run just ended goes out
