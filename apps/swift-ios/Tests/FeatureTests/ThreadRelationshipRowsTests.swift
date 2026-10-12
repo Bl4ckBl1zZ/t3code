@@ -625,6 +625,89 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         XCTAssertNil(model.subagent(for: "subagent-1"))
     }
 
+    private func workflowCoordinator(
+        status: String = "running",
+        members: [OrchestrationV2WorkflowAgent]? = []
+    ) -> ThreadRelationshipSubagentLink {
+        var link = ThreadRelationshipSubagentLink(
+            id: "workflow-1",
+            childThreadID: "thread-coordinator",
+            status: status,
+            workflow: AgentWorkflowProgress(
+                name: "review",
+                phases: [AgentWorkflowPhase(index: 0, title: "Survey"), AgentWorkflowPhase(index: 1, title: "Report")],
+                members: members
+            ),
+            origin: "provider_native",
+            startedAt: "2026-07-31T12:00:00Z"
+        )
+        link.driver = "claudeAgent"
+        link.runID = "run-1"
+        link.hasStrongNativeTask = true
+        return link
+    }
+
+    func testWorkflowRosterGroupsMembersByPhaseAndSettlesStaleOnesWithTheRun() throws {
+        let members = [
+            OrchestrationV2WorkflowAgent(index: 1, label: "write", state: "running", phaseIndex: 1),
+            OrchestrationV2WorkflowAgent(index: 0, label: "scan", state: "completed", phaseIndex: 0, durationMs: 61_000),
+            OrchestrationV2WorkflowAgent(index: 2, label: "late", state: "queued", phaseIndex: 3, phaseTitle: "Extra"),
+            OrchestrationV2WorkflowAgent(index: 3, label: "loose", state: "failed"),
+        ]
+        let running = try XCTUnwrap(ThreadLineageWorkflowGroup(
+            coordinatorStatus: "running", workflow: workflowCoordinator(members: members).workflow
+        ))
+        XCTAssertEqual(running.phases.map(\.title), ["Survey", "Report", "Extra"])
+        XCTAssertEqual(running.phases.map(\.state), [.done, .running, .running])
+        XCTAssertEqual(running.phases[0].settledCount, 1)
+        XCTAssertEqual(running.phases[0].members.first?.settledElapsed, "1m")
+        XCTAssertEqual(running.phases[2].members.first?.status, "pending")
+        XCTAssertEqual(running.unphasedMembers.map(\.title), ["loose"])
+        XCTAssertEqual(running.memberCount, 4)
+
+        let stopped = try XCTUnwrap(ThreadLineageWorkflowGroup(
+            coordinatorStatus: "cancelled", workflow: workflowCoordinator(members: members).workflow
+        ))
+        XCTAssertEqual(stopped.phases[1].members.first?.status, "cancelled")
+        XCTAssertEqual(stopped.phases[1].statusLabel, "stopped")
+        XCTAssertNil(ThreadLineageWorkflowGroup(
+            coordinatorStatus: "running", workflow: workflowCoordinator(members: nil).workflow
+        ))
+    }
+
+    func testARunningClaudeWorkflowStopsAsAWholeNotAsItsCoordinator() {
+        let currentThread = shell("thread-parent")
+        func model(_ link: ThreadRelationshipSubagentLink) -> ThreadRelationshipsModel {
+            ThreadRelationships.build(
+                currentThreadID: "thread-parent",
+                currentThread: currentThread,
+                threads: [currentThread, shell("thread-coordinator", status: "running")],
+                subagents: [link]
+            )
+        }
+        let running = model(workflowCoordinator())
+        let row = running.rows.first
+        XCTAssertEqual(row.map(running.canStopWorkflow), true)
+        XCTAssertEqual(row.map(running.canStopSubagent), false)
+
+        let finished = model(workflowCoordinator(status: "completed"))
+        XCTAssertEqual(finished.rows.first.map(finished.canStopWorkflow), false)
+
+        // No roster (an older server): an ordinary subagent with its own Stop.
+        let plain = model(workflowCoordinator(members: nil))
+        XCTAssertEqual(plain.rows.first.map(plain.canStopWorkflow), false)
+        XCTAssertEqual(plain.rows.first.map(plain.canStopSubagent), true)
+    }
+
+    func testScopingRescopesWorkflowMemberThreads() {
+        let link = workflowCoordinator(members: [
+            OrchestrationV2WorkflowAgent(index: 0, label: "scan", childThreadId: "member", state: "running"),
+        ]).scopingThreadIDs { "env:\($0)" }
+        XCTAssertEqual(link.childThreadID, "env:thread-coordinator")
+        XCTAssertEqual(link.workflow?.members?.first?.childThreadId, "env:member")
+        XCTAssertTrue(link.stopsThroughOwner)
+    }
+
     func testMergeIsBlockedWhileANewerRunIsStillWorking() {
         let currentThread = shell(
             "thread-fork", parent: "thread-source", relationship: "fork"

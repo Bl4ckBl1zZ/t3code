@@ -70,6 +70,12 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     var onDetachSession: (() async throws -> Void)?
     /// Interrupts a running subagent's child thread. Nil hides Stop.
     var onStopSubagent: ((_ childThreadID: String) async throws -> Void)?
+    /// Stops a running workflow and its members, by the coordinator's
+    /// subagent id. Nil hides the workflow's Stop.
+    var onStopWorkflow: ((_ subagentID: String) async throws -> Void)?
+    /// Whether this client holds a thread, so a workflow member opens only
+    /// when there is something to open.
+    var isThreadKnown: (String) -> Bool = { _ in false }
     /// Thread-level actions, folded in here from the old toolbar ••• menu so
     /// the details button is the thread's single secondary surface.
     var onTogglePin: (() -> Void)?
@@ -949,7 +955,40 @@ struct ThreadDetailsSheet<ToolView: View>: View {
 
     @ViewBuilder
     private func relationshipRow(_ row: ThreadRelationshipRow, in relationships: ThreadRelationshipsModel) -> some View {
-        if onStopSubagent != nil, relationships.canStopSubagent(row) {
+        relationshipLinkRow(row, in: relationships)
+        if row.edge.kind == .subagent, row.edge.sourceThreadID == relationships.currentThreadID,
+           let link = relationships.subagent(for: row.threadID),
+           let group = ThreadLineageWorkflowGroup(coordinatorStatus: link.status, workflow: link.workflow) {
+            ThreadLineageWorkflowMembers(
+                group: group,
+                coordinatorSeed: link.orbSeed,
+                canOpen: isThreadKnown,
+                onOpen: { onExit(.thread(id: $0, isArchived: false)) }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func relationshipLinkRow(_ row: ThreadRelationshipRow, in relationships: ThreadRelationshipsModel) -> some View {
+        if onStopWorkflow != nil, relationships.canStopWorkflow(row),
+           let subagentID = relationships.subagent(for: row.threadID)?.id {
+            // The whole run stops: the coordinator and every member it has going.
+            HStack(spacing: 4) {
+                relationshipOpenButton(row, in: relationships, showsDisclosure: false)
+                    .buttonStyle(.plain)
+                SubagentStopButton(isStopping: stoppingSubagentThreadID == row.threadID) {
+                    Task { await stopWorkflow(row.threadID, subagentID: subagentID) }
+                }
+                .disabled(stoppingSubagentThreadID != nil)
+                .accessibilityLabel("Stop Workflow")
+            }
+            .contextMenu {
+                Button("Stop Workflow", systemImage: "stop.fill", role: .destructive) {
+                    Task { await stopWorkflow(row.threadID, subagentID: subagentID) }
+                }
+                .disabled(stoppingSubagentThreadID != nil)
+            }
+        } else if onStopSubagent != nil, relationships.canStopSubagent(row) {
             // Stop sits beside the open target, not inside it, and both are
             // plain so each keeps its own tap: stopping never also leaves for
             // the thread.
@@ -1004,7 +1043,8 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(relationships.title(for: row.threadID))
+                            Text(relationships.subagent(for: row.threadID)?.workflow?.name
+                                ?? relationships.title(for: row.threadID))
                                 .font(T3Typography.threadBody)
                                 .foregroundStyle(T3Colors.textPrimary)
                                 .lineLimit(2)
@@ -1029,6 +1069,18 @@ struct ThreadDetailsSheet<ToolView: View>: View {
             }
         }
         .disabled(ThreadDetailsLineageSection.isDisabled(availability: availability))
+    }
+
+    private func stopWorkflow(_ threadID: String, subagentID: String) async {
+        guard let onStopWorkflow, stoppingSubagentThreadID == nil else { return }
+        stoppingSubagentThreadID = threadID
+        defer { stoppingSubagentThreadID = nil }
+        do {
+            try await onStopWorkflow(subagentID)
+        } catch {
+            failure = ThreadDetailsFailure(title: "Couldn't Stop Workflow", message: error.localizedDescription)
+            PlatformHapticEngine.shared.play(.error)
+        }
     }
 
     private func stopSubagent(_ threadID: String) async {

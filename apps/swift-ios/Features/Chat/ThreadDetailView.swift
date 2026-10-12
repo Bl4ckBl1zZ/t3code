@@ -325,6 +325,8 @@ public struct ThreadDetailView: View {
                         _ = await model.detail(for: thread.id, force: true)
                     },
                     onStopSubagent: stopSubagent,
+                    onStopWorkflow: model.client is any FeatureWorkflowStopping ? stopWorkflow : nil,
+                    isThreadKnown: { id in model.snapshot.threads.contains { $0.id == id } },
                     onTogglePin: {
                         Task {
                             await model.setPinned(
@@ -1044,6 +1046,14 @@ public struct ThreadDetailView: View {
         } else {
             try await model.client.cancelTurn(threadID: childThreadID)
         }
+        _ = await model.detail(for: thread.id, force: true)
+    }
+
+    private func stopWorkflow(_ subagentID: String) async throws {
+        guard let stopper = model.client as? any FeatureWorkflowStopping else {
+            throw FeatureCapabilityUnavailable("Stopping workflows")
+        }
+        try await stopper.stopWorkflow(threadID: thread.id, subagentID: subagentID)
         _ = await model.detail(for: thread.id, force: true)
     }
 

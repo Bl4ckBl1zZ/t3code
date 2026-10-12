@@ -190,7 +190,8 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
                 AgentWorkflowPhase(index: $0.index, title: $0.title, detail: $0.detail)
             },
             currentPhase: value.currentPhase,
-            spawnedCount: value.spawnedCount
+            spawnedCount: value.spawnedCount,
+            members: value.agents
         )
     }
 
@@ -237,6 +238,39 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
         link.driver = driver
         link.runID = runID
         link.hasStrongNativeTask = hasStrongNativeTask
+        return link
+    }
+
+    /// The same link with its child thread and its workflow members' threads
+    /// mapped through `scope`, which rescopes wire ids to feature ids.
+    public func scopingThreadIDs(_ scope: (String) -> String) -> Self {
+        var link = childThreadID.map { withChildThreadID(scope($0)) } ?? self
+        if var workflow = link.workflow, let members = workflow.members {
+            workflow.members = members.map { member in
+                var member = member
+                member.childThreadId = member.childThreadId.map(scope)
+                return member
+            }
+            link = Self(
+                id: link.id,
+                childThreadID: link.childThreadID,
+                status: link.status,
+                title: link.title,
+                workflow: workflow,
+                usage: link.usage,
+                origin: link.origin,
+                startedAt: link.startedAt,
+                completedAt: link.completedAt
+            ).copyingStopHandles(from: link)
+        }
+        return link
+    }
+
+    private func copyingStopHandles(from other: Self) -> Self {
+        var link = self
+        link.driver = other.driver
+        link.runID = other.runID
+        link.hasStrongNativeTask = other.hasStrongNativeTask
         return link
     }
 
@@ -639,6 +673,18 @@ public struct ThreadRelationshipDecay: Equatable, Sendable {
 
 // MARK: - Stop
 
+public extension ThreadRelationshipsModel {
+    /// Whether this row is a running Claude workflow this thread spawned,
+    /// which `orchestration.stopWorkflow` stops with every member it still
+    /// has going. Ports `canStopWorkflow` in
+    /// apps/web/src/components/chat/ThreadRelationshipsControl.tsx.
+    func canStopWorkflow(_ row: ThreadRelationshipRow) -> Bool {
+        guard row.edge.kind == .subagent, row.edge.sourceThreadID == currentThreadID,
+              let link = subagent(for: row.threadID), link.workflow?.members != nil else { return false }
+        return link.status == "running" && link.origin == "provider_native" && link.driver == "claudeAgent"
+    }
+}
+
 public extension ThreadRelationships {
     /// Ports `canStopSubagent` and `liveSubagent` from
     /// apps/web/src/components/chat/ThreadRelationshipsControl.tsx. A
@@ -716,6 +762,8 @@ public struct ThreadRelationshipsModel: Equatable, Sendable {
     public func canStopSubagent(_ row: ThreadRelationshipRow) -> Bool {
         row.edge.kind == .subagent
             && row.edge.sourceThreadID == currentThreadID
+            // A workflow with a roster stops as a whole; see `canStopWorkflow`.
+            && subagent(for: row.threadID)?.workflow?.members == nil
             && (subagent(for: row.threadID)?.stopsThroughOwner == true || availability(for: row.threadID) == nil)
             && ThreadRelationships.canStopSubagent(
                 subagent(for: row.threadID),

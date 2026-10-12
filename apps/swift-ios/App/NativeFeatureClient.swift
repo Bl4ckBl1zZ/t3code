@@ -17,7 +17,7 @@ extension FeatureInputAnswer {
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeaturePullRequestReviewGuiding, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
-    FeatureMcpAppHosting, FeatureThreadFinding, FeatureSubagentStopping, T3ConnectCapable
+    FeatureMcpAppHosting, FeatureThreadFinding, FeatureSubagentStopping, FeatureWorkflowStopping, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -2686,6 +2686,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func stopSubagent(threadID: String, runID: String, subagentID: String) async throws {
         let route = try threadRoute(for: threadID)
         _ = try await route.client.stopSubagent(threadID: route.wireID, runID: runID, subagentID: subagentID)
+        try? await refreshUnlessStreamed(client: route.client)
+    }
+
+    func stopWorkflow(threadID: String, subagentID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        do {
+            try await route.client.stopWorkflow(threadID: route.wireID, subagentID: subagentID)
+        } catch let error as RPCError {
+            if case .unsupportedMethod = error { throw FeatureCapabilityUnavailable("Stopping workflows") }
+            throw error
+        }
         try? await refreshUnlessStreamed(client: route.client)
     }
 
@@ -6215,9 +6226,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         let subagents = projection.subagents.map { subagent -> ThreadRelationshipSubagentLink in
-            let link = ThreadRelationshipSubagentLink(subagent)
-            guard let childThreadID = link.childThreadID else { return link }
-            return link.withChildThreadID(scoped(childThreadID))
+            ThreadRelationshipSubagentLink(subagent).scopingThreadIDs(scoped)
         }
 
         let transfers = projection.contextTransfers.map { transfer in

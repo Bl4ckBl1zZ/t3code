@@ -1070,6 +1070,17 @@ public actor T3Client {
         )
     }
 
+    /// Stops a workflow run as a whole: its coordinator and every member it
+    /// still has going. `subagentID` is the coordinator's subagent id on
+    /// `threadID`, the thread that spawned it.
+    public func stopWorkflow(threadID: String, subagentID: String) async throws {
+        let _: JSONValue = try await rpc.request(
+            RPCMethod.stopWorkflow.rawValue,
+            payload: .object(["threadId": .string(threadID), "subagentId": .string(subagentID)]),
+            as: JSONValue.self
+        )
+    }
+
     public func interrupt(
         threadID: String,
         runID: String,
@@ -2849,6 +2860,7 @@ public enum RPCMethod: String, Sendable {
     case dispatchCommand = "orchestration.dispatchCommand"
     case launchThread = "orchestration.launchThread"
     case generateHandoffScript = "orchestration.generateHandoffScript"
+    case stopWorkflow = "orchestration.stopWorkflow"
     case getTurnDiff = "orchestration.getTurnDiff"
     case getFullThreadDiff = "orchestration.getFullThreadDiff"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
