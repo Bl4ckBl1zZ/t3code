@@ -6172,8 +6172,14 @@ export function makeClaudeAdapterV2(
             const now = yield* DateTime.now;
             yield* completeProviderRetry(context, now);
             // Only the main agent's requests fill the thread's context window;
-            // a subagent frame carries its own child's usage.
-            if (message.parent_tool_use_id === null && message.message.usage !== undefined) {
+            // a subagent frame carries its own child's usage. `<synthetic>`
+            // frames (usage limits, sign-in errors, /goal status) are generated
+            // by the CLI and report zero usage, not the context.
+            if (
+              message.parent_tool_use_id === null &&
+              message.message.usage !== undefined &&
+              message.message.model !== "<synthetic>"
+            ) {
               yield* emitProviderEvent({
                 type: "provider_turn.updated",
                 driver: CLAUDE_PROVIDER,
