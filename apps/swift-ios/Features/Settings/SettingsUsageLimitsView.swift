@@ -172,7 +172,7 @@ struct SettingsUsageLimitsView: View {
             }
             gauge(window.usedPercent)
             if let reset = FeatureUsageLimitsMerge.date(window.resetsAt) {
-                Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")
+                Text(UsageLimitTime.resetsPhrase(at: reset) { $0.formatted(date: .abbreviated, time: .shortened) })
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
             }
