@@ -296,4 +296,9 @@ confirm first. When the branch has conflicts, commit actions hide and
 **Ask Agent to Resolve** hands the conflict to the thread's agent. Tap a changed file to open it in
 **Review**.
 
+On iPhone and iPad, pull request descriptions and comments show images dropped into them on
+GitHub, and a dropped video as a link that plays in the browser. Template comments stay hidden as
+they do on GitHub, bot and CI badges are left out, and on GitHub `#123`, commit SHAs and
+`@mentions` link to the host.
+
 Pull-request links can open another repository on a Git host configured in the same environment, even when that repository has no local project. Web and native iOS keep the linked repository selected throughout review, comments, diffs and actions. Your existing checkout is used to contact the host.

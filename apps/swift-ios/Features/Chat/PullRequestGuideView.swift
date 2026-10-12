@@ -18,6 +18,8 @@ struct PullRequestGuideCodeContext {
 
 struct PullRequestGuideView: View {
     let model: PullRequestReviewGuideModel
+    /// Links `#123` and commit references in the guide's prose.
+    let pullRequestURL: String
     /// Nil where the host serves no diff; stops then show prose and notes only.
     let code: PullRequestGuideCodeContext?
     /// Opens the review form from the tour's last stop, when the reader may review.
@@ -55,7 +57,7 @@ struct PullRequestGuideView: View {
                 ForEach(Array(guide.stops.enumerated()), id: \.offset) { position, stop in
                     ThreadSheetCardRow(showsDivider: position > 0, dividerInset: 56) {
                         NavigationLink {
-                            PullRequestGuideStopView(model: model, code: code, start: position, finishReview: finishReview)
+                            PullRequestGuideStopView(model: model, pullRequestURL: pullRequestURL, code: code, start: position, finishReview: finishReview)
                         } label: {
                             stopRow(stop, position: position)
                         }
@@ -66,7 +68,7 @@ struct PullRequestGuideView: View {
 
             if !guide.stops.isEmpty {
                 NavigationLink {
-                    PullRequestGuideStopView(model: model, code: code, start: 0, finishReview: finishReview)
+                    PullRequestGuideStopView(model: model, pullRequestURL: pullRequestURL, code: code, start: 0, finishReview: finishReview)
                 } label: {
                     Label("Start Tour", systemImage: "arrow.right")
                         .frame(maxWidth: .infinity)
@@ -180,15 +182,17 @@ private struct PullRequestGuideActionStyle: ViewModifier {
 /// the arrows in the toolbar for either direction.
 struct PullRequestGuideStopView: View {
     let model: PullRequestReviewGuideModel
+    let pullRequestURL: String
     let code: PullRequestGuideCodeContext?
     let finishReview: (() -> Void)?
     @State private var position: Int
     @State private var excerptWidth: CGFloat = 0
     @SwiftUI.Environment(\.dismiss) private var dismiss
 
-    init(model: PullRequestReviewGuideModel, code: PullRequestGuideCodeContext?, start: Int,
+    init(model: PullRequestReviewGuideModel, pullRequestURL: String, code: PullRequestGuideCodeContext?, start: Int,
          finishReview: (() -> Void)?) {
         self.model = model
+        self.pullRequestURL = pullRequestURL
         self.code = code
         self.finishReview = finishReview
         _position = State(initialValue: start)
@@ -253,14 +257,14 @@ struct PullRequestGuideStopView: View {
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
         if !stop.summary.isEmpty {
-            MarkdownMessageView(stop.summary)
+            PullRequestMarkdownView(stop.summary, pullRequestURL: pullRequestURL)
         }
         if let attention = stop.attention {
             VStack(alignment: .leading, spacing: 8) {
                 Label(PullRequestReviewGuideTour.attentionLabel(attention.kind), systemImage: "eye")
                     .font(T3Typography.supportingStrong)
                     .foregroundStyle(T3Colors.warning)
-                MarkdownMessageView(attention.note)
+                PullRequestMarkdownView(attention.note, pullRequestURL: pullRequestURL)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -289,7 +293,7 @@ struct PullRequestGuideStopView: View {
                     .foregroundStyle(T3Colors.textSecondary)
                     .accessibilityAddTraits(.isHeader)
                 ForEach(Array(stop.questions.enumerated()), id: \.offset) { _, question in
-                    MarkdownMessageView(question)
+                    PullRequestMarkdownView(question, pullRequestURL: pullRequestURL)
                 }
             }
         }
@@ -306,7 +310,7 @@ struct PullRequestGuideStopView: View {
         let focus = PullRequestReviewGuideFocus(excerpt)
         VStack(alignment: .leading, spacing: 8) {
             if !excerpt.caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                MarkdownMessageView(excerpt.caption)
+                PullRequestMarkdownView(excerpt.caption, pullRequestURL: pullRequestURL)
             }
             VStack(alignment: .leading, spacing: 0) {
                 excerptHeader(excerpt, file: file)
@@ -420,7 +424,7 @@ struct PullRequestGuideStopView: View {
                                 .font(T3Typography.tool)
                                 .foregroundStyle(T3Colors.textTertiary)
                             if !entry.note.body.isEmpty {
-                                MarkdownMessageView(entry.note.body)
+                                PullRequestMarkdownView(entry.note.body, pullRequestURL: pullRequestURL)
                             }
                         }
                     }

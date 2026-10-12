@@ -393,7 +393,7 @@ struct PullRequestDetailSheet: View {
                             }
                         case .guide:
                             if showsGuide, let guide {
-                                PullRequestGuideView(model: guide, code: guideCode(overview),
+                                PullRequestGuideView(model: guide, pullRequestURL: detail.url, code: guideCode(overview),
                                     finishReview: canReview(detail) ? { reviewing = true } : nil)
                             }
                         }
@@ -580,7 +580,7 @@ struct PullRequestDetailSheet: View {
                             .font(T3Typography.threadBody)
                             .foregroundStyle(T3Colors.textTertiary)
                     } else {
-                        MarkdownMessageView(detail.body)
+                        PullRequestMarkdownView(detail.body, pullRequestURL: detail.url)
                     }
                 }
                 .padding(16)
@@ -1076,7 +1076,7 @@ struct PullRequestDetailSheet: View {
                         }
                     }
                     if !comment.body.isEmpty {
-                        MarkdownMessageView(comment.body)
+                        PullRequestMarkdownView(comment.body, pullRequestURL: detail.url)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     reactionBar(comment.reactions ?? [], subjectID: comment.id, detail: detail)
