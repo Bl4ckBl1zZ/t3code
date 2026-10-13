@@ -369,9 +369,12 @@ describe("cached VCS refs", () => {
           disconnect: Effect.void,
           retryNow: Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
+          _environmentId,
+          effect,
+        ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
         const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
-          run: (_environmentId, effect) =>
-            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          run,
         } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
         const runtime = Atom.runtime(
           Layer.merge(
