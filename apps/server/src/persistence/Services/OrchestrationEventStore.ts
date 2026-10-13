@@ -67,13 +67,22 @@ export interface OrchestrationEventStoreShape {
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, OrchestrationEventStoreError>;
 
-  /** Read only V2 thread events from the application log. */
+  /**
+   * Read only V2 thread events from the application log; `limit` caps the
+   * events emitted.
+   *
+   * A row whose `event_type` this build does not know fails the read unless
+   * `skipUnknownEventTypes` is set, which logs and drops it instead (and keeps
+   * reading so `limit` still counts emitted events). Only client thread replay
+   * opts in; anything that builds server state stays strict.
+   */
   readonly readAgentEvents: (input?: {
     readonly afterSequence?: number;
     readonly throughSequence?: number;
     readonly threadId?: ThreadId;
     readonly commandId?: CommandId;
     readonly limit?: number;
+    readonly skipUnknownEventTypes?: boolean;
   }) => Stream.Stream<OrchestrationV2StoredEvent, OrchestrationEventStoreError>;
 
   readonly latestAgentSequence: (
@@ -82,10 +91,17 @@ export interface OrchestrationEventStoreShape {
 
   readonly latestApplicationSequence: Effect.Effect<number, OrchestrationEventStoreError>;
 
-  /** Read the finite retained application-event range `(afterSequence, throughSequence]`. */
+  /**
+   * Read the finite retained application-event range `(afterSequence, throughSequence]`.
+   *
+   * A row whose `event_type` this build does not know fails the read unless
+   * `skipUnknownEventTypes` is set, which logs and drops it instead. Only
+   * client shell replay opts in; anything that builds server state stays strict.
+   */
   readonly readApplicationEvents: (input: {
     readonly afterSequence: number;
     readonly throughSequence: number;
+    readonly skipUnknownEventTypes?: boolean;
   }) => Stream.Stream<ApplicationStoredEvent, OrchestrationEventStoreError>;
 
   /** Publish only after the surrounding event/projection transaction commits. */

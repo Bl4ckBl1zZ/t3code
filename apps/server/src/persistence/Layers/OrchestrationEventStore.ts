@@ -4,6 +4,7 @@ import {
   CommandId,
   EventId,
   IsoDateTime,
+  isKnownOrchestrationV2EventType,
   NonNegativeInt,
   OrchestrationV2DomainEventJson,
   OrchestrationV2StoredEvent,
@@ -162,6 +163,23 @@ function rowToApplicationStoredEvent(
 ): Effect.Effect<ApplicationStoredEvent, Schema.SchemaError> {
   return row.aggregate_kind === "project" ? rowToProjectEvent(row) : rowToV2StoredEvent(row);
 }
+
+const knownProjectEventTypes: ReadonlySet<string> = new Set(
+  ApplicationProjectEvent.members.map((member) => member.fields.type.literal),
+);
+
+/** Filter only unknown discriminants; known types still undergo strict payload decoding. */
+const keepReplayRow = (row: ApplicationEventRow, skipUnknownEventTypes?: boolean) =>
+  skipUnknownEventTypes !== true ||
+  (row.aggregate_kind === "project"
+    ? knownProjectEventTypes.has(row.event_type)
+    : isKnownOrchestrationV2EventType(row.event_type))
+    ? Effect.succeed(true)
+    : Effect.logWarning("Skipping an application event row with an unknown event type", {
+        aggregateKind: row.aggregate_kind,
+        sequence: row.sequence,
+        eventTypeLength: row.event_type.length,
+      }).pipe(Effect.as(false));
 
 function inferActorKind(
   event: Omit<OrchestrationEvent, "sequence">,
@@ -478,20 +496,45 @@ const makeEventStore = Effect.gen(function* () {
       ),
     );
 
-  const readAgentEvents: OrchestrationEventStoreShape["readAgentEvents"] = (input) =>
-    Stream.fromEffect(
+  const readAgentEvents: OrchestrationEventStoreShape["readAgentEvents"] = (input) => {
+    const limit = input?.limit ?? DEFAULT_READ_FROM_SEQUENCE_LIMIT;
+    const readPage = (afterSequence: number) =>
       readApplicationRows({
-        afterSequence: input?.afterSequence ?? 0,
+        afterSequence,
         ...(input?.throughSequence === undefined ? {} : { throughSequence: input.throughSequence }),
         ...(input?.threadId === undefined ? {} : { threadId: input.threadId }),
         ...(input?.commandId === undefined ? {} : { commandId: input.commandId }),
         onlyAgentEvents: true,
-        limit: input?.limit ?? DEFAULT_READ_FROM_SEQUENCE_LIMIT,
+        limit,
       }).pipe(
         Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.readAgentEvents:query")),
-      ),
-    ).pipe(
-      Stream.flatMap(Stream.fromIterable),
+      );
+    // Strict reads take one page. A skipping read keeps paging past dropped rows
+    // so `limit` counts emitted events: thread resume reads `limit` as "more
+    // events exist than the replay budget", and a short page that hid later
+    // events behind skipped rows would replay a truncated tail.
+    const rows =
+      input?.skipUnknownEventTypes === true
+        ? Stream.paginate(input.afterSequence ?? 0, (afterSequence) =>
+            readPage(afterSequence).pipe(
+              Effect.map((page) => {
+                const last = page.at(-1);
+                return [
+                  page,
+                  last === undefined || page.length < limit
+                    ? Option.none()
+                    : Option.some(last.sequence),
+                ] as const;
+              }),
+            ),
+          ).pipe(
+            Stream.filterEffect((row) => keepReplayRow(row, true)),
+            Stream.take(limit),
+          )
+        : Stream.fromEffect(readPage(input?.afterSequence ?? 0)).pipe(
+            Stream.flatMap(Stream.fromIterable),
+          );
+    return rows.pipe(
       Stream.mapEffect((row) =>
         rowToV2StoredEvent(row).pipe(
           Effect.mapError(
@@ -500,6 +543,7 @@ const makeEventStore = Effect.gen(function* () {
         ),
       ),
     );
+  };
 
   // Branch in TypeScript rather than with `? IS NULL OR stream_id = ?`: the
   // latter is opaque to the planner, so the scoped case fell back to walking
@@ -556,19 +600,35 @@ const makeEventStore = Effect.gen(function* () {
     ),
   );
 
-  const readApplicationEventPage = (input: {
+  // Advance over raw rows so even a full page of unknown types cannot end replay early.
+  const catchUpApplicationEvents = (input: {
     readonly afterSequence: number;
     readonly throughSequence: number;
-    readonly limit: number;
+    readonly skipUnknownEventTypes?: boolean;
   }): Stream.Stream<ApplicationStoredEvent, OrchestrationEventStoreError> =>
-    Stream.fromEffect(
-      readApplicationRows(input).pipe(
+    Stream.paginate(input.afterSequence, (afterSequence) =>
+      readApplicationRows({
+        afterSequence,
+        throughSequence: input.throughSequence,
+        limit: READ_PAGE_SIZE,
+      }).pipe(
         Effect.mapError(
           toPersistenceSqlError("OrchestrationEventStore.readApplicationEvents:query"),
         ),
+        Effect.map((rows) => {
+          const last = rows.at(-1);
+          return [
+            rows,
+            last === undefined ||
+            rows.length < READ_PAGE_SIZE ||
+            last.sequence >= input.throughSequence
+              ? Option.none()
+              : Option.some(last.sequence),
+          ] as const;
+        }),
       ),
     ).pipe(
-      Stream.flatMap(Stream.fromIterable),
+      Stream.filterEffect((row) => keepReplayRow(row, input.skipUnknownEventTypes)),
       Stream.mapEffect((row) =>
         rowToApplicationStoredEvent(row).pipe(
           Effect.mapError(
@@ -577,34 +637,6 @@ const makeEventStore = Effect.gen(function* () {
         ),
       ),
     );
-
-  const catchUpApplicationEvents = (input: {
-    readonly afterSequence: number;
-    readonly throughSequence: number;
-  }): Stream.Stream<ApplicationStoredEvent, OrchestrationEventStoreError> => {
-    const loop = (
-      afterSequence: number,
-    ): Stream.Stream<ApplicationStoredEvent, OrchestrationEventStoreError> =>
-      Stream.unwrap(
-        readApplicationEventPage({
-          afterSequence,
-          throughSequence: input.throughSequence,
-          limit: READ_PAGE_SIZE,
-        }).pipe(
-          Stream.runCollect,
-          Effect.map((chunk) => Array.from(chunk)),
-          Effect.map((events) => {
-            if (events.length === 0) return Stream.empty;
-            const current = Stream.fromIterable(events);
-            const last = events.at(-1)?.sequence ?? input.throughSequence;
-            return events.length < READ_PAGE_SIZE || last >= input.throughSequence
-              ? current
-              : Stream.concat(current, loop(last));
-          }),
-        ),
-      );
-    return loop(input.afterSequence);
-  };
 
   const streamApplicationEvents: OrchestrationEventStoreShape["streamApplicationEvents"] = (
     input,

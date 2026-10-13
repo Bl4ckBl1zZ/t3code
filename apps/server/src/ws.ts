@@ -926,6 +926,10 @@ const makeWsRpcLayer = (
                 afterSequence,
                 throughSequence,
                 limit,
+                // A row a newer build wrote (e.g. after a downgrade) must not fail
+                // every resubscribe. The live tail resumes from `highWater`, so a
+                // dropped row never hides later events.
+                skipUnknownEventTypes: true,
               })
               .pipe(
                 Stream.map((stored) => ({
@@ -1207,6 +1211,10 @@ const makeWsRpcLayer = (
                   applicationEvents.readApplicationEvents({
                     afterSequence: input.afterSequence,
                     throughSequence: highWater,
+                    // A row a newer build wrote (e.g. after a downgrade) must not fail
+                    // every shell resubscribe. The live tail below resumes from
+                    // highWater, so a dropped row never hides later events.
+                    skipUnknownEventTypes: true,
                   }),
                 );
                 return composeShellStreamWithEnrichment({
