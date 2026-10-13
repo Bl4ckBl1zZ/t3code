@@ -22,6 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as CatalogStore from "./catalog-store";
+import { readSwiftSavedEnvironments } from "./swift-import-native";
 
 function targetPersistenceError(
   operation:
@@ -41,7 +42,7 @@ function targetPersistenceError(
 
 export const layer = Layer.effectContext(
   Effect.gen(function* () {
-    const catalog = yield* CatalogStore.make();
+    const catalog = yield* CatalogStore.make({ readSwiftSavedEnvironments });
     const githubRoutingPermissions = yield* makeGitHubRoutingPermissions({
       read: catalog.read.pipe(Effect.map((document) => document.githubRoutingPermissions ?? [])),
       write: (githubRoutingPermissions) =>

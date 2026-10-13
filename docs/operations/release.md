@@ -303,6 +303,34 @@ production, exclude devices, and use Play App Signing" permission, which downloa
 APKs requires. The job reads tracks without opening a Play edit, so it can share the service
 account EAS Submit uses.
 
+## iOS TestFlight without EAS
+
+`.github/workflows/mobile-ios-testflight.yml` builds the iOS app on a GitHub-hosted macOS runner
+for an App Store record outside T3 Tools: `expo prebuild` → `xcodebuild archive` → export →
+`altool` upload, driven by `apps/mobile/scripts/ios-testflight.sh`. The script also runs on a Mac.
+
+- Identity is read from the App Store provisioning profiles, not configured: team, bundle id,
+  App Group, and profile names come from `scripts/ios-release.ts identity`, and reach
+  `app.config.ts` as the `T3CODE_IOS_*` overrides. The App Group cannot be derived from the
+  bundle id, so the app profile must grant one.
+- The build number is the highest build on App Store Connect plus one. Pass `build-number` on a
+  manual dispatch to override it.
+- Profiles are needed for the app, `<bundle id>.widgets`, and `<bundle id>.sharing`. The app
+  profile needs Push Notifications, Sign in with Apple, Associated Domains, and the App Group;
+  the extensions need the App Group.
+- OTA updates stay off: no EAS project or updates URL is set.
+- The app replaces the fork's SwiftUI client under the same bundle id. On first launch it imports
+  the servers that client paired (`apps/mobile/modules/t3-swift-import`), once. T3 Connect
+  servers come back after signing in to T3 Connect again.
+- Secrets (production environment): `APPLE_DISTRIBUTION_P12_BASE64`,
+  `APPLE_DISTRIBUTION_P12_PASSWORD`, `APPLE_MAIN_APPSTORE_PROFILE_BASE64`,
+  `APPLE_WIDGETS_APPSTORE_PROFILE_BASE64`, `APPLE_SHARING_APPSTORE_PROFILE_BASE64`,
+  `APPLE_API_KEY` (the `.p8`), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`. Variables:
+  `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_TEMPLATE`, `CLERK_PASSKEY_RP_DOMAINS`, `RELAY_DOMAIN`, and
+  optionally `ASC_APP_ID`.
+- Pushes to `main` and `v*`/`fork-v*` tags upload. A dispatch on any other ref archives and
+  exports but does not upload.
+
 ## Hosted web app release deployment
 
 The hosted app is intentionally not deployed by Vercel's Git integration. The
