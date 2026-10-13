@@ -50,3 +50,25 @@ export function deriveThreadCheckpointSummaries(
     ];
   });
 }
+
+/**
+ * Files a restore to `turnCount` puts back: every path a later checkpoint in
+ * the same scope changed, in the order they were first changed.
+ */
+export function filesChangedAfterCheckpoint(
+  summaries: ReadonlyArray<
+    Pick<ThreadCheckpointSummary, "scopeId" | "checkpointTurnCount" | "files">
+  >,
+  turnCount: number,
+): ReadonlyArray<string> {
+  const scopeId = summaries.find((summary) => summary.checkpointTurnCount === turnCount)?.scopeId;
+  const paths = new Set<string>();
+  for (const summary of [...summaries].sort(
+    (left, right) => left.checkpointTurnCount - right.checkpointTurnCount,
+  )) {
+    if (summary.checkpointTurnCount <= turnCount) continue;
+    if (scopeId !== undefined && summary.scopeId !== scopeId) continue;
+    for (const file of summary.files) paths.add(file.path);
+  }
+  return [...paths];
+}
