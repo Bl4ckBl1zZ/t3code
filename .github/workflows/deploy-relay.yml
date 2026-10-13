@@ -46,6 +46,12 @@ jobs:
       RELAY_LEGACY_TUNNEL_CLEANUP_MODE: ${{ vars.RELAY_LEGACY_TUNNEL_CLEANUP_MODE }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
+      # Optional voice input knobs; blank uses the relay's defaults.
+      VOICE_INPUT_ENABLED: ${{ vars.VOICE_INPUT_ENABLED }}
+      VOICE_INPUT_MODEL: ${{ vars.VOICE_INPUT_MODEL }}
+      VOICE_INPUT_DAILY_SECONDS: ${{ vars.VOICE_INPUT_DAILY_SECONDS }}
+      VOICE_INPUT_MAX_CLIP_SECONDS: ${{ vars.VOICE_INPUT_MAX_CLIP_SECONDS }}
+      VOICE_INPUT_MAX_UPLOAD_BYTES: ${{ vars.VOICE_INPUT_MAX_UPLOAD_BYTES }}
       APNS_ENVIRONMENT: ${{ vars.APNS_ENVIRONMENT }}
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
@@ -222,6 +228,8 @@ jobs:
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
           # Optional: Android push stays off until this secret exists.
           FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+          # Optional: voice input stays off until this secret exists.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Verify production relay and database
         if: ${{ !inputs.dry_run }}

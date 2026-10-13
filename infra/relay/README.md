@@ -22,6 +22,7 @@ The relay currently owns:
 - Listing linked environments and registered mobile devices for an account.
 - Registering mobile notification preferences and APNs or FCM tokens.
 - Receiving published agent activity and delivering notifications or Live Activity updates.
+- Transcribing voice input for signed-in accounts with one shared OpenRouter key, within daily caps.
 - Persisting relay state and exposing relay-specific traces for diagnostics.
 
 The environment server and relay have separate credentials and trust boundaries. Read
@@ -159,6 +160,10 @@ The `production` GitHub environment must define these Actions secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 - `FCM_SERVICE_ACCOUNT` when Android push is enabled
+- `OPENROUTER_API_KEY` when voice input is enabled
+
+Voice input also reads optional `VOICE_INPUT_*` variables; see
+[Relay voice input](../../docs/operations/relay-voice-input.md).
 
 The release workflow reads the production relay's public URL and Clerk publishable key from the same
 environment for downstream desktop, CLI, and hosted web builds.

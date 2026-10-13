@@ -41,8 +41,7 @@ export const relayMobileDevices = pgTable(
   ],
 );
 
-// Voice input state from the fork's relay, kept for the relay voice rebuild.
-// Per-user settings (language, dictionary, cleanup) follow the account across devices.
+// Per-user voice settings (language, dictionary, cleanup) follow the account across devices.
 export const relayVoiceInputSettings = pgTable("relay_voice_input_settings", {
   userId: varchar("user_id", { length: 255 }).primaryKey(),
   settingsJson: jsonb("settings_json").notNull(),
@@ -51,6 +50,7 @@ export const relayVoiceInputSettings = pgTable("relay_voice_input_settings", {
 });
 
 // Idempotency records for transcription requests, keyed by the client's request id.
+// They hold transcripts, so the cron prunes them after a day.
 export const relayVoiceTranscriptionRequests = pgTable(
   "relay_voice_transcription_requests",
   {
@@ -62,6 +62,21 @@ export const relayVoiceTranscriptionRequests = pgTable(
   (table) => [
     primaryKey({ columns: [table.userId, table.requestId] }),
     index("idx_relay_voice_requests_created").on(table.createdAt),
+  ],
+);
+
+// Audio seconds each account transcribed per UTC day, for the daily cap.
+export const relayVoiceUsageDays = pgTable(
+  "relay_voice_usage_days",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    day: varchar("day", { length: 10 }).notNull(),
+    audioSeconds: integer("audio_seconds").notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.day] }),
+    index("idx_relay_voice_usage_days_day").on(table.day),
   ],
 );
 

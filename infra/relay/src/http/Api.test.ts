@@ -7,6 +7,7 @@ import {
 import * as EnvironmentLinker from "../environments/EnvironmentLinker.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as Devices from "../agentActivity/Devices.ts";
+import * as VoiceInput from "../voice/VoiceInput.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
 import * as NodeCrypto from "node:crypto";
 import { createClerkClient, verifyToken } from "@clerk/backend";
@@ -93,6 +94,57 @@ const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
   managedEndpointNamespace: undefined,
 };
 
+/** The client API group behind a fixed signed-in principal, with mocked domain services. */
+const clientApiApp = (mocks: {
+  readonly devices?: Partial<Devices.Devices["Service"]>;
+  readonly voiceInput?: Partial<VoiceInput.VoiceInput["Service"]>;
+}) => {
+  const layerHandlers = RelayHttpApi.layerClientApi.pipe(
+    HttpRouter.provideRequest(
+      Layer.mergeAll(
+        Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
+        Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
+        Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
+        Layer.mock(RelayDb.RelayTransactions, {}),
+        Layer.mock(HookInbox.HookInbox, {}),
+      ),
+    ),
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings),
+        NodeCryptoLayer.layer,
+        Layer.mock(RelayTokens.RelayTokens, { resolveDpopAccessTokenScopes: () => null }),
+        Layer.mock(EnvironmentLinker.EnvironmentLinker, {}),
+        Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
+        Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
+        Layer.mock(Devices.Devices, mocks.devices ?? {}),
+        Layer.mock(VoiceInput.VoiceInput, mocks.voiceInput ?? {}),
+      ),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(RelayClientAuth, {
+        clientBearer: (effect) =>
+          Effect.provideService(effect, RelayClientPrincipal, {
+            userId: "user-1",
+            token: "test-token",
+          }),
+      }),
+    ),
+  );
+  return Effect.acquireRelease(
+    Effect.sync(() =>
+      HttpRouter.toWebHandler(
+        HttpApiBuilder.layer(HttpApi.make("RelayApi").add(RelayApi.groups.client)).pipe(
+          Layer.provide(layerHandlers),
+          Layer.provide(HttpServer.layerServices),
+        ),
+        { disableLogger: true },
+      ),
+    ),
+    (app) => Effect.promise(() => app.dispose()),
+  );
+};
+
 describe("device listing compatibility", () => {
   it.effect("keeps v1 iOS-only while v2 returns every platform for the same account", () => {
     const iphone: RelayClientDeviceRecord = {
@@ -119,55 +171,15 @@ describe("device listing compatibility", () => {
       iosMajorVersion: null,
       androidApiLevel: 36,
     };
-    const layerHandlers = RelayHttpApi.layerClientApi.pipe(
-      HttpRouter.provideRequest(
-        Layer.mergeAll(
-          Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
-          Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
-          Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
-          Layer.mock(RelayDb.RelayTransactions, {}),
-          Layer.mock(HookInbox.HookInbox, {}),
-        ),
-      ),
-      Layer.provide(
-        Layer.mergeAll(
-          Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings),
-          NodeCryptoLayer.layer,
-          Layer.mock(RelayTokens.RelayTokens, { resolveDpopAccessTokenScopes: () => null }),
-          Layer.mock(EnvironmentLinker.EnvironmentLinker, {}),
-          Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
-          Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
-          Layer.mock(Devices.Devices, {
-            listForUser: ({ userId }) => {
-              expect(userId).toBe("user-1");
-              return Effect.succeed([iphone, android]);
-            },
-          }),
-        ),
-      ),
-      Layer.provideMerge(
-        Layer.succeed(RelayClientAuth, {
-          clientBearer: (effect) =>
-            Effect.provideService(effect, RelayClientPrincipal, {
-              userId: "user-1",
-              token: "test-token",
-            }),
-        }),
-      ),
-    );
     return Effect.gen(function* () {
-      const app = yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          HttpRouter.toWebHandler(
-            HttpApiBuilder.layer(HttpApi.make("RelayApi").add(RelayApi.groups.client)).pipe(
-              Layer.provide(layerHandlers),
-              Layer.provide(HttpServer.layerServices),
-            ),
-            { disableLogger: true },
-          ),
-        ),
-        (app) => Effect.promise(() => app.dispose()),
-      );
+      const app = yield* clientApiApp({
+        devices: {
+          listForUser: ({ userId }) => {
+            expect(userId).toBe("user-1");
+            return Effect.succeed([iphone, android]);
+          },
+        },
+      });
       for (const [version, devices] of [
         ["v1", [iphone]],
         ["v2", [iphone, android]],
@@ -185,6 +197,44 @@ describe("device listing compatibility", () => {
       }
     }).pipe(Effect.scoped);
   });
+});
+
+describe("voice input transport", () => {
+  it.effect("returns cap rejections as a typed voice error with the retry delay", () =>
+    Effect.gen(function* () {
+      const app = yield* clientApiApp({
+        voiceInput: {
+          transcribe: () =>
+            Effect.fail(
+              new VoiceInput.VoiceInputRejectedError({
+                code: "daily_limit_reached",
+                retryAfterSeconds: 3600,
+              }),
+            ),
+        },
+      });
+      const response = yield* Effect.promise(() =>
+        app.handler(
+          new Request("https://relay.example.test/v1/client/voice/transcriptions", {
+            method: "POST",
+            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            body: JSON.stringify({
+              requestId: "req-1",
+              audio: { data: "AAAA", format: "m4a" },
+              durationSeconds: 2,
+            }),
+          }),
+        ),
+      );
+
+      expect(response.status).toBe(400);
+      expect(yield* Effect.promise(() => response.json())).toMatchObject({
+        _tag: "RelayVoiceInputError",
+        code: "daily_limit_reached",
+        retryAfterSeconds: 3600,
+      });
+    }).pipe(Effect.scoped),
+  );
 });
 
 describe("relay client authentication", () => {

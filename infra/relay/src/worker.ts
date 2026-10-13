@@ -66,6 +66,7 @@ import * as HookForwarder from "./hooks/HookForwarder.ts";
 import * as HeldHooks from "./hooks/HeldHooks.ts";
 import * as HookInbox from "./hooks/HookInbox.ts";
 import * as HookInboxObject from "./hooks/HookInboxObject.ts";
+import * as VoiceInput from "./voice/VoiceInput.ts";
 
 const layerWebcrypto = Layer.succeed(
   Crypto.Crypto,
@@ -104,12 +105,6 @@ const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
 const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningSecret", {
   bytes: 32,
 });
-// Encrypted the per-user OpenRouter keys in relay_account_integrations. Unused
-// now; kept in state so those rows stay readable until the voice rebuild drops
-// the table and this key together.
-const VoiceCredentialEncryptionKey = Alchemy.makeRandom("VoiceCredentialEncryptionKey", {
-  bytes: 32,
-});
 
 export class Api extends Cloudflare.Worker<Api, {}>()("Api") {}
 
@@ -138,7 +133,6 @@ export const layer = Api.make(
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
-    yield* VoiceCredentialEncryptionKey;
 
     //
     // 2. Create bindings
@@ -166,6 +160,7 @@ export const layer = Api.make(
     const clerkSecretKey = yield* Config.Redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.String("CLERK_PUBLISHABLE_KEY");
     const clerkJwtAudience = yield* Config.String("CLERK_JWT_AUDIENCE");
+    const voiceInput = yield* RelayConfiguration.voiceInputConfig;
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
@@ -243,6 +238,7 @@ export const layer = Api.make(
         managedEndpointCleanupMode,
         legacyManagedEndpointCleanupMode,
         ...(legacyTunnelGraceMinutes === undefined ? {} : { legacyTunnelGraceMinutes }),
+        voiceInput,
       });
     });
 
@@ -316,7 +312,9 @@ export const layer = Api.make(
       Layer.provideMerge(
         ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
       ),
-      Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox)),
+      Layer.provideMerge(
+        Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox, VoiceInput.layer),
+      ),
       Layer.provideMerge(EnvironmentCredentials.layer),
       Layer.provideMerge(
         Layer.mergeAll(
@@ -425,6 +423,9 @@ export const layer = Api.make(
                   }),
                 ),
               ),
+            ),
+            Effect.andThen(
+              VoiceInput.VoiceInput.pipe(Effect.flatMap((voice) => voice.pruneExpired)),
             ),
             Effect.catchCause((cause) =>
               Cause.hasInterrupts(cause)

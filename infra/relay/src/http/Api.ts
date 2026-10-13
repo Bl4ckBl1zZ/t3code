@@ -52,6 +52,7 @@ import {
   RelayManagedEndpointRecoveryProofPayload,
   type RelayDpopAccessTokenScope,
   RelayInternalError,
+  RelayVoiceInputError,
 } from "@t3tools/contracts/relay";
 import {
   normalizeRelayIssuer,
@@ -81,6 +82,7 @@ import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
 import { isRelayHookPath, redactRelayHookUrl } from "../hooks/HookForwarder.ts";
 import * as RelayDb from "../db.ts";
+import * as VoiceInput from "../voice/VoiceInput.ts";
 
 // Delegated thread IDs carry escaped command provenance and exceed the router's
 // default 100-character path parameter limit. Match the environment server.
@@ -821,6 +823,7 @@ export const layerClientApi = HttpApiBuilder.group(
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const devices = yield* Devices.Devices;
+    const voiceInput = yield* VoiceInput.VoiceInput;
     return handlers
       .handle(
         "listEnvironments",
@@ -986,6 +989,32 @@ export const layerClientApi = HttpApiBuilder.group(
             })
             .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
           return { ok: released };
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "getVoiceInput",
+        Effect.fn("relay.api.client.getVoiceInput")(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput.status({ userId });
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "updateVoiceInputSettings",
+        Effect.fn("relay.api.client.updateVoiceInputSettings")(function* (args) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput.updateSettings({ userId, patch: args.payload });
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "transcribeVoice",
+        Effect.fn("relay.api.client.transcribeVoice")(function* (args) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput.transcribe({ userId, request: args.payload }).pipe(
+            Effect.catchTags({
+              VoiceInputRejectedError: relayVoiceInputErrorResponse,
+              VoiceInputUpstreamError: relayVoiceInputErrorResponse,
+            }),
+          );
         }, mapRelayCommonApiErrors("not_authorized")),
       );
   }),
@@ -1448,6 +1477,7 @@ const RelayCommonPersistenceError = Schema.Union([
   DeliveryAttempts.DeliveryAttemptRecordPersistenceError,
   EnvironmentLinks.EnvironmentLinkEnvironmentLookupPersistenceError,
   HookInbox.HookInboxError,
+  VoiceInput.VoiceInputPersistenceError,
 ]);
 type RelayCommonPersistenceError = typeof RelayCommonPersistenceError.Type;
 const isRelayCommonPersistenceError = Schema.is(RelayCommonPersistenceError);
@@ -1488,6 +1518,24 @@ function relayInternalErrorResponse(reason: RelayInternalError["reason"]) {
   return currentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(new RelayInternalError({ code: "internal_error", reason, traceId })),
+    ),
+  );
+}
+
+function relayVoiceInputErrorResponse(
+  error: VoiceInput.VoiceInputRejectedError | VoiceInput.VoiceInputUpstreamError,
+) {
+  return currentTraceId.pipe(
+    Effect.flatMap((traceId) =>
+      Effect.fail(
+        new RelayVoiceInputError({
+          code: error.code,
+          ...(error.retryAfterSeconds === undefined
+            ? {}
+            : { retryAfterSeconds: error.retryAfterSeconds }),
+          traceId,
+        }),
+      ),
     ),
   );
 }
