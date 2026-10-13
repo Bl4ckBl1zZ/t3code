@@ -154,6 +154,7 @@ import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useUiStateStore } from "~/uiStateStore";
 import {
   resolveServerConfigVersionMismatch,
+  offersServerUpdate,
   resolveServerSelfUpdateCapability,
   supportsDesktopAppUpdate,
   supportsServerUpdateThreadContinuation,
@@ -1715,7 +1716,8 @@ function SavedBackendListRow({
     >
       {unsupported &&
       environment.entry.serverUpdateRequired === true &&
-      serverUpdateState.status !== "running" ? (
+      serverUpdateState.status !== "running" &&
+      offersServerUpdate(lastDescriptor?.capabilities.serverSelfUpdate) ? (
         <OutdatedServerUpdateAction
           environmentId={environmentId}
           serverLabel={`${environment.label} server`}

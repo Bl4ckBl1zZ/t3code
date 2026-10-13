@@ -92,6 +92,9 @@ jobs:
       # IndexedDB, Windows credential keys) in this folder under the app data
       # directory; upstream's packaged default is t3code-v2.
       T3CODE_DESKTOP_USER_DATA_DIR_NAME: t3code
+      # `t3 update` and server-update offers follow this repository. It does
+      # not publish the t3 CLI, so builds offer desktop app updates only.
+      T3CODE_RELEASE_REPOSITORY: ${{ github.repository }}
       # Fork builds send no usage analytics to upstream's PostHog unless the
       # user sets T3CODE_TELEMETRY_ENABLED=true; this bakes in the default.
       T3CODE_TELEMETRY_ENABLED: "false"

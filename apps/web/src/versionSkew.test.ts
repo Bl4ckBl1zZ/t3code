@@ -1,6 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { UPSTREAM_RELEASE_SOURCE } from "@t3tools/shared/cliRelease";
 
 // Pinned so the direction cases below read as fixed versions instead of
 // arithmetic on whatever version this checkout happens to be at.
@@ -17,6 +18,7 @@ import {
   isVersionMismatchDismissed,
   manualServerUpdateCommand,
   resolveServerConfigVersionMismatch,
+  offersServerUpdate,
   resolveServerSelfUpdateCapability,
   resolveVersionMismatch,
   serverUpdateGuidance,
@@ -198,6 +200,15 @@ describe("versionSkew", () => {
     expect(appendVersionMismatchHint("Socket closed.", mismatch)).toBe(
       `Socket closed. Hint: ${MISMATCH_HINT}`,
     );
+  });
+
+  it("offers only desktop app updates when this build is released outside upstream", () => {
+    const fork = { repository: "owner/fork", tagPrefix: "fork-v" };
+    expect(offersServerUpdate("desktop-managed", fork)).toBe(true);
+    expect(offersServerUpdate("boot-service", fork)).toBe(false);
+    // No self-update means a copied npm/npx command, which installs upstream's t3.
+    expect(offersServerUpdate(null, fork)).toBe(false);
+    expect(offersServerUpdate(null, UPSTREAM_RELEASE_SOURCE)).toBe(true);
   });
 
   it("reads desktop-managed update capabilities from config descriptors", () => {

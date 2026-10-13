@@ -25,7 +25,7 @@ import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { serverEnvironment, updateOutdatedServer } from "~/state/server";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { manualServerUpdateCommand } from "~/versionSkew";
+import { manualServerUpdateCommand, offersServerUpdate } from "~/versionSkew";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -285,6 +285,14 @@ export function ServerUpdateAction({
       continueThreadsAfterServerUpdate,
     });
   };
+
+  if (!offersServerUpdate(selfUpdate)) {
+    return (
+      <span className="text-muted-foreground text-xs">
+        This build of T3 Code can't update that server. Update T3 Code on that machine.
+      </span>
+    );
+  }
 
   if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {
     return (

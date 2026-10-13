@@ -13,6 +13,17 @@ immutable runtime. Preflight checks the launcher protocol because a target that
 needs new rollback guarantees cannot safely run under an older launcher. Upgrading
 that launcher requires a local service update.
 
+## Builds released outside upstream
+
+Only upstream publishes the `t3` CLI (npm package and release archives), so every
+CLI install path fetches upstream's build. A build made with
+`T3CODE_RELEASE_REPOSITORY` set to another repository (`releaseSourcePublishesCli`
+in `packages/shared/src/cliRelease.ts`) therefore offers none of them: `t3 update`
+points at that repository's releases page instead, and web and mobile offer only
+desktop-managed updates, which install from the desktop app's own feed. Mobile
+reads that repository's releases with `T3CODE_RELEASE_TAG_PREFIX` (default `v`).
+Unset, both default to upstream.
+
 ## Commit boundary
 
 The launcher durably records the pending update before acknowledging it, then

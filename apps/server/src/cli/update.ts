@@ -4,7 +4,9 @@ import {
   CLI_RELEASE_CHANNELS,
   cliReleaseIndexPageUrl,
   cliReleaseChannelOf,
+  cliSelfUpdateUnavailableReason,
   newestCliReleaseVersion,
+  resolveReleaseSource,
   type CliReleaseChannel,
 } from "@t3tools/shared/cliRelease";
 import * as Console from "effect/Console";
@@ -32,6 +34,15 @@ import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntim
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { createUpdateProgress } from "./updateProgress.ts";
 import * as CliService from "./service.ts";
+
+declare const __T3CODE_BUILD_RELEASE_REPOSITORY__: string | undefined;
+
+const buildReleaseSource = resolveReleaseSource({
+  repository:
+    typeof __T3CODE_BUILD_RELEASE_REPOSITORY__ === "undefined"
+      ? undefined
+      : __T3CODE_BUILD_RELEASE_REPOSITORY__,
+});
 
 export class CliUpdateError extends Schema.TaggedError<CliUpdateError>()("CliUpdateError", {
   reason: Schema.String,
@@ -338,6 +349,11 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const environment = yield* HostProcess.Environment;
   const httpClient = yield* HttpClient.HttpClient;
   const service = yield* BootService.BootService;
+
+  // A build released outside upstream has no `t3` archives of its own;
+  // downloading upstream's would replace it with the official build.
+  const unavailable = cliSelfUpdateUnavailableReason(buildReleaseSource);
+  if (unavailable !== null) return yield* new CliUpdateError({ reason: unavailable });
 
   const currentVersion = packageJson.version;
   const channel = input.channel ?? cliReleaseChannelOf(currentVersion);

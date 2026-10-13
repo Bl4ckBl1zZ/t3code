@@ -1,8 +1,9 @@
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
-import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
+import { cliReleaseChannelOf, type ReleaseSource } from "@t3tools/shared/cliRelease";
 
 import {
+  offersServerUpdate,
   resolveServerSelfUpdateCapability,
   resolveVersionMismatch,
   supportsDesktopAppUpdate,
@@ -69,11 +70,13 @@ export function collectRestartingMachines(
  * out. Servers this app hosts would relaunch the app mid-run, and the app's
  * own install updates them anyway. A service on another release channel
  * stays there; a desktop-managed server follows its own app's update feed, so
- * the channel rule does not apply to it.
+ * the channel rule does not apply to it. A build released outside upstream
+ * only updates desktop-managed servers (see `offersServerUpdate`).
  */
 export function collectServerUpdateTargets(
   machines: ReadonlyArray<UpdateEverythingMachine>,
   targetVersion: string,
+  releaseSource?: ReleaseSource,
 ): ServerUpdateTarget[] {
   return machines.flatMap((machine) => {
     const config = machine.serverConfig;
@@ -88,7 +91,11 @@ export function collectServerUpdateTargets(
     }
     const selfUpdate = resolveServerSelfUpdateCapability(config);
     const desktopAppUpdate = supportsDesktopAppUpdate(config);
-    if (selfUpdate === null || (selfUpdate === "desktop-managed" && !desktopAppUpdate)) {
+    if (
+      selfUpdate === null ||
+      !offersServerUpdate(selfUpdate, releaseSource) ||
+      (selfUpdate === "desktop-managed" && !desktopAppUpdate)
+    ) {
       return [];
     }
     const serverVersion = config.environment.serverVersion;

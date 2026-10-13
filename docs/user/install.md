@@ -11,8 +11,8 @@ launch T3 Code and configure providers afterwards.
 ## Command line
 
 This fork of T3 Code does not publish a standalone `t3` executable or npm
-package. The upstream install script, `npx t3`, and `t3 update` install official
-T3 Code, not this fork. Use the [`t3` command](#the-t3-command) that comes with
+package. The upstream install script and `npx t3` install official T3 Code, not
+this fork, and `t3 update` only points you to this fork's releases. Use the [`t3` command](#the-t3-command) that comes with
 the desktop app, or [build a server from source](#build-a-server-from-source).
 
 | Task                                             | Command                                                   |

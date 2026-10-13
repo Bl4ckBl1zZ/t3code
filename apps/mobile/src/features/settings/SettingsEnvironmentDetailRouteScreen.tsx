@@ -7,6 +7,8 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { resolveReleaseSource } from "@t3tools/shared/cliRelease";
+import Constants from "expo-constants";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { Alert, View } from "react-native";
@@ -30,7 +32,11 @@ import {
   canUpdateEnvironmentProvider,
   findEnvironmentUpdate,
   supportsEnvironmentUpdate,
+  tracksEnvironmentReleases,
 } from "./environment-maintenance";
+
+/** Where this app's own releases live; set at build time in app.config.ts. */
+const releaseSource = resolveReleaseSource(Constants.expoConfig?.extra?.releases ?? {});
 
 export function SettingsEnvironmentDetailRouteScreen({
   route,
@@ -109,7 +115,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
 
   function requestServerUpdate() {
     const targetVersion = checkedRelease?.targetVersion;
-    if (disabled || !targetVersion || !capabilities || !supportsEnvironmentUpdate(capabilities))
+    if (
+      disabled ||
+      !targetVersion ||
+      !capabilities ||
+      !supportsEnvironmentUpdate(capabilities, releaseSource)
+    )
       return;
     Alert.alert(
       `Update ${environment?.environmentLabel ?? "environment"}?`,
@@ -248,43 +259,48 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           : "You are up to date."}
                       </Text>
                     ) : null}
-                    {!supportsEnvironmentUpdate(config.environment.capabilities) ? (
+                    {!supportsEnvironmentUpdate(config.environment.capabilities, releaseSource) ? (
                       <Text className="text-sm text-foreground-muted">
-                        {capabilities?.serverSelfUpdate === "desktop-managed"
-                          ? "Update the desktop app on this machine."
-                          : "Update and restart T3 Code on this machine."}
+                        {!tracksEnvironmentReleases(config.environment.capabilities, releaseSource)
+                          ? "This build of T3 Code can't update this server. Update T3 Code on this machine."
+                          : capabilities?.serverSelfUpdate === "desktop-managed"
+                            ? "Update the desktop app on this machine."
+                            : "Update and restart T3 Code on this machine."}
                       </Text>
                     ) : null}
                   </View>
-                  <SettingsActionRow
-                    icon="arrow.clockwise"
-                    label="Check for updates"
-                    disabled={disabled}
-                    loading={pending === "check"}
-                    onPress={() => {
-                      if (disabled) return;
-                      void run("check", async () => {
-                        const controller = new AbortController();
-                        checkController.current = controller;
-                        const timeout = setTimeout(() => controller.abort(), 20_000);
-                        try {
-                          const targetVersion = await findEnvironmentUpdate(
-                            config.environment.serverVersion,
-                            controller.signal,
-                          );
-                          setRelease({
-                            fromVersion: config.environment.serverVersion,
-                            targetVersion,
-                          });
-                        } finally {
-                          clearTimeout(timeout);
-                          checkController.current = null;
-                        }
-                      });
-                    }}
-                  />
+                  {tracksEnvironmentReleases(config.environment.capabilities, releaseSource) ? (
+                    <SettingsActionRow
+                      icon="arrow.clockwise"
+                      label="Check for updates"
+                      disabled={disabled}
+                      loading={pending === "check"}
+                      onPress={() => {
+                        if (disabled) return;
+                        void run("check", async () => {
+                          const controller = new AbortController();
+                          checkController.current = controller;
+                          const timeout = setTimeout(() => controller.abort(), 20_000);
+                          try {
+                            const targetVersion = await findEnvironmentUpdate(
+                              config.environment.serverVersion,
+                              controller.signal,
+                              releaseSource,
+                            );
+                            setRelease({
+                              fromVersion: config.environment.serverVersion,
+                              targetVersion,
+                            });
+                          } finally {
+                            clearTimeout(timeout);
+                            checkController.current = null;
+                          }
+                        });
+                      }}
+                    />
+                  ) : null}
                   {checkedRelease?.targetVersion &&
-                  supportsEnvironmentUpdate(config.environment.capabilities) ? (
+                  supportsEnvironmentUpdate(config.environment.capabilities, releaseSource) ? (
                     <SettingsActionRow
                       icon="arrow.up.circle"
                       label={`Update to ${checkedRelease.targetVersion}`}
