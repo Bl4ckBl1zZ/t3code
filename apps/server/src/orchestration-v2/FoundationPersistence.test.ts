@@ -350,6 +350,51 @@ it.effect("keeps other database work runnable while discovering compaction candi
   ).pipe(Effect.provide(layerTest)),
 );
 
+it.effect(
+  "compacts the event store after a startup delay, then daily, from the layer-owned worker",
+  () =>
+    Effect.gen(function* () {
+      const runs = yield* Queue.unbounded<void>();
+      let failNext = true;
+      const maintenance = ProjectionMaintenance.ProjectionMaintenanceV2.of({
+        verify: Effect.die("unexpected verify"),
+        rebuild: Effect.die("unexpected rebuild"),
+        compactEventStore: Queue.offer(runs, undefined).pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              if (!failNext) {
+                return Effect.succeed({
+                  deletedEventCount: 0,
+                  deletedReceiptCount: 0,
+                  reclaimableBytes: 0,
+                });
+              }
+              failNext = false;
+              return Effect.fail(
+                new ProjectionMaintenance.ProjectionMaintenanceError({ operation: "compact" }),
+              );
+            }),
+          ),
+        ),
+      });
+      yield* Layer.build(
+        ProjectionMaintenance.layerCompactionWorker.pipe(
+          Layer.provide(Layer.succeed(ProjectionMaintenance.ProjectionMaintenanceV2, maintenance)),
+        ),
+      );
+      yield* Effect.yieldNow;
+      assert.isTrue(Option.isNone(yield* Queue.poll(runs)));
+
+      yield* TestClock.adjust(ProjectionMaintenance.EVENT_STORE_COMPACTION_START_DELAY);
+      yield* Queue.take(runs);
+      // A failed pass is logged and does not stop the schedule.
+      yield* TestClock.adjust(ProjectionMaintenance.EVENT_STORE_COMPACTION_INTERVAL);
+      yield* Queue.take(runs);
+      yield* TestClock.adjust(ProjectionMaintenance.EVENT_STORE_COMPACTION_INTERVAL);
+      yield* Queue.take(runs);
+    }).pipe(Effect.scoped),
+);
+
 it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
   it.effect("projects oversized tool bodies before both replay and live RPC retention", () =>
     Effect.scoped(

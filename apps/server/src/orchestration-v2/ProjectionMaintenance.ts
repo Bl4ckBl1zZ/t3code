@@ -1,12 +1,15 @@
 import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { forkParked } from "../serverActivation.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -371,5 +374,35 @@ export const layer: Layer.Layer<
       rebuild: mapError("rebuild")(rebuild),
       compactEventStore: mapError("compact event store")(compactEventStore),
     });
+  }),
+);
+
+// Startup is busy reconnecting clients and recovering runs, and nothing depends
+// on compaction, so the first pass waits. Each pass walks the whole log in
+// short pages, so it runs rarely.
+export const EVENT_STORE_COMPACTION_START_DELAY = Duration.minutes(10);
+export const EVENT_STORE_COMPACTION_INTERVAL = Duration.hours(24);
+
+/** Compacts the event store shortly after the server is active, then daily. */
+export const layerCompactionWorker = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const maintenance = yield* ProjectionMaintenanceV2;
+    const compact = maintenance.compactEventStore.pipe(
+      Effect.tap((summary) =>
+        summary.deletedEventCount === 0 && summary.deletedReceiptCount === 0
+          ? Effect.void
+          : Effect.logInfo("Compacted orchestration event store", summary),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to compact orchestration event store", { cause }),
+      ),
+    );
+    yield* forkParked(
+      Effect.sleep(EVENT_STORE_COMPACTION_START_DELAY).pipe(
+        Effect.andThen(
+          compact.pipe(Effect.repeat(Schedule.spaced(EVENT_STORE_COMPACTION_INTERVAL))),
+        ),
+      ),
+    );
   }),
 );
