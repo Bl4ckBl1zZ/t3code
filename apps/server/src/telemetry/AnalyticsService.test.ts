@@ -86,6 +86,15 @@ it("retryDelayMs doubles from 2s and stays under the 5 minute cap", () => {
   assert.equal(AnalyticsService.retryDelayMs(30, 0.999_999), 300_000);
 });
 
+it("telemetry is on by default unless the build turned it off", () => {
+  assert.isTrue(AnalyticsService.telemetryEnabledByDefault(undefined));
+  assert.isTrue(AnalyticsService.telemetryEnabledByDefault(""));
+  assert.isTrue(AnalyticsService.telemetryEnabledByDefault("true"));
+  assert.isFalse(AnalyticsService.telemetryEnabledByDefault("false"));
+  assert.isFalse(AnalyticsService.telemetryEnabledByDefault(" OFF "));
+  assert.isFalse(AnalyticsService.telemetryEnabledByDefault("0"));
+});
+
 it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
   it.effect("a batch that keeps failing is retried with backoff, then dropped", () =>
     Effect.gen(function* () {

@@ -66,6 +66,17 @@ export function retryDelayMs(failures: number, random: number): number {
   return Math.round(ceiling / 2 + (ceiling / 2) * random);
 }
 
+declare const __T3CODE_BUILD_TELEMETRY_ENABLED__: string | undefined;
+
+/**
+ * Whether telemetry is on when `T3CODE_TELEMETRY_ENABLED` is unset at runtime.
+ * A build made with `T3CODE_TELEMETRY_ENABLED=false` ships with telemetry off
+ * by default; the runtime variable overrides either default.
+ */
+export function telemetryEnabledByDefault(buildValue: string | undefined): boolean {
+  return !/^(?:false|0|no|off)$/i.test(buildValue?.trim() ?? "");
+}
+
 const TelemetryEnvConfig = Config.all({
   posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(
     Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
@@ -73,7 +84,15 @@ const TelemetryEnvConfig = Config.all({
   posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(
     Config.withDefault("https://us.i.posthog.com"),
   ),
-  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
+  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
+    Config.withDefault(
+      telemetryEnabledByDefault(
+        typeof __T3CODE_BUILD_TELEMETRY_ENABLED__ === "undefined"
+          ? undefined
+          : __T3CODE_BUILD_TELEMETRY_ENABLED__,
+      ),
+    ),
+  ),
   flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),

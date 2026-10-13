@@ -7,6 +7,10 @@ span several clients; it does not identify a browser session. Clients do not loa
 the PostHog browser SDK. Client-use events require an authenticated connection, so
 visiting the hosted app without connecting does not count as product use.
 
+A build made with `T3CODE_TELEMETRY_ENABLED=false` in its environment bakes that in
+as the default (`__T3CODE_BUILD_TELEMETRY_ENABLED__`), so forks can ship with
+collection off. The runtime variable still overrides the default either way.
+
 ## Attribution boundaries
 
 Client dimensions belong to the event's WebSocket connection. A server-global

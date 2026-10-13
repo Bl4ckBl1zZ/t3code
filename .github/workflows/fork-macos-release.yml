@@ -92,6 +92,9 @@ jobs:
       # IndexedDB, Windows credential keys) in this folder under the app data
       # directory; upstream's packaged default is t3code-v2.
       T3CODE_DESKTOP_USER_DATA_DIR_NAME: t3code
+      # Fork builds send no usage analytics to upstream's PostHog unless the
+      # user sets T3CODE_TELEMETRY_ENABLED=true; this bakes in the default.
+      T3CODE_TELEMETRY_ENABLED: "false"
     steps:
       - name: Require T3 Connect public config
         shell: bash
