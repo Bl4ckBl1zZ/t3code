@@ -19,6 +19,7 @@ import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CommandPolicy from "./CommandPolicy.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
+import * as ContextHandoffSummary from "./ContextHandoffSummary.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
@@ -156,6 +157,9 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
   Layer.provide(
     Layer.mergeAll(
       layerContextHandoffServiceProvided,
+      ContextHandoffSummary.layer.pipe(
+        Layer.provide(Layer.merge(ProjectionStore.layer, TextGeneration.layer)),
+      ),
       layerEventSinkProvided,
       IdAllocator.layer,
       ProjectionStore.layer,

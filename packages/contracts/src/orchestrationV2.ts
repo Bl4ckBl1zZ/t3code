@@ -1035,6 +1035,9 @@ export const OrchestrationV2ContextHandoff = Schema.Struct({
       omittedItems: NonNegativeInt,
       // IDs omitted during preparation, before the target's delivery budget is known.
       omittedItemIds: Schema.optional(Schema.Array(TurnItemId)),
+      // AI summary of the history the target did not receive verbatim. Kept so
+      // a retried delivery does not generate it again.
+      summary: Schema.optional(Schema.String),
     }),
   ),
   delivery: Schema.optional(

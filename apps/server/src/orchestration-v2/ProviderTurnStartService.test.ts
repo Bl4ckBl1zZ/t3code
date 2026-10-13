@@ -28,6 +28,7 @@ import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
+import * as ContextHandoffSummary from "./ContextHandoffSummary.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -93,6 +94,7 @@ it("does not commit running state when inherited background routing cannot be re
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
+        ContextHandoffSummary.layerDisabled,
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
         Layer.succeed(FileSystem.FileSystem, { exists: () => Effect.succeed(false) } as never),
@@ -489,6 +491,7 @@ function makeLocalCommandHarness(input: {
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: () => Effect.die("history read must fail first"),
         }),
+        ContextHandoffSummary.layerDisabled,
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
         FileSystem.layerNoop({}),

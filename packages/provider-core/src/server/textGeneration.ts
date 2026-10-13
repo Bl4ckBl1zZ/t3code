@@ -109,6 +109,21 @@ export interface ReviewGuideGenerationInput {
   modelSelection: ModelSelection;
 }
 
+export interface HandoffSummaryGenerationInput {
+  cwd: string;
+  /** Historical messages the target provider will not receive verbatim, oldest first. */
+  transcript: string;
+  /** Provider instances the context leaves and enters, named in the prompt. */
+  fromProvider: string;
+  toProvider: string;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface HandoffSummaryGenerationResult {
+  summary: string;
+}
+
 /** A guide as the model wrote it, before the server holds it to the change. */
 export type ReviewGuideGenerationResult = Omit<
   PullRequestReviewGuide,
@@ -142,6 +157,11 @@ export interface ProviderTextGeneration {
   readonly generateThreadTitle: (
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+  /** Summarize conversation history a provider switch could not hand over verbatim. */
+  readonly generateHandoffSummary: (
+    input: HandoffSummaryGenerationInput,
+  ) => Effect.Effect<HandoffSummaryGenerationResult, TextGenerationError>;
 
   /** Explain a change request to the maintainer deciding whether it lands. */
   readonly generateReviewGuide: (
