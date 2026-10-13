@@ -1,15 +1,13 @@
+import type * as CloudflareRuntime from "@cloudflare/workers-types";
 import type { PgClient } from "@effect/sql-pg/PgClient";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";
-import * as Planetscale from "alchemy/Planetscale";
-import * as Alchemy from "alchemy";
-import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-
-import { relayDatabaseMode } from "./dbConfig.ts";
+import * as Redacted from "effect/Redacted";
 
 export class RelayDb extends Context.Service<
   RelayDb,
@@ -35,51 +33,41 @@ export class RelayTransactions extends Context.Service<
   );
 }
 
-export const PlanetscaleDatabase = Effect.gen(function* () {
-  const { stage } = yield* Alchemy.Stack;
-  const schema = yield* Drizzle.Schema("RelaySchema", {
-    schema: "./src/persistence/schema.ts",
-    out: "./migrations/postgres",
-    dialect: "postgres",
-  });
-
-  const mode = relayDatabaseMode(stage);
-  const database =
-    mode === "shared-database"
-      ? yield* Planetscale.PostgresDatabase("RelayPostgresDatabase", {
-          name: "t3coderelay",
-          region: { slug: "us-west" },
-          clusterSize: "PS_80",
-          migrations: { dir: schema.out, table: "relay_migrations" },
-          replicas: 2,
-        }).pipe(RemovalPolicy.retain())
-      : yield* Planetscale.PostgresDatabase.ref("RelayPostgresDatabase", {
-          stage: "prod",
-        });
-  const branch =
-    mode === "stage-branch"
-      ? yield* Planetscale.PostgresBranch("RelayPostgresBranch", {
-          database,
-          migrations: { dir: schema.out, table: "relay_migrations" },
-        })
-      : undefined;
-
-  const runtimeRole = yield* Planetscale.PostgresRole("RelayPostgresRuntimeRole", {
-    database,
-    ...(branch ? { branch } : {}),
-    inheritedRoles: ["pg_read_all_data", "pg_write_all_data"],
-  });
-
-  return { branch, database, runtimeRole };
+/**
+ * Regenerates migrations from `schema.ts` on a local deploy. The database is
+ * self-hosted, so `scripts/migrate.ts` applies them before each deploy.
+ */
+export const RelaySchema = Drizzle.Schema("RelaySchema", {
+  schema: "./src/persistence/schema.ts",
+  out: "./migrations/postgres",
+  dialect: "postgres",
 });
 
+const RELAY_HYPERDRIVE_BINDING = "RELAY_HYPERDRIVE";
+
+/**
+ * Binds the existing Hyperdrive config named by `DATABASE_HYPERDRIVE_ID` to the
+ * Worker and returns an accessor for its connection string, like
+ * `Cloudflare.Hyperdrive.Connect`. The config is not
+ * part of this stack: it reaches the private PostgreSQL through a Workers VPC
+ * service, which Alchemy's Hyperdrive resource cannot describe, and keeping it
+ * outside means the database password is never bound into the Worker.
+ */
 export const RelayHyperdrive = Effect.gen(function* () {
-  const { runtimeRole } = yield* PlanetscaleDatabase;
-  return yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
-    origin: runtimeRole.origin,
-    caching: {
-      disabled: true,
-    },
-    originConnectionLimit: 40,
-  });
+  const hyperdriveId = yield* Config.NonEmptyString("DATABASE_HYPERDRIVE_ID");
+  const worker = yield* Cloudflare.Worker;
+  if (!globalThis.__ALCHEMY_RUNTIME__) {
+    yield* worker.bind(RELAY_HYPERDRIVE_BINDING, {
+      bindings: [{ type: "hyperdrive", name: RELAY_HYPERDRIVE_BINDING, id: hyperdriveId }],
+    });
+  }
+  const environment = yield* Cloudflare.WorkerEnvironment;
+  return {
+    connectionString: Effect.sync(() =>
+      Redacted.make(
+        (environment as Record<string, CloudflareRuntime.Hyperdrive>)[RELAY_HYPERDRIVE_BINDING]!
+          .connectionString,
+      ),
+    ),
+  };
 });

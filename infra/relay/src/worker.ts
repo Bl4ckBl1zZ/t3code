@@ -1,5 +1,4 @@
 import * as Alchemy from "alchemy";
-import * as Axiom from "alchemy/Axiom";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle/Postgres";
 import * as Config from "effect/Config";
@@ -27,7 +26,6 @@ import {
 } from "./http/Api.ts";
 import * as RelayHttpApi from "./http/Api.ts";
 import { ManagedEndpointZone, RelayApiZone, RelayDeploymentConfig } from "./zone.ts";
-import { RelayObservability } from "./observability.ts";
 import * as Observability from "./observability.ts";
 import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
@@ -106,6 +104,12 @@ const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
 const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningSecret", {
   bytes: 32,
 });
+// Encrypted the per-user OpenRouter keys in relay_account_integrations. Unused
+// now; kept in state so those rows stay readable until the voice rebuild drops
+// the table and this key together.
+const VoiceCredentialEncryptionKey = Alchemy.makeRandom("VoiceCredentialEncryptionKey", {
+  bytes: 32,
+});
 
 export class Api extends Cloudflare.Worker<Api, {}>()("Api") {}
 
@@ -134,7 +138,7 @@ export const layer = Api.make(
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
-    yield* RelayObservability;
+    yield* VoiceCredentialEncryptionKey;
 
     //
     // 2. Create bindings
@@ -165,7 +169,7 @@ export const layer = Api.make(
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
-    const hyperdrive = yield* Cloudflare.Hyperdrive.Connect(yield* RelayDb.RelayHyperdrive);
+    const hyperdrive = yield* RelayDb.RelayHyperdrive;
     // Named prepared statements collide behind Hyperdrive's transaction-mode
     // pool: sql-pg < 4.0.0-rc.117 names them `effect1..N` per connection, and
     // inside a transaction a Bind can reach another request's statement
@@ -174,10 +178,25 @@ export const layer = Api.make(
       prepare: false,
     });
 
-    const managedEndpointTunnelBinding = yield* Cloudflare.Tunnel.ReadWriteTunnel();
     // Keep Worker custom-domain reconciliation ordered after API zone provisioning.
     yield* yield* relayApiZone.zoneId;
-    const managedEndpointDnsBinding = yield* Cloudflare.DNS.ReadWriteDns(managedEndpointZone);
+    // Managed endpoints use one pre-created token scoped to Cloudflare Tunnel
+    // Edit on the account and DNS Edit on the tunnel zone, instead of a token
+    // Alchemy would mint with the deploy credential.
+    const cloudflareAccountId = yield* Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID");
+    const cloudflareRuntimeApiToken = yield* Config.Redacted("CLOUDFLARE_RUNTIME_API_TOKEN");
+    const runtimeToken = {
+      value: Effect.succeed(cloudflareRuntimeApiToken),
+      accountId: Effect.succeed(cloudflareAccountId),
+    };
+    const managedEndpointZoneId = yield* yield* managedEndpointZone.zoneId;
+    const managedEndpointTunnelBinding = Cloudflare.Tunnel.readWriteClient(
+      Cloudflare.Tunnel.makeTunnelAuth(runtimeToken),
+    );
+    const managedEndpointDnsBinding = Cloudflare.DNS.dnsReadWriteClient(
+      Cloudflare.DNS.makeDnsAuth(runtimeToken),
+      Effect.succeed(managedEndpointZoneId),
+    );
     const managedEndpointZoneName = yield* managedEndpointZone.name;
     const managedEndpointCleanupMode = yield* RelayConfiguration.managedEndpointCleanupModeConfig;
     const legacyManagedEndpointCleanupMode =
@@ -461,12 +480,9 @@ export const layer = Api.make(
   }).pipe(
     Effect.provide(
       Layer.empty.pipe(
-        Layer.provideMerge(Cloudflare.Hyperdrive.ConnectBinding),
         Layer.provideMerge(Cloudflare.Workers.CronEventSourceLive),
         Layer.provideMerge(Cloudflare.Queues.WriteQueueBinding),
         Layer.provideMerge(Cloudflare.Queues.EventSourceLive),
-        Layer.provideMerge(Cloudflare.Tunnel.ReadWriteTunnelBinding),
-        Layer.provideMerge(Cloudflare.DNS.ReadWriteDnsHttp),
         Layer.provideMerge(Cloudflare.Workers.RateLimitBinding),
         Layer.provideMerge(HookInboxObject.layer),
         // The worker runtime opens its own HTTP span around ours. Ours carries
@@ -477,19 +493,6 @@ export const layer = Api.make(
         // are built into it.
         Layer.provideMerge(
           Alchemy.Telemetry.layer(Layer.succeed(HttpMiddleware.TracerDisabledWhen)(() => true)),
-        ),
-        // The Worker's only trace exporter: every event (fetch, queue, cron,
-        // HookInboxObject calls and alarms) exports through it to Axiom.
-        Layer.provideMerge(
-          Layer.unwrap(
-            Effect.map(RelayObservability, (observability) =>
-              Axiom.Telemetry({
-                serviceName: "t3code-relay",
-                token: observability.workerIngestToken,
-                traces: observability.traces,
-              }),
-            ),
-          ),
         ),
       ),
     ),
