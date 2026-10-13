@@ -425,6 +425,7 @@ import { useProjectClone } from "../state/projectClones";
 import { projectCloneDisplayName, projectCloneProgressSummary } from "@t3tools/contracts";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readEnvironmentSupportsLocalVcsStatusRefresh,
   resolveThreadDetailRef,
   useEnvironmentSupportsServerBrowser,
   useProject,
@@ -4144,10 +4145,23 @@ export default function ChatView(props: ChatViewProps) {
           input: { cwd: gitStatusCwd },
         }),
   );
+  // Re-subscribing replays the server's cached status, so after an agent edit
+  // ask the server to recompute the working tree; the result arrives through
+  // the status subscription. Older servers only offer the re-subscribe.
+  const refreshLocalVcsStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
+    reportFailure: false,
+  });
+  const refreshGitStatusAfterMutation = useCallback(() => {
+    if (gitStatusCwd === null || !readEnvironmentSupportsLocalVcsStatusRefresh(environmentId)) {
+      gitStatusQuery.refresh();
+      return;
+    }
+    void refreshLocalVcsStatus({ environmentId, input: { cwd: gitStatusCwd } });
+  }, [environmentId, gitStatusCwd, gitStatusQuery.refresh, refreshLocalVcsStatus]);
   useWorkspaceMutationRefresh({
     enabled: gitStatusCwd !== null,
     mutationId: workspaceMutationId,
-    refresh: gitStatusQuery.refresh,
+    refresh: refreshGitStatusAfterMutation,
     resourceKey: `git-status:${activeThreadKey ?? ""}:${gitStatusCwd ?? ""}`,
   });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);

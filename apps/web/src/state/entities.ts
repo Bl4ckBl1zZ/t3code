@@ -295,6 +295,16 @@ export function readEnvironmentSupportsVisitedTracking(environmentId: Environmen
   );
 }
 
+/** Whether the environment's server can refresh just the working tree (vcs.refreshLocalStatus). */
+export function readEnvironmentSupportsLocalVcsStatusRefresh(
+  environmentId: EnvironmentId,
+): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .vcsLocalStatusRefresh === true
+  );
+}
+
 export function readEnvironmentThreadRefs(
   environmentId: EnvironmentId,
 ): ReadonlyArray<ScopedThreadRef> {
