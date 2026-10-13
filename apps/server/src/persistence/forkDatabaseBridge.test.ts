@@ -168,6 +168,7 @@ const insertThread = (input: {
   readonly instance: string;
   readonly parentThreadId?: string;
   readonly payload?: Record<string, unknown>;
+  readonly deletedAt?: string;
 }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -180,12 +181,15 @@ const insertThread = (input: {
     yield* sql`
       INSERT INTO orchestration_v2_projection_threads (
         thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
-        created_at, updated_at, payload_json
+        created_at, updated_at, deleted_at, payload_json
       )
       VALUES (${input.id}, 'project-1', ${input.id}, ${input.instance}, 'full-access', 'default',
-        ${NOW}, ${NOW}, ${payload})
+        ${NOW}, ${NOW}, ${input.deletedAt ?? null}, ${payload})
     `;
-    yield* insertEvent(input.id, "thread.created", { id: input.id });
+    yield* insertEvent(input.id, "thread.created", {
+      id: input.id,
+      providerInstanceId: input.instance,
+    });
     yield* sql`
       INSERT INTO orchestration_command_receipts (
         command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, command_type
@@ -239,8 +243,18 @@ const insertSubagent = (input: {
     `;
   });
 
-const SURVIVING_THREADS = ["thread-pinned", "thread-prs"];
-const HERMES_THREADS = ["thread-hermes", "thread-hermes-child", "thread-hermes-custom"];
+const SURVIVING_THREADS = [
+  "thread-pinned",
+  "thread-prs",
+  "thread-deleted-with-live-child",
+  "thread-live-child",
+];
+const HERMES_THREADS = [
+  "thread-hermes",
+  "thread-hermes-child",
+  "thread-hermes-custom",
+  "thread-deleted-hermes-parent",
+];
 const WORKFLOW = { name: "review", description: "Review", phases: [] };
 
 const seedForkData = Effect.gen(function* () {
@@ -318,6 +332,47 @@ const seedForkData = Effect.gen(function* () {
     )
     VALUES ('transfer-spawn', 'thread-prs', 'thread-hermes-custom', 'subagent_spawn', 'consumed',
       ${NOW}, '{}')
+  `;
+  // Already deleted by the user, and only linked to a Hermes thread.
+  yield* insertThread({
+    id: "thread-deleted-hermes-parent",
+    instance: "claudeAgent",
+    deletedAt: NOW,
+  });
+  yield* insertSubagent({
+    id: "subagent-deleted-parent",
+    threadId: "thread-deleted-hermes-parent",
+    childThreadId: "thread-hermes",
+    payload: { id: "subagent-deleted-parent" },
+  });
+  // Deleted and linked to a Hermes thread, but a thread below it is still live.
+  yield* insertThread({
+    id: "thread-deleted-with-live-child",
+    instance: "codex",
+    deletedAt: NOW,
+  });
+  yield* insertThread({
+    id: "thread-live-child",
+    instance: "claudeAgent",
+    parentThreadId: "thread-deleted-with-live-child",
+  });
+  yield* sql`
+    INSERT INTO orchestration_v2_projection_context_transfers (
+      context_transfer_id, source_thread_id, target_thread_id, type, status, updated_at, payload_json
+    )
+    VALUES ('transfer-from-hermes', 'thread-hermes', 'thread-deleted-with-live-child', 'handoff',
+      'consumed', ${NOW}, '{}')
+  `;
+  yield* sql`
+    INSERT INTO projection_projects (
+      project_id, title, workspace_root, scripts_json, created_at, updated_at,
+      default_model_selection_json
+    )
+    VALUES
+      ('project-hermes', 'T3 Work', '/tmp/work', '[]', ${NOW}, ${NOW},
+        '{"instanceId":"hermes","model":"default"}'),
+      ('project-codex', 'Code', '/tmp/code', '[]', ${NOW}, ${NOW},
+        '{"instanceId":"codex","model":"gpt-5.4"}')
   `;
   yield* sql`
     INSERT INTO orchestration_v2_legacy_imports (thread_id, source_updated_at, shell_imported_at)
@@ -474,6 +529,8 @@ describe("upgradeForkDatabase", () => {
         `,
         [
           { effect_id: "effect:close-idle", status: "cancelled" },
+          { effect_id: "effect:thread-deleted-with-live-child", status: "succeeded" },
+          { effect_id: "effect:thread-live-child", status: "succeeded" },
           { effect_id: "effect:thread-pinned", status: "succeeded" },
           { effect_id: "effect:thread-prs", status: "succeeded" },
         ],
@@ -491,6 +548,19 @@ describe("upgradeForkDatabase", () => {
           WHERE projection_name = 'thread-projections'
         `,
         [{ last_sequence: survivingBefore.events.at(-1)?.sequence }],
+      );
+      assert.deepStrictEqual(
+        yield* sql`
+          SELECT project_id, default_model_selection_json FROM projection_projects
+          WHERE project_id IN ('project-hermes', 'project-codex') ORDER BY project_id
+        `,
+        [
+          {
+            project_id: "project-codex",
+            default_model_selection_json: '{"instanceId":"codex","model":"gpt-5.4"}',
+          },
+          { project_id: "project-hermes", default_model_selection_json: null },
+        ],
       );
       const tables = yield* tableNames;
       assert.isFalse(tables.some((table) => table.startsWith("hermes_")));

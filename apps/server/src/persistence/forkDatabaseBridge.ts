@@ -17,7 +17,8 @@
  * 2. the three 055 index steps the fork never ran, 056, and 057 unless fork 064 already added it;
  * 3. one payload upcast: fork subagent workflows were written without `agents`;
  * 4. cancellation of pending `terminal.close-idle` effects, a fork-only effect type;
- * 5. removal of Hermes threads, whose provider this build does not have (see `removeHermesThreads`);
+ * 5. removal of Hermes threads, whose provider this build does not have, and of Hermes project
+ *    defaults (see `removeHermesThreads`);
  * 6. removal of fork-only tables and indexes;
  * 7. a journal rewrite to this build's 36..57, after which the migrator runs the rest.
  *
@@ -181,31 +182,37 @@ const hasColumn = (table: string, column: string) =>
 /**
  * Deletes every Hermes thread and every thread below one in its lineage, with their event
  * streams, receipts, effects, projections, and import state. Links from surviving threads
- * (context transfers, subagent rows) to a removed thread go too. Surviving threads' own events
- * keep any mention of a removed thread id. Git worktrees and files on disk are not touched.
+ * (context transfers, subagent rows) to a removed thread go too. A thread the user already
+ * deleted that linked to a removed thread is removed with it, so a projection rebuild cannot
+ * bring those links back, unless a thread below it is still live. Surviving threads' own events
+ * keep any mention of a removed thread id, and a thread that started on Hermes and moved to
+ * another provider stays. Project defaults that name Hermes are cleared. Git worktrees and files on disk are
+ * not touched.
  *
  * A thread is a Hermes thread when its provider instance is `hermes` or any instance a stored
  * provider session or thread recorded with the `hermes` driver.
  */
 const removeHermesThreads = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TEMP TABLE fork_hermes_instances (instance_id TEXT PRIMARY KEY)`;
+  yield* sql`
+    INSERT OR IGNORE INTO fork_hermes_instances (instance_id)
+    SELECT 'hermes'
+    UNION
+    SELECT json_extract(payload_json, '$.providerInstanceId')
+    FROM orchestration_v2_projection_provider_sessions
+    WHERE json_extract(payload_json, '$.driver') = 'hermes'
+    UNION
+    SELECT json_extract(payload_json, '$.providerInstanceId')
+    FROM orchestration_v2_projection_provider_threads
+    WHERE json_extract(payload_json, '$.driver') = 'hermes'
+  `;
   yield* sql`CREATE TEMP TABLE fork_removed_threads (thread_id TEXT PRIMARY KEY, hermes INTEGER)`;
   yield* sql`
     WITH RECURSIVE
-      hermes_instances(instance_id) AS (
-        SELECT 'hermes'
-        UNION
-        SELECT json_extract(payload_json, '$.providerInstanceId')
-        FROM orchestration_v2_projection_provider_sessions
-        WHERE json_extract(payload_json, '$.driver') = 'hermes'
-        UNION
-        SELECT json_extract(payload_json, '$.providerInstanceId')
-        FROM orchestration_v2_projection_provider_threads
-        WHERE json_extract(payload_json, '$.driver') = 'hermes'
-      ),
       removed(thread_id, hermes) AS (
         SELECT thread_id, 1 FROM orchestration_v2_projection_threads
-        WHERE default_provider IN (SELECT instance_id FROM hermes_instances)
+        WHERE default_provider IN (SELECT instance_id FROM fork_hermes_instances)
         UNION
         SELECT child.thread_id, 0
         FROM orchestration_v2_projection_threads AS child
@@ -215,8 +222,43 @@ const removeHermesThreads = Effect.gen(function* () {
     INSERT INTO fork_removed_threads (thread_id, hermes)
     SELECT thread_id, MAX(hermes) FROM removed GROUP BY thread_id
   `;
-  const [threads] = yield* sql<{ readonly hermes: number; readonly descendants: number }>`
-    SELECT COALESCE(SUM(hermes), 0) AS hermes, COUNT(*) - COALESCE(SUM(hermes), 0) AS descendants
+  // Deleted threads linked to a removed one go too, unless a thread below them is still live.
+  yield* sql`
+    WITH RECURSIVE
+      tree(root_id, thread_id, live) AS (
+        SELECT thread.thread_id, thread.thread_id, 0
+        FROM orchestration_v2_projection_threads AS thread
+        WHERE thread.deleted_at IS NOT NULL
+          AND thread.thread_id NOT IN (SELECT thread_id FROM fork_removed_threads)
+          AND (
+            EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_subagents AS subagent
+              WHERE subagent.thread_id = thread.thread_id
+                AND subagent.child_thread_id IN (SELECT thread_id FROM fork_removed_threads)
+            )
+            OR EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_context_transfers AS transfer
+              WHERE (
+                  transfer.source_thread_id = thread.thread_id
+                  AND transfer.target_thread_id IN (SELECT thread_id FROM fork_removed_threads)
+                )
+                OR (
+                  transfer.target_thread_id = thread.thread_id
+                  AND transfer.source_thread_id IN (SELECT thread_id FROM fork_removed_threads)
+                )
+            )
+          )
+        UNION
+        SELECT tree.root_id, child.thread_id, child.deleted_at IS NULL
+        FROM orchestration_v2_projection_threads AS child
+        JOIN tree ON json_extract(child.payload_json, '$.lineage.parentThreadId') = tree.thread_id
+      )
+    INSERT OR IGNORE INTO fork_removed_threads (thread_id, hermes)
+    SELECT thread_id, 0 FROM tree
+    WHERE root_id NOT IN (SELECT root_id FROM tree WHERE live)
+  `;
+  const [threads] = yield* sql<{ readonly hermes: number; readonly linked: number }>`
+    SELECT COALESCE(SUM(hermes), 0) AS hermes, COUNT(*) - COALESCE(SUM(hermes), 0) AS linked
     FROM fork_removed_threads
   `;
 
@@ -266,10 +308,28 @@ const removeHermesThreads = Effect.gen(function* () {
     `;
     yield* countRemoved(`${table}.${column}`);
   }
+
+  // Like 044, rewrite the events too, so a projection rebuild keeps the default cleared.
+  yield* sql`
+    UPDATE projection_projects SET default_model_selection_json = NULL
+    WHERE json_extract(default_model_selection_json, '$.instanceId')
+      IN (SELECT instance_id FROM fork_hermes_instances)
+  `;
+  yield* countRemoved("projection_projects (Hermes default cleared)");
+  yield* sql`
+    UPDATE orchestration_events
+    SET payload_json = json_set(payload_json, '$.defaultModelSelection', json('null'))
+    WHERE aggregate_kind = 'project'
+      AND event_type IN ('project.created', 'project.meta-updated')
+      AND json_extract(payload_json, '$.defaultModelSelection.instanceId')
+        IN (SELECT instance_id FROM fork_hermes_instances)
+  `;
+
   yield* sql`DROP TABLE temp.fork_removed_threads`;
+  yield* sql`DROP TABLE temp.fork_hermes_instances`;
   return {
     hermesThreads: threads?.hermes ?? 0,
-    descendantThreads: threads?.descendants ?? 0,
+    linkedThreads: threads?.linked ?? 0,
     removedRows,
   };
 });
@@ -352,7 +412,7 @@ export const upgradeForkDatabase = Effect.fn("upgradeForkDatabase")(function* <E
         Effect.annotateLogs({
           forkMigrationId,
           removedHermesThreads: removed.hermesThreads,
-          removedDescendantThreads: removed.descendantThreads,
+          removedLinkedThreads: removed.linkedThreads,
           removedRows: removed.removedRows,
         }),
       );
