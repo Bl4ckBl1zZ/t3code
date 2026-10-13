@@ -3278,6 +3278,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  subscribeBackgroundOutput: "orchestration.subscribeBackgroundOutput",
 } as const;
 
 export const OrchestrationV2ArchivedShellSnapshot = Schema.Struct({
@@ -3670,6 +3671,40 @@ export const OrchestrationV2GetTurnItemResult = Schema.Struct({
 });
 export type OrchestrationV2GetTurnItemResult = typeof OrchestrationV2GetTurnItemResult.Type;
 
+export const OrchestrationV2SubscribeBackgroundOutputInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationV2SubscribeBackgroundOutputInput =
+  typeof OrchestrationV2SubscribeBackgroundOutputInput.Type;
+
+/** Line length kept for a background task's live tail; enough to read, small for the wire. */
+export const ORCHESTRATION_V2_BACKGROUND_OUTPUT_LINE_MAX_LENGTH = 240;
+
+/**
+ * Live state of one pending background task, read from its provider while a
+ * client watches. Never persisted: the roster names the work, this says what it
+ * is doing right now. Keyed by the roster's `taskId`.
+ */
+export const OrchestrationV2BackgroundTaskOutput = Schema.Struct({
+  taskId: TrimmedNonEmptyString,
+  startedAt: Schema.optional(Schema.DateTimeUtc),
+  /** The last line the task printed, without terminal control sequences. */
+  lastLine: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(ORCHESTRATION_V2_BACKGROUND_OUTPUT_LINE_MAX_LENGTH)),
+  ),
+  /** When output last moved, which tells a working command from a stuck one. */
+  lastOutputAt: Schema.optional(Schema.DateTimeUtc),
+  /** When a monitor gives up waiting, for providers that declare one. */
+  deadlineAt: Schema.optional(Schema.DateTimeUtc),
+});
+export type OrchestrationV2BackgroundTaskOutput = typeof OrchestrationV2BackgroundTaskOutput.Type;
+
+export const OrchestrationV2BackgroundOutputSnapshot = Schema.Struct({
+  tasks: Schema.Array(OrchestrationV2BackgroundTaskOutput),
+});
+export type OrchestrationV2BackgroundOutputSnapshot =
+  typeof OrchestrationV2BackgroundOutputSnapshot.Type;
+
 const WORKFLOW_SCRIPT_ERROR_MESSAGES = {
   "invalid-path": "Workflow scripts must be absolute .js paths.",
   "root-unavailable": "Script root unavailable.",
@@ -3811,6 +3846,10 @@ export const OrchestrationV2RpcSchemas = {
   subscribeThread: {
     input: OrchestrationV2SubscribeThreadInput,
     output: OrchestrationV2ThreadStreamItem,
+  },
+  subscribeBackgroundOutput: {
+    input: OrchestrationV2SubscribeBackgroundOutputInput,
+    output: OrchestrationV2BackgroundOutputSnapshot,
   },
 } as const;
 

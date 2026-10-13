@@ -2066,6 +2066,17 @@ const layerWsRpc = (
               Effect.andThen(subscribeOrchestrationV2Thread(input)),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.subscribeBackgroundOutput]: (input) =>
+          threadManagement.streamBackgroundOutput(input.threadId).pipe(
+            Stream.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message: "Failed to read background output",
+                  cause,
+                }),
+            ),
+          ),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>

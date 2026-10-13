@@ -9,6 +9,7 @@ import {
   isProviderNativeSubagentThread,
   type ModelSelection,
   type OrchestrationV2NotificationSource,
+  type OrchestrationV2BackgroundTaskOutput,
   type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2ProviderGoal,
   type ServerProviderModel,
@@ -376,6 +377,63 @@ export function presentPendingBackgroundWork(
     return `${count} ${count === 1 ? singular : plural}`;
   });
   return { title: `${waiting ? "Waiting on" : "Running"} ${joinWithAnd(groups)}`, items, waiting };
+}
+
+export interface BackgroundTaskOutputPresentation {
+  /** How long the task has run: "42s", "12m", "2h 5m". */
+  readonly elapsed: string | null;
+  /** The last line it printed. */
+  readonly lastLine: string | null;
+  /** How long ago that line moved: "3s ago". A stuck command shows a growing number. */
+  readonly lastOutputAgo: string | null;
+  /** When a monitor gives up: "gives up in 4m", or "deadline passed". */
+  readonly deadline: string | null;
+  /** When the labels next change, so a row re-renders no more often than it reads. */
+  readonly nextChangeMs: number | null;
+}
+
+/** Coarse on purpose: past a minute, seconds are noise that would re-render rows for nothing. */
+function formatBackgroundSpan(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function backgroundSpanTickMs(ms: number): number {
+  return ms < 60_000 ? 1_000 : 30_000;
+}
+
+/** Labels for one background task's live output, as thread details and the composer show it. */
+export function presentBackgroundTaskOutput(
+  output: OrchestrationV2BackgroundTaskOutput | undefined,
+  nowMs: number,
+): BackgroundTaskOutputPresentation {
+  const ticks: Array<number> = [];
+  const since = (at: DateTime.Utc | undefined) => {
+    if (at === undefined) return null;
+    const ms = Math.max(0, nowMs - DateTime.toEpochMillis(at));
+    ticks.push(backgroundSpanTickMs(ms));
+    return formatBackgroundSpan(ms);
+  };
+  const elapsed = since(output?.startedAt);
+  const lastLine = output?.lastLine ?? null;
+  const lastOutput = lastLine === null ? null : since(output?.lastOutputAt);
+  let deadline: string | null = null;
+  if (output?.deadlineAt !== undefined) {
+    const remainingMs = DateTime.toEpochMillis(output.deadlineAt) - nowMs;
+    deadline =
+      remainingMs <= 0 ? "deadline passed" : `gives up in ${formatBackgroundSpan(remainingMs)}`;
+    if (remainingMs > 0) ticks.push(backgroundSpanTickMs(remainingMs));
+  }
+  return {
+    elapsed,
+    lastLine,
+    lastOutputAgo: lastOutput === null ? null : `${lastOutput} ago`,
+    deadline,
+    nextChangeMs: ticks.length === 0 ? null : Math.min(...ticks),
+  };
 }
 
 export interface ProviderGoalPresentation {

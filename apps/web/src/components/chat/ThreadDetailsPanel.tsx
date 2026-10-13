@@ -1,13 +1,15 @@
 import type {
   EditorId,
   EnvironmentId,
+  OrchestrationV2BackgroundTaskOutput,
+  OrchestrationV2PendingBackgroundTask,
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
 } from "@t3tools/contracts";
 
 import type { DraftId } from "../../composerDraftStore";
-import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
+import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import BaseGitActionsControl from "../GitActionsControl";
@@ -20,6 +22,8 @@ import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { ThreadBackgroundPanel } from "./ThreadBackgroundPanel";
+import { ThreadPortsPanel } from "./ThreadPortsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
 const GitActionsControl = memo(BaseGitActionsControl);
@@ -62,13 +66,18 @@ export interface ThreadDetailsPanelProps extends Pick<
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  /** Work the settled thread left running, with what each piece is printing. */
+  backgroundTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  backgroundOutputs: ReadonlyMap<string, OrchestrationV2BackgroundTaskOutput>;
+  onOpenRelatedThread: (threadId: ThreadId) => void;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
-  const fileScripts = useT3ProjectFileScripts(
+  const projectFile = useT3ProjectFileState(
     props.environmentId,
     props.activeProjectScripts ? props.gitCwd : null,
   );
+  const fileScripts = projectFile.scripts;
   const activeThreadRef = { environmentId: props.environmentId, threadId: props.threadId };
   const branchToolbarProps = {
     showGitControls: props.isGitRepo,
@@ -170,6 +179,22 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {density === "full" && !props.draftId ? (
+            <ThreadPortsPanel
+              environmentId={props.environmentId}
+              threadId={props.threadId}
+              pinnedUrl={projectFile.file?.previewUrl}
+            />
+          ) : null}
+
+          {density === "full" && !props.draftId ? (
+            <ThreadBackgroundPanel
+              tasks={props.backgroundTasks}
+              outputs={props.backgroundOutputs}
+              onOpenThread={props.onOpenRelatedThread}
+            />
           ) : null}
 
           {density === "full" && !props.draftId ? (

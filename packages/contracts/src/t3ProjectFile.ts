@@ -13,6 +13,7 @@ export const T3_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
 
 const T3_PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const T3_PROJECT_FILE_MAX_SCRIPTS = 50;
+const T3_PROJECT_PREVIEW_URL_MAX_LENGTH = 2_048;
 
 // Annotations go on the encoded (string) side so they survive into the
 // published JSON Schema; decoding still trims and re-validates non-emptiness.
@@ -98,6 +99,15 @@ export const T3ProjectFile = Schema.Struct({
       description:
         'How new worktrees populate git submodules: "recursive" (the default) initializes nested submodules too, "top-level" initializes only those declared by this repository, and "none" leaves every submodule empty for a setup script to handle. A project or environment setting in T3 Code overrides this.',
     }),
+  ),
+  previewUrl: Schema.optionalKey(
+    trimmedNonEmpty(
+      {
+        description:
+          'URL pinned at the top of every thread\'s Ports list, listed even while nothing serves it. A local dev server (e.g. "http://localhost:5173") or a remote origin such as a tunnel or staging site.',
+      },
+      T3_PROJECT_PREVIEW_URL_MAX_LENGTH,
+    ),
   ),
   scripts: Schema.optionalKey(
     Schema.Array(T3ProjectFileScript)

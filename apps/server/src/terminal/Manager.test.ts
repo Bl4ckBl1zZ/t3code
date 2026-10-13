@@ -243,6 +243,9 @@ interface CreateManagerOptions {
   >[0]["resolveProviderInstanceEnvironment"];
   managedBinaryCacheDir?: string;
   managedBinaryToolsDir?: string;
+  announceTerminalUrls?: Parameters<
+    typeof TerminalManager.makeWithOptions
+  >[0]["announceTerminalUrls"];
 }
 
 interface ManagerFixture {
@@ -290,6 +293,9 @@ const createManager = (
           : {}),
         ...(options.resolveProviderInstanceEnvironment !== undefined
           ? { resolveProviderInstanceEnvironment: options.resolveProviderInstanceEnvironment }
+          : {}),
+        ...(options.announceTerminalUrls !== undefined
+          ? { announceTerminalUrls: options.announceTerminalUrls }
           : {}),
         ...(options.managedBinaryCacheDir === undefined
           ? {}
@@ -824,6 +830,30 @@ it.layer(
       expect(first.writes).toEqual(["pwd\n"]);
       expect(second.writes).toEqual(["ls\n"]);
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
+    }),
+  );
+
+  it.effect("announces the dev-server URL a terminal prints to port discovery", () =>
+    Effect.gen(function* () {
+      const announced = yield* Deferred.make<{
+        readonly threadId: string;
+        readonly terminalId: string;
+        readonly urls: ReadonlyArray<string>;
+      }>();
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        announceTerminalUrls: (input) => Deferred.succeed(announced, input).pipe(Effect.asVoid),
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("VITE ready\n  ➜  Local:   http://localhost:5173/\n");
+      expect(yield* Deferred.await(announced)).toEqual({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        urls: ["http://localhost:5173/"],
+      });
     }),
   );
 

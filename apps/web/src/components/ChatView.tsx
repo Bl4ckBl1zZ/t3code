@@ -30,7 +30,10 @@ import {
   latestExecutedRun,
   latestRootProviderFailure,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
+import type {
+  OrchestrationV2BackgroundTaskOutput,
+  UsageLimitSourceSnapshots,
+} from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
   hasProviderUsageLimits,
@@ -464,6 +467,7 @@ import {
 } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
+import { useThreadBackgroundOutput } from "./chat/useThreadBackgroundOutput";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   type EnvironmentOption,
@@ -1546,6 +1550,13 @@ type LocalThreadErrorEntry = {
   readonly message: string | null;
   readonly at: number;
 };
+
+/** A background command's last printed line, as the composer banner's description. */
+function backgroundOutputLine(output: OrchestrationV2BackgroundTaskOutput | undefined) {
+  return output?.lastLine === undefined ? undefined : (
+    <span className="block truncate font-mono">{output.lastLine}</span>
+  );
+}
 
 function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
@@ -7415,6 +7426,11 @@ export default function ChatView(props: ChatViewProps) {
   // banner is the only visible stop affordance. The interrupt path also
   // accepts a completed run while its provider still has background work.
   const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
+  const backgroundOutputs = useThreadBackgroundOutput({
+    environmentId,
+    threadId: activeThreadId,
+    tasks: activeBackgroundTasks,
+  });
   const [stoppingBackgroundWorkKey, setStoppingBackgroundWorkKey] = useState<string | null>(null);
   const isStoppingBackgroundWork =
     stoppingBackgroundWorkKey === `${environmentId}:${activeThreadId}`;
@@ -7631,10 +7647,11 @@ export default function ChatView(props: ChatViewProps) {
         />
       ),
       title: presentation.title,
-      // A single named item is already in the title.
+      // A single named item is already in the title, so its last output line
+      // says what it is doing instead.
       description:
         presentation.items.length === 1 && presentation.items[0]?.childThreadId === undefined
-          ? undefined
+          ? backgroundOutputLine(backgroundOutputs.get(presentation.items[0]?.taskId ?? ""))
           : presentation.items.map((item, index) => {
               const childThreadId = item.childThreadId;
               return (
@@ -7668,6 +7685,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeBackgroundTasks,
     activeThread,
+    backgroundOutputs,
     canOperateThread,
     handleStopBackgroundWork,
     isStoppingBackgroundWork,
@@ -11318,6 +11336,9 @@ export default function ChatView(props: ChatViewProps) {
     onAddProjectScript: saveProjectScript,
     onUpdateProjectScript: updateProjectScript,
     onDeleteProjectScript: deleteProjectScript,
+    backgroundTasks: activeBackgroundTasks,
+    backgroundOutputs,
+    onOpenRelatedThread,
   };
   const panelToggleControlProps = {
     terminalAvailable: activeProject !== null,

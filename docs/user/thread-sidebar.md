@@ -220,6 +220,23 @@ retry and the normal snooze choices.
 On web and desktop, use **Agents** to follow work delegated to subagents.
 Stop on a thread also stops the subagents it delegated to.
 
+When a turn ends while work it started keeps running, such as a dev server, a
+monitor, or a subagent, the banner above the composer names it and offers
+**Stop**. On web and desktop, the thread details panel lists it under
+**Background** with how long each item has run. For Claude and Codex commands
+it also shows the last line the command printed and how long ago, which tells
+a stuck command from a working one. A Claude monitor shows when it gives up
+waiting. Hover a thread in the sidebar to see what it is still running.
+
+On web and desktop, the thread details panel lists the dev servers the thread's
+terminals run under **Ports**, at the address they print, such as
+`http://localhost:5173/app/`. Select one to open it in the preview, or use the
+buttons beside it to open it in your browser or copy its address. From another
+device on the same network, the address points at the environment's machine
+instead of `localhost`. A `"previewUrl"` in the project's `t3.json` is pinned at
+the top of the list for every thread, even while nothing serves it; it can also
+name a remote address, such as a staging site or tunnel.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.

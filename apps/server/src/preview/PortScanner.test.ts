@@ -240,6 +240,33 @@ effectIt.effect("revalidates a successful HTML probe after its cache entry expir
   }).pipe(Effect.provide(layer));
 });
 
+effectIt.effect("shows a terminal's announced URL, path included, until its process ends", () => {
+  const announcedUrl = `http://localhost:${LSOF_TEST_PORT}/app/`;
+  const fetchFn = ((input: Parameters<typeof globalThis.fetch>[0]) =>
+    Promise.resolve(
+      String(input) === announcedUrl
+        ? new Response("app", { headers: { "content-type": "text/html" } })
+        : new Response("not found", { status: 404, headers: { "content-type": "text/html" } }),
+    )) as typeof globalThis.fetch;
+  // The listener belongs to a process outside the terminal's tree, as a container's would.
+  const layer = layerLsofScanner({ pid: () => 9999, fetch: fetchFn });
+  const terminal = { threadId: "scanner-thread", terminalId: "scanner-terminal" };
+
+  return Effect.gen(function* () {
+    const scanner = yield* ownedScanner();
+    expect(yield* scanner.scan()).toHaveLength(0);
+
+    yield* scanner.announceTerminalUrls({ ...terminal, urls: [announcedUrl] });
+    const [found] = yield* scanner.scan();
+    expect(found?.url).toBe(announcedUrl);
+    expect(found?.terminal).toEqual(terminal);
+
+    // Ctrl+C: the shell stays, its dev server does not.
+    yield* scanner.registerTerminalProcesses({ ...terminal, processIds: [] });
+    expect(yield* scanner.scan()).toHaveLength(0);
+  }).pipe(Effect.provide(layer));
+});
+
 effectIt.effect("keeps a full configured URL when the discovered server root fails", () => {
   const requests: string[] = [];
   const configuredUrl = `http://localhost:${LSOF_TEST_PORT}/docs`;

@@ -1,6 +1,7 @@
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { appendBackgroundOutputTail, lastBackgroundOutputLine } from "./backgroundOutput.ts";
 import {
   mcpToolPresentation,
   type McpToolPresentation,
@@ -54,6 +55,7 @@ import type {
   OrchestrationV2ProviderRetry,
   OrchestrationV2ProviderSession,
   OrchestrationV2ProviderThread,
+  OrchestrationV2BackgroundTaskOutput,
   OrchestrationV2ProviderTurn,
   OrchestrationV2PlanStep,
   OrchestrationV2RuntimeRequest,
@@ -1882,6 +1884,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const runningDynamicToolsByTurn = yield* Ref.make(
           new Map<string, Map<string, CodexDynamicToolItem>>(),
         );
+        // The newest output of each running command, so a command left
+        // running past its turn (a dev server) can show what it is doing.
+        // Kept in memory only and read on demand; never emitted as events.
+        const commandOutputTails = new Map<
+          string,
+          {
+            readonly nativeTurnId: string;
+            readonly nativeThreadId: string;
+            readonly startedAt: DateTime.Utc;
+            tail: string;
+            lastOutputAt: DateTime.Utc | null;
+          }
+        >();
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
         // Keep the run event stream open until descendant provider state is
@@ -4231,6 +4246,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }),
         );
 
+        yield* client.handleServerNotification("item/commandExecution/outputDelta", (payload) =>
+          Effect.gen(function* () {
+            const entry = commandOutputTails.get(payload.itemId);
+            if (entry === undefined) return;
+            entry.tail = appendBackgroundOutputTail(entry.tail, payload.delta);
+            entry.lastOutputAt = yield* DateTime.now;
+          }),
+        );
+
         yield* client.handleServerNotification("item/reasoning/summaryTextDelta", (payload) =>
           appendReasoning(payload, "summary", payload.summaryIndex),
         );
@@ -4678,6 +4702,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
             if (payload.item.type === "commandExecution") {
               if (!codexItemStatus(payload.item.status).completed) {
+                commandOutputTails.set(payload.item.id, {
+                  nativeTurnId: payload.turnId,
+                  nativeThreadId: payload.threadId,
+                  startedAt: DateTime.makeUnsafe(payload.startedAtMs),
+                  tail: payload.item.aggregatedOutput ?? "",
+                  lastOutputAt: null,
+                });
+                for (const oldest of commandOutputTails.keys()) {
+                  if (commandOutputTails.size <= 64) break;
+                  commandOutputTails.delete(oldest);
+                }
                 yield* trackRunningCommandItem(payload.turnId, {
                   id: payload.item.id,
                   command: payload.item.command,
@@ -4790,6 +4825,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "commandExecution") {
+              commandOutputTails.delete(payload.item.id);
               const turnDrained = yield* clearRunningCommandItem(payload.turnId, payload.item.id);
               const artifacts = yield* buildCommandExecutionArtifacts(context, payload.item);
               yield* emitProviderEvent({
@@ -6432,6 +6468,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           // (not pending) between turns, so idle release can win the race
           // against a long-delayed resume. Codex emits no resume-expected
           // signal to pin on.
+          readBackgroundOutput: ({ providerThread }) =>
+            Effect.gen(function* () {
+              const running = yield* Ref.get(runningCommandItemsByTurn);
+              const tasks: Array<OrchestrationV2BackgroundTaskOutput> = [];
+              for (const [itemId, entry] of commandOutputTails) {
+                // Interrupts and failed turns settle commands without an
+                // item/completed; drop what no longer runs.
+                if (running.get(entry.nativeTurnId)?.has(itemId) !== true) {
+                  commandOutputTails.delete(itemId);
+                  continue;
+                }
+                if (entry.nativeThreadId !== providerThread.nativeThreadRef?.nativeId) continue;
+                const lastLine = lastBackgroundOutputLine(entry.tail);
+                tasks.push({
+                  taskId: itemId,
+                  startedAt: entry.startedAt,
+                  ...(lastLine === null ? {} : { lastLine }),
+                  ...(lastLine === null || entry.lastOutputAt === null
+                    ? {}
+                    : { lastOutputAt: entry.lastOutputAt }),
+                });
+              }
+              return tasks;
+            }),
           hasPendingBackgroundWork: Effect.gen(function* () {
             for (const items of (yield* Ref.get(runningCommandItemsByTurn)).values()) {
               if (items.size > 0) {

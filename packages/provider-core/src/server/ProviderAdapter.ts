@@ -1,4 +1,7 @@
-import type { OrchestrationV2HistoricalMessage } from "@t3tools/contracts";
+import type {
+  OrchestrationV2BackgroundTaskOutput,
+  OrchestrationV2HistoricalMessage,
+} from "@t3tools/contracts";
 import {
   ChatAttachment,
   CheckpointId,
@@ -606,6 +609,15 @@ export interface ProviderAdapterV2SessionRuntime {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly taskId: string;
   }) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /**
+   * What this provider thread's live background tasks are doing right now:
+   * last output line, start time, deadline. Read on demand while a client
+   * watches, never emitted as events. Absent means the provider exposes no
+   * live output for work that outlives its turn.
+   */
+  readonly readBackgroundOutput?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+  }) => Effect.Effect<ReadonlyArray<OrchestrationV2BackgroundTaskOutput>>;
   readonly interruptTurn: (
     input: ProviderAdapterV2InterruptInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;

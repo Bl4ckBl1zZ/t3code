@@ -32,6 +32,13 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         tag: ORCHESTRATION_V2_WS_METHODS.subscribeThread,
         idleTtlMs: 0,
       }),
+      // Live tails of a settled thread's background work. The server reads
+      // them only while someone subscribes, so release at once.
+      backgroundOutput: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+        label: "environment-data:orchestration-v2:background-output",
+        tag: ORCHESTRATION_V2_WS_METHODS.subscribeBackgroundOutput,
+        idleTtlMs: 0,
+      }),
     },
     turnDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:turn-diff",
