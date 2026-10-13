@@ -852,8 +852,11 @@ const make = Effect.gen(function* () {
   });
 
   const reportRef = yield* SubscriptionRef.make<StorageCleanupReport | null>(null);
+  // A follow-up sweep, queued by the deletions a sweep makes, keeps what the
+  // previous report removed or failed, so the report still shows them.
   const sweep = Effect.fn("StorageCleanup.sweep")(function* (
     trigger: StorageCleanupReport["trigger"],
+    followUp = false,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const serverSettings = yield* settingsService.getSettings;
@@ -941,6 +944,19 @@ const make = Effect.gen(function* () {
         ),
       );
     }
+    if (followUp) {
+      const previous = yield* SubscriptionRef.get(reportRef);
+      for (const entry of previous?.entries ?? []) {
+        if (entry.outcome === "kept") continue;
+        const superseded = entries.some(
+          (next) =>
+            next.kind === entry.kind &&
+            next.path === entry.path &&
+            next.threadId === entry.threadId,
+        );
+        if (!superseded) entries.push(entry);
+      }
+    }
     const counts = { removed: 0, kept: 0, failed: 0 };
     let bytesFreed = 0;
     for (const entry of entries) {
@@ -965,14 +981,21 @@ const make = Effect.gen(function* () {
   // A burst of deletions queues one follow-up sweep; it reads state when it starts.
   let eventSweepQueued = false;
   const worker = yield* makeDrainableWorker(
-    (completion: Deferred.Deferred<StorageCleanupReport, ServerSettingsError> | undefined) =>
+    (
+      completion:
+        | Deferred.Deferred<StorageCleanupReport, ServerSettingsError>
+        | "follow-up"
+        | undefined,
+    ) =>
       Effect.suspend(() => {
         eventSweepQueued = false;
-        return sweep(completion === undefined ? "automatic" : "manual");
+        return completion === undefined || completion === "follow-up"
+          ? sweep("automatic", completion === "follow-up")
+          : sweep("manual");
       }).pipe(
         Effect.exit,
         Effect.flatMap((exit) =>
-          completion === undefined
+          completion === undefined || completion === "follow-up"
             ? exit.pipe(
                 Effect.asVoid,
                 Effect.catchCause((cause) =>
@@ -1042,7 +1065,7 @@ const make = Effect.gen(function* () {
         )
           return Effect.void;
         eventSweepQueued = true;
-        return worker.enqueue(undefined);
+        return worker.enqueue("follow-up");
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Storage cleanup event stream failed", { cause }),
