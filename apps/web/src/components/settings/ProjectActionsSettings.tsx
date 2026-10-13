@@ -116,6 +116,8 @@ export function ProjectActionsSettings() {
         runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
         waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
         runOnSettle: fileScript.runOnSettle ?? false,
+        runOnWorktreeDelete: fileScript.runOnWorktreeDelete ?? false,
+        singleRun: fileScript.singleRun ?? false,
         keybinding: null,
         previewUrl: fileScript.previewUrl ?? null,
         autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,

@@ -567,6 +567,20 @@ export function useThreadActions() {
           );
           continue;
         }
+        const teardownFailure = removeResult.value?.teardownFailure;
+        if (teardownFailure) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: `Teardown script "${teardownFailure.scriptName}" ${
+                teardownFailure.timedOut ? "timed out" : "failed"
+              }`,
+              description: `The worktree was deleted anyway.${
+                teardownFailure.detail ? ` ${teardownFailure.detail}` : ""
+              }`,
+            }),
+          );
+        }
         removedByProject.set(`${worktree.environmentId}:${worktree.projectCwd}`, worktree);
       }
       for (const worktree of removedByProject.values()) {

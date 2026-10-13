@@ -5,7 +5,9 @@ import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
   projectScriptMenuLabel,
+  runningSingleRunScriptIds,
   settleProjectScript,
+  singleRunScriptTerminalId,
   setupProjectScript,
 } from "@t3tools/shared/projectScripts";
 
@@ -28,6 +30,8 @@ describe("projectScripts helpers", () => {
         runOnWorktreeCreate: false,
         waitForSetup: false,
         runOnSettle: false,
+        runOnWorktreeDelete: false,
+        singleRun: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
       }),
@@ -51,6 +55,8 @@ describe("projectScripts helpers", () => {
         runOnWorktreeCreate: false,
         waitForSetup: false,
         runOnSettle: false,
+        runOnWorktreeDelete: false,
+        singleRun: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -71,6 +77,8 @@ describe("projectScripts helpers", () => {
       previewUrl: null,
       autoOpenPreview: false,
       runOnSettle: false,
+      runOnWorktreeDelete: false,
+      singleRun: false,
     } as const;
     expect(
       buildProjectScript("setup", { ...input, runOnWorktreeCreate: true, waitForSetup: true }),
@@ -170,6 +178,8 @@ describe("projectScripts helpers", () => {
       waitForSetup: false,
       previewUrl: null,
       autoOpenPreview: false,
+      runOnWorktreeDelete: false,
+      singleRun: false,
     } as const;
     const holder = {
       id: "holder",
@@ -189,6 +199,34 @@ describe("projectScripts helpers", () => {
     expect(
       releaseClaimedRoles(holder, { ...input, runOnWorktreeCreate: false, runOnSettle: false }),
     ).toBe(holder);
+    expect(
+      releaseClaimedRoles(
+        { ...holder, runOnWorktreeDelete: true },
+        { ...input, runOnWorktreeCreate: false, runOnSettle: false, runOnWorktreeDelete: true },
+      ),
+    ).toMatchObject({ runOnWorktreeCreate: true, runOnSettle: true, runOnWorktreeDelete: false });
+  });
+
+  it("reports a single-run script as running only while its own terminal runs a command", () => {
+    const base = { command: "pnpm dev", icon: "play" as const, runOnWorktreeCreate: false };
+    const scripts = [
+      { ...base, id: "dev", name: "Dev", singleRun: true },
+      { ...base, id: "test", name: "Test" },
+    ];
+    expect(singleRunScriptTerminalId("dev")).toBe("script-dev");
+    expect([...runningSingleRunScriptIds(scripts, ["script-dev", "script-test"])]).toEqual(["dev"]);
+    expect(runningSingleRunScriptIds(scripts, ["term-1"]).size).toBe(0);
+    expect(projectScriptMenuLabel(scripts[0]!, { running: true })).toBe("Dev (running)");
+  });
+
+  it("never picks a teardown-only script as the primary action", () => {
+    const base = { command: "true", icon: "play" as const, runOnWorktreeCreate: false };
+    expect(
+      primaryProjectScript([
+        { ...base, id: "down", name: "Down", runOnWorktreeDelete: true },
+        { ...base, id: "dev", name: "Dev" },
+      ])?.id,
+    ).toBe("dev");
   });
 
   it("builds default runtime env for scripts", () => {

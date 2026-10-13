@@ -25,7 +25,7 @@ import {
   projectScriptMenuIcon,
   type TerminalMenuSession,
 } from "../terminal/terminalMenu";
-import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
+import { projectScriptMenuLabel, runningSingleRunScriptIds } from "@t3tools/shared/projectScripts";
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -112,6 +112,19 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly onOpenNewTerminal: () => void;
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
 };
+
+/** Menu label for a script, marking a single-run script whose terminal is busy. */
+function scriptMenuLabels(
+  props: Pick<ThreadGitControlsProps, "projectScripts" | "terminalSessions">,
+): (script: ProjectScript) => string {
+  const running = runningSingleRunScriptIds(
+    props.projectScripts,
+    props.terminalSessions
+      .filter((session) => session.hasRunningSubprocess)
+      .map((session) => session.terminalId),
+  );
+  return (script) => projectScriptMenuLabel(script, { running: running.has(script.id) });
+}
 
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const navigation = useNavigation();
@@ -277,8 +290,9 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGitHeaderActionItems {
   const model = useThreadGitControlModel(props);
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const scriptLabel = scriptMenuLabels(props);
+    return {
       terminal: {
         accessibilityLabel: "Open terminal",
         disabled: !props.canOpenTerminal,
@@ -291,7 +305,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
               description: script.command,
               disabled: !props.canOperateTerminal,
               icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
-              label: projectScriptMenuLabel(script),
+              label: scriptLabel(script),
               onPress: () => void props.onRunProjectScript(script),
               type: "action" as const,
             })),
@@ -407,30 +421,29 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         type: "menu",
         variant: "plain",
       },
-    }),
-    [
-      model.currentBranchLabel,
-      model.isRepo,
-      model.openFiles,
-      model.openGitInspector,
-      model.openReview,
-      model.quickAction.disabled,
-      model.quickAction.label,
-      model.quickActionHint,
-      model.quickActionIcon,
-      model.runQuickAction,
-      props.canOpenFiles,
-      props.canOpenTerminal,
-      props.canOperateTerminal,
-      props.gitStatus,
-      props.onMergeBack,
-      props.onOpenNewTerminal,
-      props.onOpenTerminal,
-      props.onRunProjectScript,
-      props.projectScripts,
-      props.terminalSessions,
-    ],
-  );
+    };
+  }, [
+    model.currentBranchLabel,
+    model.isRepo,
+    model.openFiles,
+    model.openGitInspector,
+    model.openReview,
+    model.quickAction.disabled,
+    model.quickAction.label,
+    model.quickActionHint,
+    model.quickActionIcon,
+    model.runQuickAction,
+    props.canOpenFiles,
+    props.canOpenTerminal,
+    props.canOperateTerminal,
+    props.gitStatus,
+    props.onMergeBack,
+    props.onOpenNewTerminal,
+    props.onOpenTerminal,
+    props.onRunProjectScript,
+    props.projectScripts,
+    props.terminalSessions,
+  ]);
 }
 
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
@@ -451,6 +464,7 @@ export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): He
 
 export function ThreadGitControls(props: ThreadGitControlsProps) {
   const model = useThreadGitControlModel(props);
+  const scriptLabel = scriptMenuLabels(props);
   const showActionControls = props.showActionControls ?? true;
 
   if (!showActionControls) {
@@ -483,9 +497,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
                 onPress={() => void props.onRunProjectScript(script)}
                 subtitle={script.command}
               >
-                <NativeHeaderToolbar.Label>
-                  {projectScriptMenuLabel(script)}
-                </NativeHeaderToolbar.Label>
+                <NativeHeaderToolbar.Label>{scriptLabel(script)}</NativeHeaderToolbar.Label>
               </NativeHeaderToolbar.MenuAction>
             ))
           ) : (

@@ -116,8 +116,18 @@ project crumb.
 
 The Project category, shown while a project is selected, holds the project's name, icon, actions,
 checkouts and removal. Actions belong to a project: editing them creates the project's own list
-on each selected environment, and reset returns to the environment's shared list. A project's
-`t3.json` actions can be imported there.
+on each selected environment, and reset returns to the environment's shared list.
+
+A project's `t3.json` actions can be imported there. Until a project has actions of its own,
+T3 Code only offers the file's scripts for import and never runs them on its own. Once it has its
+own actions, imported or created in the app, they and the `scripts` in its `t3.json` stay in sync.
+Editing an action rewrites its script in the file, creating the file if needed, and deleting an
+action removes its script. Every other field and every script you never imported stay as they are.
+In the other direction, editing or removing a script you imported updates the action, a script
+added to the file later becomes an action, and the file wins if both sides changed. This happens
+within a few seconds, whether the file was changed by hand, by an agent or by pulling a teammate's
+change. Reset stops the sync and leaves the file as it is. Projects that already had their own
+actions get a `t3.json` once; if you delete it, T3 Code recreates it only on your next edit.
 
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the
@@ -137,6 +147,23 @@ New worktrees go in the `worktrees` folder of the T3 home directory. To put them
 such as another drive, set **Settings → Storage → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
 are, and cleanup covers both the default folder and the custom one.
+
+## Single-run actions
+
+Turn on **Only one run at a time** for an action such as a dev server, or set `"singleRun": true`
+on a `t3.json` script, so a thread never runs two copies of it. The action gets its own terminal.
+Running it again while it runs stops that run and starts it fresh in the same terminal. While it
+runs, the actions menu marks it as running and the run button offers **Restart**.
+
+## Worktree teardown
+
+To stop containers, free ports or release other resources a worktree started, turn on **Run in
+the thread's worktree before it is deleted** for one of the project's actions, or set
+`"runOnWorktreeDelete": true` on a `t3.json` script. It runs in the worktree each time T3 Code
+deletes one: when you delete a thread or several threads with their worktree, when storage
+cleanup removes it, and when an agent's worktree handoff or a thread launch is rolled back. It
+runs without a terminal and is stopped after two minutes. A failing script never keeps the
+worktree: deleting a thread shows a warning, and the storage cleanup results note the failure.
 
 ## Storage cleanup
 

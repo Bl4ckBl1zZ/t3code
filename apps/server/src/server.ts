@@ -72,6 +72,8 @@ import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
+import * as ProjectTeardownScriptRunner from "./project/ProjectTeardownScriptRunner.ts";
+import * as T3ProjectFileSync from "./project/T3ProjectFileSync.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -363,7 +365,15 @@ const layerGit = Layer.empty.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
 );
 
+// Every worktree removal (GitWorkflowService and storage cleanup) runs the
+// project's teardown script first.
+const layerProjectTeardownScriptRunner = ProjectTeardownScriptRunner.layer.pipe(
+  Layer.provide(RuntimeLayer.layerProjectService),
+  Layer.provide(ProcessRunner.layer),
+);
+
 const layerGitWorkflow = GitWorkflowService.layer.pipe(
+  Layer.provideMerge(layerProjectTeardownScriptRunner),
   Layer.provideMerge(layerVcsDriverRegistry),
   Layer.provideMerge(layerGit),
 );
@@ -586,6 +596,10 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // existed, or by a cleanup write that failed. See ProjectService.delete
   // for the normal (on-delete) path.
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+  // Mirrors each project's actions and the scripts in its t3.json.
+  Layer.effectDiscard(T3ProjectFileSync.make.pipe(Effect.flatMap((sync) => sync.start()))).pipe(
+    Layer.provide(RuntimeLayer.layerProjectService),
+  ),
 ).pipe(
   // Core Services
   Layer.provideMerge(layerOrchestrationApplication),

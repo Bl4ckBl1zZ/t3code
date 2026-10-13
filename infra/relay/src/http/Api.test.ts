@@ -1372,6 +1372,31 @@ describe("relay routing fallback", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("serves this build's t3.json schema under the relay's own address", () =>
+    Effect.gen(function* () {
+      const httpEffect = yield* HttpRouter.toHttpEffect(
+        Layer.mergeAll(
+          RelayHttpApi.layerProjectFileSchemaRoute("https://relay.test/schema/t3.json"),
+          RelayHttpApi.layerNotFoundRoute,
+          RelayHttpApi.layerCors,
+        ),
+      );
+      const response = yield* sendRelayRequest(
+        httpEffect,
+        new Request("https://relay.test/schema/t3.json"),
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers["access-control-allow-origin"]).toBe("*");
+      const body = response.body;
+      const schema = JSON.parse(
+        body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
+      );
+      expect(schema.$id).toBe("https://relay.test/schema/t3.json");
+      expect(Object.keys(schema.properties.scripts.items.properties)).toContain("singleRun");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("returns a CORS-compatible 404 response for unmatched paths", () =>
     Effect.gen(function* () {
       const httpEffect = yield* HttpRouter.toHttpEffect(

@@ -38,6 +38,7 @@ import * as ServerConfig from "./config.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as ProjectTeardownScriptRunner from "./project/ProjectTeardownScriptRunner.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
 import { forkParked } from "./serverActivation.ts";
@@ -197,6 +198,7 @@ const make = Effect.gen(function* () {
   const gitManager = yield* GitManager.GitManager;
   const terminals = yield* TerminalManager.TerminalManager;
   const crypto = yield* Crypto.Crypto;
+  const teardownScripts = yield* ProjectTeardownScriptRunner.ProjectTeardownScriptRunner;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
@@ -666,6 +668,12 @@ const make = Effect.gen(function* () {
           )
         )
           return keep("settings changed since check");
+        // The project's teardown script sees the checkout as the user left it.
+        // A failure is reported on the entry and does not keep the worktree.
+        const teardownFailure = yield* teardownScripts.runBeforeRemoval({
+          projectCwd: project.workspaceRoot,
+          worktreePath,
+        });
         // Clean only untracked files; Git must still refuse removal if a tracked
         // edit arrives after our last status check.
         if (settings.worktreeKeepWhen === "tracked-changes")
@@ -675,7 +683,19 @@ const make = Effect.gen(function* () {
           ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", worktreePath],
           "git worktree remove",
         );
-        entries.push({ ...entry, outcome: "removed", reason: sentence(removalReason), bytes });
+        entries.push({
+          ...entry,
+          outcome: "removed",
+          reason:
+            teardownFailure === null
+              ? sentence(removalReason)
+              : `${sentence(removalReason)}; teardown script "${teardownFailure.scriptName}" ${
+                  teardownFailure.timedOut
+                    ? "timed out"
+                    : `failed${teardownFailure.exitCode === null ? "" : ` (exit ${teardownFailure.exitCode})`}`
+                }`,
+          bytes,
+        });
         yield* gitManager.invalidateStatus(project.workspaceRoot);
         // Preserve branch and path: ProviderTurnStartService recreates the checkout
         // from that branch when the thread is resumed.

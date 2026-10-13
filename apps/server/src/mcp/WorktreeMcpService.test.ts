@@ -201,7 +201,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
   const removeWorktree = vi.fn((_: unknown) =>
     options.removeWorktreeFails
       ? (Effect.fail("simulated worktree removal failure") as never)
-      : Effect.void,
+      : Effect.succeed({}),
   );
   const deleteLocalBranch = vi.fn((_: unknown) =>
     options.deleteLocalBranchFails
