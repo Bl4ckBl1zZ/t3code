@@ -5,6 +5,7 @@ import {
   buildConnectClerkAuthorizeUrl,
   connectLoopbackRedirectUri,
   readConnectAuthorizeRequest,
+  resolveHostedAppUrl,
 } from "./connectAuth.ts";
 
 describe("connectAuth", () => {
@@ -71,5 +72,13 @@ describe("connectAuth", () => {
     expect(url.searchParams.get("state")).toBe("state-1");
     expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+  });
+
+  it("follows upstream's hosted app unless the build names its own or none", () => {
+    expect(resolveHostedAppUrl(undefined)).toBe("https://app.t3.codes");
+    expect(resolveHostedAppUrl(" ")).toBe("https://app.t3.codes");
+    expect(resolveHostedAppUrl("https://app.fork.example")).toBe("https://app.fork.example");
+    expect(resolveHostedAppUrl("none")).toBeNull();
+    expect(resolveHostedAppUrl(" NONE ")).toBeNull();
   });
 });

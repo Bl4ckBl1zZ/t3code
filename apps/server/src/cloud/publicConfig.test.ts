@@ -6,6 +6,7 @@ import * as Result from "effect/Result";
 import {
   hostedAppUrlConfig,
   makeCloudCliOAuthConfig,
+  makeHostedAppUrlConfig,
   makeRelayUrlConfig,
   resolveRelayClientTracingConfig,
 } from "./publicConfig.ts";
@@ -46,6 +47,19 @@ it.effect("rejects an insecure runtime relay URL override", () =>
 
 it.effect("rejects an injected relay URL with a non-origin path", () =>
   makeRelayUrlConfig("https://embedded.example.test/path").pipe(provideEnv({}), Effect.flip),
+);
+
+it.effect("has no hosted app when the build says none, unless overridden at runtime", () =>
+  Effect.gen(function* () {
+    assert.equal(yield* makeHostedAppUrlConfig("").pipe(provideEnv({})), "https://app.t3.codes");
+    assert.isNull(yield* makeHostedAppUrlConfig("none").pipe(provideEnv({})));
+    assert.equal(
+      yield* makeHostedAppUrlConfig("none").pipe(
+        provideEnv({ T3CODE_HOSTED_APP_URL: "https://app.fork.example/" }),
+      ),
+      "https://app.fork.example",
+    );
+  }),
 );
 
 it.effect("normalizes the hosted app URL to an absolute origin", () =>

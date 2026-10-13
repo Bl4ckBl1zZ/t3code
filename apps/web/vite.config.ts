@@ -46,7 +46,10 @@ const configuredReleaseRepository = repoEnv.T3CODE_RELEASE_REPOSITORY?.trim() ||
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
 const configuredHostedAppUrl = (() => {
-  const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
+  // T3CODE_HOSTED_APP_URL is the build's hosted app for every bundle; `none`
+  // builds without one (see resolveHostedAppUrl).
+  const explicitHostedAppUrl =
+    process.env.VITE_HOSTED_APP_URL?.trim() || repoEnv.T3CODE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
     return explicitHostedAppUrl;
   }

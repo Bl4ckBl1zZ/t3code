@@ -143,7 +143,7 @@ import {
 } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "../../components/CopyTextButton";
 import { ControlPillMenu } from "../../components/ControlPill";
-import { copyPromptLink } from "../prompt-links/prompt-link-actions";
+import { copyPromptLink, promptLinkOrigin } from "../prompt-links/prompt-link-actions";
 import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
 import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
 import {
@@ -355,12 +355,13 @@ function UserMessageCopyButton(props: {
   );
   // A link carries plain text, so context chips become their labels.
   const linkText = replaceComposerContextReferences(props.text, (reference) => reference.label);
-  if (linkText.length > PROMPT_LINK_MAX_PROMPT_LENGTH) return button;
+  const origin = promptLinkOrigin;
+  if (origin === null || linkText.length > PROMPT_LINK_MAX_PROMPT_LENGTH) return button;
   return (
     <ControlPillMenu
       actions={USER_MESSAGE_COPY_MENU_ACTIONS}
       onPressAction={({ nativeEvent }) => {
-        if (nativeEvent.event === "copy-prompt-link") void copyPromptLink(linkText);
+        if (nativeEvent.event === "copy-prompt-link") void copyPromptLink(linkText, origin);
       }}
       shouldOpenOnLongPress
     >

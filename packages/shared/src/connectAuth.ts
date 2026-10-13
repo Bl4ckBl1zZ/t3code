@@ -15,6 +15,18 @@ const CONNECT_AUTHORIZE_PATH = "/connect";
 export const DEFAULT_HOSTED_APP_URL = "https://app.t3.codes";
 
 /**
+ * The hosted app a build points at, from its `T3CODE_HOSTED_APP_URL`. Unset
+ * follows upstream's; `none` marks a build without a hosted app (a fork with
+ * no app.t3.codes of its own), which returns null so callers hide hosted
+ * sign-in, pairing, and share links instead of sending users to upstream's.
+ */
+export function resolveHostedAppUrl(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed.toLowerCase() === "none") return null;
+  return trimmed || DEFAULT_HOSTED_APP_URL;
+}
+
+/**
  * Requested at authorize time by the hosted page and by the CLI's device
  * authorization request; keep both sides on this single definition.
  * `offline_access` asks Clerk for the refresh token the CLI relies on.

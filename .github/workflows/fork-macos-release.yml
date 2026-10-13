@@ -95,6 +95,9 @@ jobs:
       # `t3 update` and server-update offers follow this repository. It does
       # not publish the t3 CLI, so builds offer desktop app updates only.
       T3CODE_RELEASE_REPOSITORY: ${{ github.repository }}
+      # The fork has no hosted web app: the CLI signs in with a device code,
+      # and prompt and pairing links never point at upstream's app.t3.codes.
+      T3CODE_HOSTED_APP_URL: none
       # Fork builds send no usage analytics to upstream's PostHog unless the
       # user sets T3CODE_TELEMETRY_ENABLED=true; this bakes in the default.
       T3CODE_TELEMETRY_ENABLED: "false"

@@ -1,7 +1,7 @@
 import {
   connectLoopbackRedirectUri,
   CONNECT_OAUTH_SCOPES,
-  DEFAULT_HOSTED_APP_URL,
+  resolveHostedAppUrl,
 } from "@t3tools/shared/connectAuth";
 import { clerkFrontendApiUrlFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 declare const __T3CODE_BUILD_RELAY_URL__: string | undefined;
+declare const __T3CODE_BUILD_HOSTED_APP_URL__: string | undefined;
 declare const __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
 declare const __T3CODE_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__: string | undefined;
 declare const __T3CODE_BUILD_RELAY_CLIENT_OTLP_TRACES_URL__: string | undefined;
@@ -105,14 +106,28 @@ export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
 export const relayUrlConfig = makeRelayUrlConfig();
 
 /**
- * Hosted app origin used for out-of-band OAuth on headless
- * machines. Overridable so staging/nightly builds can point their CLIs at a
- * matching hosted deployment.
+ * Hosted app origin whose /connect page signs the CLI in through a browser.
+ * Overridable so staging/nightly builds can point their CLIs at a matching
+ * hosted deployment. Null when the build (or `T3CODE_HOSTED_APP_URL=none`)
+ * has no hosted app; the CLI then signs in with a device code instead.
  */
-export const hostedAppUrlConfig = makePublicValueConfig(
-  "T3CODE_HOSTED_APP_URL",
-  DEFAULT_HOSTED_APP_URL,
-).pipe(Config.mapEffect(validateHostedAppUrl));
+export function makeHostedAppUrlConfig(
+  fallback = readBuildTimeValue(
+    typeof __T3CODE_BUILD_HOSTED_APP_URL__ === "undefined"
+      ? undefined
+      : __T3CODE_BUILD_HOSTED_APP_URL__,
+  ),
+) {
+  return Config.String("T3CODE_HOSTED_APP_URL").pipe(
+    Config.withDefault(fallback),
+    Config.mapEffect((value) => {
+      const hostedAppUrl = resolveHostedAppUrl(value);
+      return hostedAppUrl === null ? Effect.succeed(null) : validateHostedAppUrl(hostedAppUrl);
+    }),
+  );
+}
+
+export const hostedAppUrlConfig = makeHostedAppUrlConfig();
 
 function validateHostedAppUrl(value: string) {
   try {

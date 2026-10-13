@@ -459,6 +459,14 @@ export const make = Effect.gen(function* () {
   const login = Effect.fn("cloud.cli_token.login")(function* () {
     const metadata = yield* cloudCliOAuthConfig;
     const hostedAppUrl = yield* hostedAppUrlConfig;
+    if (hostedAppUrl === null) {
+      // Browser sign-in goes through a hosted app's /connect page. Without
+      // one, the device code flow talks to this build's Clerk directly.
+      yield* Console.log(
+        "This build of T3 Code has no hosted web app for browser sign-in, so sign in with a code instead.",
+      );
+      return { _tag: "HeadlessRequested" } as const;
+    }
     const { verifier, challenge, state } = yield* makePkceRequest;
     const callback = yield* Deferred.make<string>();
     const layerCallbackRoute = HttpRouter.add(

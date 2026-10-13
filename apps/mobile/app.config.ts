@@ -568,6 +568,8 @@ const config: ExpoConfig = {
     relay: {
       url: repoEnv.T3CODE_RELAY_URL ?? null,
     },
+    // Origin of shareable prompt links; `none` for a build without a hosted app.
+    hostedAppUrl: repoEnv.T3CODE_HOSTED_APP_URL ?? null,
     // Where this build's releases are published. Unset follows upstream.
     releases: {
       repository: repoEnv.T3CODE_RELEASE_REPOSITORY ?? null,
