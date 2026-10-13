@@ -3669,6 +3669,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             );
           }
           for (const { output } of claudeToolResultEntriesFromMessage(message)) {
+            // Cheap gate before rendering any text: every tool result passes here.
+            const value = claudeNativeToolOutputValue(output);
+            const backgrounded =
+              typeof value === "string"
+                ? value.includes("running in background")
+                : typeof value === "object" &&
+                  value !== null &&
+                  typeof Reflect.get(value, "backgroundTaskId") === "string";
+            if (!backgrounded) continue;
             const launch = parseClaudeBackgroundLaunch(claudeCommandOutputText(output));
             if (launch !== null) {
               backgroundTaskOutputEntry(launch.taskId).outputPath = launch.outputPath;
