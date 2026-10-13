@@ -44,7 +44,7 @@ const CLAUDE_AUTO_COMPACT_CHOICES = [
   { id: "1m", label: "1M", tokens: 1_000_000, isDefault: true },
 ] as const;
 
-export const CLAUDE_AUTO_COMPACT_OPTION_ID = "autoCompactWindow";
+const CLAUDE_AUTO_COMPACT_OPTION_ID = "autoCompactWindow";
 
 /** The top stop means "no cap of ours"; the adapter sends nothing for it. */
 const CLAUDE_AUTO_COMPACT_UNCAPPED_TOKENS = 1_000_000;

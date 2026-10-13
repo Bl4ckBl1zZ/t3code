@@ -954,7 +954,7 @@ export const layerQueryRunner: Layer.Layer<
  * The narrower of the thread's Context slider and the provider's
  * "Auto-compact after" setting; undefined when neither caps anything.
  */
-export function claudeAutoCompactWindow(
+function claudeAutoCompactWindow(
   compiledSelection: Pick<CompiledClaudeModelSelection, "autoCompactWindow">,
   settings: ClaudeSettings | undefined,
 ): number | undefined {
