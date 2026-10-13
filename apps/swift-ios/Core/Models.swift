@@ -511,6 +511,13 @@ public struct RepositoryIdentity: Codable, Equatable, Sendable {
         public let remoteUrl: String
     }
 
+    /// A fork's own remote, when the checkout's canonical repository is its
+    /// upstream. Absent on servers that do not tell them apart.
+    public struct Origin: Codable, Equatable, Sendable {
+        public let canonicalKey: String
+        public let displayName: String?
+    }
+
     public let canonicalKey: String
     public let locator: Locator
     public let rootPath: String?
@@ -518,6 +525,11 @@ public struct RepositoryIdentity: Codable, Equatable, Sendable {
     public let provider: String?
     public let owner: String?
     public let name: String?
+    public var origin: Origin? = nil
+
+    /// The key clients group checkouts by: a fork's own remote, otherwise the
+    /// canonical repository. Ports `repositoryGroupingKeyOf`.
+    public var groupingKey: String { origin?.canonicalKey ?? canonicalKey }
 }
 
 public struct ProjectScript: Codable, Identifiable, Equatable, Sendable {

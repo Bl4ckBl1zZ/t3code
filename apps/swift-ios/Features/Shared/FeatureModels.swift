@@ -203,6 +203,10 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     public var faviconPath: String?
     public var projectIcon: ProjectIconOverride?
     public var repositoryCanonicalKey: String?
+    /// A fork's own remote when it has one, else the canonical key: what a
+    /// prompt link's repository matches, so a fork never stands in for its
+    /// upstream.
+    public var repositoryGroupingKey: String? = nil
     /// Provider instances the host turned off for this project, which its
     /// pickers hide (see ``scoping(_:)``). Nil when the server has nothing to
     /// scope or predates per-project provider switches.
@@ -222,7 +226,8 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         faviconPath: String? = nil,
         projectIcon: ProjectIconOverride? = nil,
         repositoryCanonicalKey: String? = nil,
-        providerInstancesOff: Set<String>? = nil
+        providerInstancesOff: Set<String>? = nil,
+        repositoryGroupingKey: String? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -238,6 +243,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.projectIcon = projectIcon
         self.repositoryCanonicalKey = repositoryCanonicalKey
         self.providerInstancesOff = providerInstancesOff
+        self.repositoryGroupingKey = repositoryGroupingKey
     }
 
     /// The catalog as this project sees it: an instance the project turned off

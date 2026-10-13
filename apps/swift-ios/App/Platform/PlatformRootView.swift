@@ -6,6 +6,8 @@ struct PlatformRootView: View {
 
     @State private var navigationRequest: FeatureWorkspaceNavigationRequest?
     @State private var pendingRoute: PlatformRoute?
+    @State private var pendingPromptLink: PromptLinks.Route?
+    @State private var missingRepositoryLink: MissingRepositoryPromptLink?
     @State private var previousThreadStates: [String: FeatureThreadState]?
     @State private var lastNotificationPreference: Bool?
     @State private var incomingShareCoordinator = PlatformIncomingShareCoordinator()
@@ -47,6 +49,7 @@ struct PlatformRootView: View {
             synchronizeNotificationPreference()
             synchronizeCloudDelivery()
             consumePendingRouteIfPossible()
+            consumePendingPromptLinkIfPossible()
             consumeMailboxRouteIfAvailable()
             refreshIncomingShares()
         }
@@ -103,6 +106,20 @@ struct PlatformRootView: View {
             )
             .presentationDetents([.medium, .large])
         }
+        .alert(
+            missingRepositoryLink.map { "You don't have \($0.repository.displayName)" } ?? "",
+            isPresented: Binding(get: { missingRepositoryLink != nil }, set: { if !$0 { missingRepositoryLink = nil } }),
+            presenting: missingRepositoryLink
+        ) { link in
+            Button("Cancel", role: .cancel) {}
+            if link.request.prompt != nil {
+                Button("Use Without Project") {
+                    Task { @MainActor in await openScratchDraft(link.request) }
+                }
+            }
+        } message: { _ in
+            Text("Add it as a project on one of your environments, then open the link again.")
+        }
         .alert("Create a project to continue", isPresented: $incomingShareNeedsProject) {
             Button("Not now", role: .cancel) {}
             Button("Create project") {
@@ -145,6 +162,12 @@ struct PlatformRootView: View {
     }
 
     private func handle(url: URL, letOnboardingConfirmConnection: Bool) {
+        // A prompt link fills a draft; plain `t3code://new` and thread links
+        // keep their deep-link behavior below.
+        if let route = PromptLinks.route(for: url), PromptLinks.carriesPromptLink(route) {
+            handlePromptLink(route)
+            return
+        }
         do {
             let route = try PlatformDeepLinkParser.parse(url)
             if case .connection = route,
@@ -173,6 +196,150 @@ struct PlatformRootView: View {
         guard let route = pendingRoute else { return }
         pendingRoute = nil
         handle(route)
+    }
+
+    // MARK: Prompt links
+
+    private func handlePromptLink(_ route: PromptLinks.Route) {
+        guard !model.isLoading else {
+            pendingPromptLink = route
+            return
+        }
+        Task { @MainActor in
+            await consumePromptLink(route)
+        }
+    }
+
+    private func consumePendingPromptLinkIfPossible() {
+        guard let route = pendingPromptLink else { return }
+        pendingPromptLink = nil
+        handlePromptLink(route)
+    }
+
+    /// Opens a prompt link. Nothing is ever sent, and the runtime mode, branch
+    /// and worktree stay the user's own: the link only fills a draft, and the
+    /// user reads it and presses Send.
+    @MainActor
+    private func consumePromptLink(_ route: PromptLinks.Route) async {
+        switch route {
+        case let .thread(environmentID, threadID, query):
+            let prompt: PromptLinks.LinkedPrompt?
+            switch PromptLinks.parseThreadLinkPrompt(query) {
+            case let .failure(failure):
+                model.reportFailure(failure.message, title: "Couldn't Open Link")
+                return
+            case let .success(value): prompt = value
+            }
+            await consume(.thread(environmentID: environmentID, threadID: threadID))
+            if let prompt, case let .thread(id)? = navigationRequest?.destination {
+                model.pendingLinkedPrompts[id] = prompt
+            }
+        case let .new(query):
+            let link: PromptLinks.NewThreadLink
+            switch PromptLinks.parseNewThreadLink(query) {
+            case let .failure(failure):
+                model.reportFailure(failure.message, title: "Couldn't Open Link")
+                return
+            case let .success(value): link = value
+            }
+            let request: LinkedDraftRequest
+            let repository: PromptLinks.Repository?
+            switch link {
+            case let .new(prompt, linkRepository, provider, modelName):
+                request = LinkedDraftRequest(prompt: prompt, provider: provider, model: modelName, pullRequest: nil)
+                repository = linkRepository
+            case let .pullRequest(pullRequest, prompt):
+                if let thread = PromptLinkResolution.pullRequestThread(in: model.snapshot.threads, pullRequest: pullRequest) {
+                    navigationRequest = FeatureWorkspaceNavigationRequest(destination: .thread(id: thread.id))
+                    if let prompt { model.pendingLinkedPrompts[thread.id] = prompt }
+                    return
+                }
+                request = LinkedDraftRequest(prompt: prompt, provider: nil, model: nil, pullRequest: pullRequest)
+                repository = pullRequest.repository
+            }
+            guard let repository else {
+                await openScratchDraft(request)
+                return
+            }
+            if let project = PromptLinkResolution.project(
+                for: repository,
+                in: DailyUXCreationContext.projects(in: model.snapshot),
+                threads: model.snapshot.threads
+            ) {
+                await openProjectDraft(project, request)
+            } else {
+                missingRepositoryLink = MissingRepositoryPromptLink(repository: repository, request: request)
+            }
+        }
+    }
+
+    /// Writes the link's prompt and model into a fresh New Task draft in
+    /// `project` and opens it, with the notice the link owes the user.
+    @MainActor
+    private func openProjectDraft(_ project: FeatureProject, _ request: LinkedDraftRequest) async {
+        var selection: FeatureSelection?
+        var modelUnavailable = false
+        if let provider = request.provider {
+            let providers = model.client.workspaceServerConfigs()
+                .first { $0.environmentID == project.environmentID }?.providers ?? []
+            let resolved = PromptLinks.resolveModel(
+                PromptLinkResolution.providerCandidates(providers, project: project),
+                provider: provider,
+                model: request.model
+            )
+            selection = resolved.map { FeatureSelection(providerID: $0.instanceID, modelID: $0.model) }
+            modelUnavailable = resolved?.exact != true
+        }
+        let draftID = UUID().uuidString.lowercased()
+        let draft = FeatureComposerDraft(
+            text: PromptLinkResolution.draftText(prompt: request.prompt, pullRequest: request.pullRequest),
+            selection: selection
+        )
+        do {
+            try await FeatureComposerDraftStore.shared.setDraft(
+                draft,
+                for: FeatureComposerDraftStore.newTaskKey(project: project, draftID: draftID)
+            )
+        } catch {
+            model.reportFailure("Drafts could not be saved, so the prompt was not added.", title: "Couldn't Open Link")
+            return
+        }
+        model.pendingNewTaskLinkNotices[draftID] = PromptLinks.notice(
+            hiddenCharacters: request.prompt?.hiddenCharacters ?? 0,
+            modelUnavailable: modelUnavailable,
+            extra: request.pullRequest.map {
+                "Pull request #\($0.number) is linked in the prompt. This task starts from your default branch."
+            }
+        )
+        navigationRequest = FeatureWorkspaceNavigationRequest(
+            destination: .newTask(projectID: project.id, draftID: draftID)
+        )
+    }
+
+    /// A prompt without a project opens on the most recently active machine
+    /// that offers threads without one.
+    @MainActor
+    private func openScratchDraft(_ request: LinkedDraftRequest) async {
+        let capable = DailyUXCreationContext.scratchEnvironments(
+            in: model.snapshot,
+            serverConfigs: model.client.workspaceServerConfigs()
+        ).map(\.id)
+        guard let environmentID = PromptLinks.scratchEnvironmentID(
+            mostRecentFirst: PromptLinkResolution.environmentsByRecentActivity(model.snapshot.threads),
+            scratchCapable: capable
+        ) else {
+            model.reportFailure("No connected environment offers threads without a project.", title: "Couldn't Start Without a Project")
+            return
+        }
+        do {
+            let projectID = try await model.openScratchProject(environmentID: environmentID)
+            guard let project = model.snapshot.projects.first(where: { $0.id == projectID }) else { return }
+            await openProjectDraft(project, LinkedDraftRequest(prompt: request.prompt, provider: request.provider, model: request.model, pullRequest: nil))
+        } catch is CancellationError {
+            return
+        } catch {
+            model.reportFailure(error.localizedDescription, title: "Couldn't Start Without a Project")
+        }
     }
 
     private func consumeMailboxRouteIfAvailable() {
@@ -377,6 +544,20 @@ struct PlatformRootView: View {
             liveActivitiesEnabled: model.snapshot.settings.liveActivitiesEnabled
         )
     }
+}
+
+/// What a `new` prompt link asks for, in one shape for every destination.
+private struct LinkedDraftRequest {
+    let prompt: PromptLinks.LinkedPrompt?
+    let provider: String?
+    let model: String?
+    let pullRequest: PromptLinks.PullRequest?
+}
+
+/// A prompt link naming a repository none of the user's projects hold.
+private struct MissingRepositoryPromptLink {
+    let repository: PromptLinks.Repository
+    let request: LinkedDraftRequest
 }
 
 /// A pairing link waiting for the user to confirm it.

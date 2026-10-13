@@ -5825,7 +5825,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     projectIcon: project.projectIcon,
                     repositoryCanonicalKey: project.repositoryIdentity?.canonicalKey,
                     providerInstancesOff: serverConfigsByEnvironmentID[environment.id]?
-                        .providerInstancesOff(inProject: project.id)
+                        .providerInstancesOff(inProject: project.id),
+                    repositoryGroupingKey: project.repositoryIdentity?.groupingKey
                 )
             }
         }

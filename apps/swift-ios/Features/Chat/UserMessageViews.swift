@@ -200,6 +200,13 @@ struct UserMessageBubble<Attachments: View>: View {
                 T3HUD.show("Copied", systemImage: "doc.on.doc")
             })
         }
+        // The prose alone: attached contexts belong to this thread.
+        if let link = PromptLinks.shareLink(for: content.body) {
+            actions.append(.init(id: "copy-prompt-link", title: "Copy Prompt Link", systemImage: "link") {
+                UIPasteboard.general.string = link
+                T3HUD.show("Prompt link copied", systemImage: "link")
+            })
+        }
         if let point = meta.restore, let store {
             let blocked: String? = store.isWorking
                 ? "Stop the current turn first"

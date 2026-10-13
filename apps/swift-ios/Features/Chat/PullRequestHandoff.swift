@@ -35,6 +35,13 @@ enum PullRequestHandoffKind: String, CaseIterable, Identifiable {
     var needsCheckout: Bool { self == .findings || self == .conflicts || self == .checkout }
 }
 
+/// A prompt link's notice for an open thread, and the prompt to put in the
+/// composer when the user agrees to replace what they typed.
+struct LinkedPromptAlert: Equatable {
+    let notice: String
+    let replacement: String?
+}
+
 struct PendingPullRequestPrompt: Equatable {
     let id = UUID()
     let text: String
