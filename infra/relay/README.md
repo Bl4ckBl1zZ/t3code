@@ -76,30 +76,36 @@ dependencies represented at their boundary rather than mocking internal behavior
 
 ## Deployment
 
-The relay deploys with the Alchemy CLI (`vp run --filter t3code-relay deploy` is `alchemy deploy`
-in this directory):
+This fork self-hosts the relay. PostgreSQL runs as a Dokploy service and the Worker reaches it
+through an existing Cloudflare Hyperdrive configuration, which connects to the private database
+through a Workers VPC service. Neither is provisioned by this stack.
+
+Migrate the database first, then deploy with the Alchemy CLI (`vp run --filter t3code-relay deploy`
+is `alchemy deploy` in this directory):
 
 ```sh
-vp run --filter t3code-relay deploy
-```
-
-The stack provisions the Cloudflare Worker and queues, managed endpoint resources, database
-connectivity, and relay tracing resources. Copy [`infra/relay/.env.example`](./.env.example) to
-`infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
-file from the relay directory. Runtime secrets include Clerk, APNs, and optional FCM credentials. Set
-`APNS_ENABLED=false` for an Android-only development deployment without Apple credentials. Production adopts
-the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
-the production-owned zones.
-
-The `prod` Alchemy stage owns the retained PlanetScale database and is the shared hosted relay for
-stable and nightly clients. Every other stage references that database and provisions an isolated
-PlanetScale branch and runtime role for local development, so deploy `prod` before creating
-developer stages:
-
-```sh
+vp run --filter t3code-relay migrate
 vp run --filter t3code-relay deploy -- --stage prod
-vp run --filter t3code-relay deploy -- --env-file .env.local
 ```
+
+`migrate` ([`scripts/migrate.ts`](./scripts/migrate.ts)) applies `migrations/postgres` with
+Drizzle's migrator, which records applied migrations by folder name in `drizzle.relay_migrations`.
+Before migrating it renames journal rows that the fork recorded under other names, so databases
+migrated by the fork's relay upgrade in place. It reads `DATABASE_MIGRATION_URL`, falling back to
+`DATABASE_URL`.
+
+The stack provisions the Cloudflare Worker, queues, rate limiters, and the managed endpoint DNS
+zones, and binds the Hyperdrive configuration named by `DATABASE_HYPERDRIVE_ID`. The database
+password lives only in Hyperdrive. Copy [`infra/relay/.env.example`](./.env.example) to
+`infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
+file from the relay directory. Runtime secrets include the scoped Cloudflare token, Clerk, APNs, and
+optional FCM credentials. The Worker uses one least-privilege `CLOUDFLARE_RUNTIME_API_TOKEN` with
+**Cloudflare Tunnel: Edit** on the relay account and **DNS: Edit** on `RELAY_TUNNEL_ZONE_NAME`, only
+to provision and remove managed environment endpoints. Set `APNS_ENABLED=false` for an Android-only
+development deployment without Apple credentials. Production adopts the configured API and tunnel DNS
+zones as retained Cloudflare resources. Personal stages reference the production-owned zones and
+bind whichever Hyperdrive configuration their env file names, so point theirs at a non-production
+database.
 
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
 DNS-safe sanitization as Alchemy physical resource names, so `prod` uses
@@ -110,37 +116,31 @@ DNS-safe sanitization as Alchemy physical resource names, so `prod` uses
 `<stage>-<digest>.<RELAY_TUNNEL_ZONE_NAME>`. `RELAY_DOMAIN` remains available as an explicit API
 domain override.
 
-The stack's `PublishClientConfig` action ([`src/clientConfig.ts`](./src/clientConfig.ts)) writes the
-deployed relay URL and tracing configuration into the repository-root `.env`, so subsequent source
-builds point at the relay that was just deployed without copying values manually. It runs only when
-one of those outputs changed, and `T3CODE_RELAY_CLIENT_CONFIG_ENV` redirects it to another file.
+The relay provisions no tracing backend. Use Cloudflare Worker logs for diagnostics.
 
 ### Deployment CI
 
 The relay is versioned separately from client releases. `.github/workflows/deploy-relay.yml` deploys
-the shared Alchemy `prod` stage on every push to `main`. Stable and nightly release builds both
-resolve their static public config from the same
-`production` GitHub environment. Pull requests do not deploy relay stages. Developers can
-deploy personal non-production stages locally with any stage name other than `prod`.
+the shared Alchemy `prod` stage on every push to `main` while the `RELAY_DEPLOY_ENABLED` variable is
+`true`. Before deploying it starts the Dokploy PostgreSQL service if Dokploy does not report it
+running, then migrates through a `cloudflared access tcp` listener, and after deploying it checks
+`/health`, which queries the database. A manual run with `dry_run` plans the deploy without migrating
+or applying anything. Pull requests do not deploy relay stages.
 
-The repository must define these Actions variables shared by relay deployments:
+The repository must define these Actions variables:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
-- `AXIOM_ORG_ID`
-
-The repository must define these Actions secrets shared by relay deployments:
-
-- `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
-- `AXIOM_TOKEN`
+- `RELAY_DEPLOY_ENABLED`
 
 The `production` GitHub environment must define these Actions variables:
 
+- `CLOUDFLARE_ACCOUNT_ID`
+- `DATABASE_HYPERDRIVE_ID`
+- `DATABASE_TUNNEL_HOSTNAME` for CI migrations through Cloudflare Access
+- `DOKPLOY_URL` and `DOKPLOY_POSTGRES_ID` for the relay PostgreSQL service
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
-- `RELAY_DOMAIN` if overriding the derived production relay domain
+- `RELAY_DOMAIN`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -151,18 +151,19 @@ The `production` GitHub environment must define these Actions variables:
 
 The `production` GitHub environment must define these Actions secrets:
 
+- `CLOUDFLARE_API_TOKEN`, used only by Alchemy while deploying
+- `CLOUDFLARE_RUNTIME_API_TOKEN`, bound into the Worker
+- `DATABASE_MIGRATION_URL`, a `127.0.0.1:15433` URL for the CI listener
+- `DATABASE_ACCESS_CLIENT_ID` and `DATABASE_ACCESS_CLIENT_SECRET` for Cloudflare Access
+- `DOKPLOY_AUTH_TOKEN`
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 - `FCM_SERVICE_ACCOUNT` when Android push is enabled
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the production relay's
-derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
-and hosted web builds.
+The release workflow reads the production relay's public URL and Clerk publishable key from the same
+environment for downstream desktop, CLI, and hosted web builds.
 
 See:
 
 - [T3 Connect setup](../../docs/operations/connect-setup.md) for Clerk keys, JWT templates, and sign-up restrictions.
-- [Relay Observability](../../docs/operations/relay-observability.md) for deployment tracing and diagnostics.
 - [T3 Connect architecture](../../docs/internals/t3-connect.md) for environment linking and trust boundaries.

@@ -2,55 +2,17 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-The relay Alchemy stack owns a shared Axiom trace setup:
+The self-hosted relay uses Cloudflare Workers observability for diagnostics and provisions no
+external tracing backend.
 
-- `t3-code-relay-traces-prod`, the OpenTelemetry trace dataset shared by the Worker, mobile app, and
-  first-party relay clients
-- `t3-code-relay-otel-ingest-prod`, the dataset-scoped Worker ingest token
-- `t3-code-mobile-otel-ingest-prod`, the dataset-scoped mobile ingest token
-- `t3-code-relay-client-otel-ingest-prod`, the dataset-scoped first-party relay-client ingest token
-- `t3-code-relay-recent-spans-prod`, a view of recent request and endpoint spans
+Use **Cloudflare Dashboard > Workers & Pages > the relay Worker > Observability** to inspect
+invocation status, exceptions, and structured log messages. Request, queue, and cron handlers still
+create Effect spans so trace identifiers can be returned to clients and correlated with errors, but
+the spans are not exported. The span and attribute names below identify where a log line or error
+came from.
 
-Alchemy stages append their sanitized stage name to isolate resources, for example
-`t3-code-relay-traces-dev-julius` for a personal stage.
-
-Deploy from `infra/relay` with the normal Alchemy workflow:
-
-```sh
-vp run deploy
-```
-
-Alchemy resolves account-level Axiom deployment credentials through its provider. At runtime, the
-Worker receives only its scoped ingest token. Mobile and relay clients use their own separately
-provisioned scoped ingest tokens.
-
-The Worker emits Effect's built-in HTTP server spans plus endpoint and database child spans.
-Effect's OpenTelemetry exporter stores semantic HTTP attributes below the `attributes.` prefix.
-For example:
-
-```apl
-['t3-code-relay-traces-prod']
-| where kind == 'server'
-| extend endpoint = column_ifexists('attributes.http.route', ''),
-    customAttributes = column_ifexists('attributes.custom', dynamic({}))
-| project _time, name, trace_id, duration,
-    ['attributes.http.request.method'],
-    ['attributes.url.path'],
-    ['attributes.http.response.status_code'],
-    endpoint,
-    relayOperation = customAttributes['relay']['operation']
-| order by _time desc
-| limit 200
-```
-
-The provisioned view also reads the endpoint from `attributes.http.route`. Relay-specific span
-annotations are stored under `attributes.custom`; `relay.operation` is one of the emitted custom
-attributes.
-
-Agents should prefer the provisioned view or APL queries for completed incidents instead of
-tailing the Cloudflare Worker. The stack does not provision a separate query token. Responders who
-need scripted query access use the authorized account-level `AXIOM_TOKEN` together with
-`AXIOM_ORG_ID`; scoped ingest tokens remain write-only credentials for their producers.
+Keep production logging free of credentials, APNs device tokens, Clerk bearer tokens, and database
+connection strings.
 
 DPoP proof failures include the stable `relay.dpop.failure_code` span attribute. A `time_window`
 failure means that a signed proof was too old or too far in the future for the relay's allowed
@@ -85,26 +47,3 @@ forwards. The details are on the child spans: `HookInboxStore.hold` carries
 the consecutive failures behind the retry delay, the longest time a delivered request waited, and
 the backlog left. A run that errored outright has `relay.inbox.run_result = failed` on the root
 `relay.inbox.deliver` span instead.
-
-Questions these answer:
-
-```apl
-// Webhook outcomes per hour
-['t3-code-relay-traces-prod']
-| where name == 'relay.hooks.forward'
-| summarize count() by bin(_time, 1h), outcome = tostring(['attributes.custom']['relay.hook.outcome'])
-
-// Inboxes stuck behind an unreachable environment, by endpoint
-['t3-code-relay-traces-prod']
-| where name == 'HookInboxStore.deliverDue'
-| extend c = ['attributes.custom']
-| where tostring(c['relay.inbox.run_result']) == 'unreachable'
-| project trace_id, failures = toint(c['relay.inbox.consecutive_failures']),
-    backlog = toint(c['relay.inbox.held_count'])
-| join kind=inner (
-    ['t3-code-relay-traces-prod']
-    | where name == 'relay.inbox.deliver'
-    | project trace_id, endpoint = tostring(['attributes.custom']['relay.hook.endpoint_key'])
-  ) on trace_id
-| summarize runs = count(), failures = max(failures), backlog = max(backlog) by endpoint
-```

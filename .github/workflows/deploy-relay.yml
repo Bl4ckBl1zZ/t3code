@@ -1,15 +1,19 @@
 name: Deploy T3 Connect relay
 
-# No push trigger: this repository's relay is self-hosted on its own database
-# and must not be redeployed with upstream's relay configuration on every push.
 on:
-  # Redeploys main after a variable or secret change. Alchemy redeploys the
-  # Worker when a value it reads changes, so force is rarely needed, and it
-  # replaces the Postgres runtime role (alchemy-run/alchemy#1832).
+  push:
+    branches:
+      - main
+  # Redeploys main after a variable or secret change. A dry run plans the
+  # deploy without migrating the database or applying changes.
   workflow_dispatch:
     inputs:
       force:
-        description: Redeploy every resource, including ones with no detected changes. Replaces the Postgres runtime role.
+        description: Redeploy every resource, including ones with no detected changes
+        type: boolean
+        default: false
+      dry_run:
+        description: Plan only. Skips the database migration and applies nothing.
         type: boolean
         default: false
 
@@ -25,16 +29,16 @@ concurrency:
 jobs:
   deploy_relay:
     name: Deploy production relay
-    # A manual run from another branch would deploy that branch to production.
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # A manual run from another branch would deploy that branch to production;
+    # a dry run from any branch only plans.
+    if: vars.RELAY_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/main' || inputs.dry_run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: production
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      PLANETSCALE_ORGANIZATION: ${{ vars.PLANETSCALE_ORGANIZATION }}
-      AXIOM_ORG_ID: ${{ vars.AXIOM_ORG_ID }}
+      DATABASE_HYPERDRIVE_ID: ${{ vars.DATABASE_HYPERDRIVE_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
@@ -46,6 +50,10 @@ jobs:
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
       APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
+      DATABASE_TUNNEL_HOSTNAME: ${{ vars.DATABASE_TUNNEL_HOSTNAME }}
+      DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+      DOKPLOY_POSTGRES_ID: ${{ vars.DOKPLOY_POSTGRES_ID }}
+      DOKPLOY_AUTH_TOKEN: ${{ secrets.DOKPLOY_AUTH_TOKEN }}
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout
@@ -65,21 +73,176 @@ jobs:
             args:
               - --filter=t3code-relay...
 
-      - name: Deploy production relay stage
-        run: vp run --filter t3code-relay deploy --stage prod --yes --no-input ${{ inputs.force && '--force' || '' }}
+      - name: Validate production deployment configuration
+        shell: bash
         env:
-          # The PublishClientConfig action writes the client env here instead
-          # of the repo-root .env; nothing on the runner reads it.
-          T3CODE_RELAY_CLIENT_CONFIG_ENV: ${{ runner.temp }}/relay-client-config.env
+          CLOUDFLARE_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_RUNTIME_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_RUNTIME_API_TOKEN }}
+          DATABASE_MIGRATION_URL_VALUE: ${{ secrets.DATABASE_MIGRATION_URL }}
+          DATABASE_ACCESS_CLIENT_ID_VALUE: ${{ secrets.DATABASE_ACCESS_CLIENT_ID }}
+          DATABASE_ACCESS_CLIENT_SECRET_VALUE: ${{ secrets.DATABASE_ACCESS_CLIENT_SECRET }}
+          CLERK_SECRET_KEY_VALUE: ${{ secrets.CLERK_SECRET_KEY }}
+          APNS_PRIVATE_KEY_VALUE: ${{ secrets.APNS_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          required=(
+            CLOUDFLARE_ACCOUNT_ID
+            DATABASE_HYPERDRIVE_ID
+            RELAY_DOMAIN
+            RELAY_API_ZONE_NAME
+            RELAY_TUNNEL_ZONE_NAME
+            CLERK_PUBLISHABLE_KEY
+            CLERK_JWT_AUDIENCE
+            APNS_ENVIRONMENT
+            APNS_TEAM_ID
+            APNS_KEY_ID
+            APNS_BUNDLE_ID
+            DATABASE_TUNNEL_HOSTNAME
+            DOKPLOY_URL
+            DOKPLOY_POSTGRES_ID
+            DOKPLOY_AUTH_TOKEN
+            CLOUDFLARE_API_TOKEN_VALUE
+            CLOUDFLARE_RUNTIME_API_TOKEN_VALUE
+            DATABASE_MIGRATION_URL_VALUE
+            DATABASE_ACCESS_CLIENT_ID_VALUE
+            DATABASE_ACCESS_CLIENT_SECRET_VALUE
+            CLERK_SECRET_KEY_VALUE
+            APNS_PRIVATE_KEY_VALUE
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing production relay configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Install Dokploy CLI
+        if: ${{ !inputs.dry_run }}
+        run: npm install --global @dokploy/cli@0.3.0
+
+      - name: Ensure Dokploy PostgreSQL is running
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! database_json="$(
+            dokploy postgres one \
+              --postgresId "$DOKPLOY_POSTGRES_ID" \
+              --json
+          )"; then
+            echo "::warning::Dokploy's control-plane API was unavailable; the authenticated database migration will perform the authoritative availability check."
+            exit 0
+          fi
+
+          database_status="$(jq -r '.applicationStatus // empty' <<<"$database_json")"
+          if [[ "$database_status" == "done" ]]; then
+            echo "Dokploy PostgreSQL is already running."
+            exit 0
+          fi
+
+          echo "Dokploy PostgreSQL status is '${database_status:-unknown}'; deploying it."
+          dokploy postgres deploy \
+            --postgresId "$DOKPLOY_POSTGRES_ID" \
+            --json >/dev/null
+
+          for attempt in {1..60}; do
+            database_status="$(
+              dokploy postgres one \
+                --postgresId "$DOKPLOY_POSTGRES_ID" \
+                --json |
+                jq -r '.applicationStatus // empty'
+            )"
+            if [[ "$database_status" == "done" ]]; then
+              echo "Dokploy PostgreSQL is running."
+              exit 0
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo "Dokploy PostgreSQL did not become ready; last status: ${database_status:-unknown}." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Install cloudflared
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p --mode=0755 /usr/share/keyrings
+          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg |
+            sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" |
+            sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes cloudflared
+
+      - name: Migrate production relay database
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.DATABASE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.DATABASE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          cloudflared access tcp \
+            --hostname "$DATABASE_TUNNEL_HOSTNAME" \
+            --url 127.0.0.1:15433 \
+            --log-level warn &
+          proxy_pid=$!
+          trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
+
+          for attempt in {1..30}; do
+            if (echo >/dev/tcp/127.0.0.1/15433) 2>/dev/null; then
+              break
+            fi
+            if ! kill -0 "$proxy_pid" 2>/dev/null; then
+              echo "cloudflared stopped before the database proxy became ready." >&2
+              exit 1
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              echo "Timed out waiting for the database proxy." >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          vp run --filter t3code-relay migrate
+
+      - name: Deploy production relay stage
+        run: vp run --filter t3code-relay deploy --stage prod --yes --no-input ${{ inputs.force && '--force' || '' }} ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          PLANETSCALE_API_TOKEN_ID: ${{ secrets.PLANETSCALE_API_TOKEN_ID }}
-          PLANETSCALE_API_TOKEN: ${{ secrets.PLANETSCALE_API_TOKEN }}
-          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+          CLOUDFLARE_RUNTIME_API_TOKEN: ${{ secrets.CLOUDFLARE_RUNTIME_API_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+          # Optional: Android push stays off until this secret exists.
           FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
 
+      - name: Verify production relay and database
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if response="$(curl --fail --silent --show-error "https://$RELAY_DOMAIN/health")" &&
+              jq -e '.ok == true and .service == "relay"' <<<"$response" >/dev/null; then
+              echo "Production relay and PostgreSQL health check passed."
+              exit 0
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              echo "Production relay health check did not pass after deployment." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
       - name: Publish relay deploy commit status
+        if: ${{ !inputs.dry_run }}
         uses: actions/github-script@v8
         with:
           script: |
