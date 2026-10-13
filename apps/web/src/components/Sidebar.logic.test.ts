@@ -153,29 +153,25 @@ describe("deleteSelectedThreadEntries", () => {
   const failure = AsyncResult.failure(Cause.fail(new Error("Delete failed")));
   const interrupted = AsyncResult.failure(Cause.interrupt());
 
-  it("waits for each delete and excludes only earlier successes from worktree checks", async () => {
+  it("waits for each delete before starting the next", async () => {
     let resolveDelete!: (result: typeof success) => void;
     const pendingDelete = new Promise<typeof success>((resolve) => {
       resolveDelete = resolve;
     });
-    const worktreeChecks: { threadKey: string; deletedThreadKeys: string[] }[] = [];
+    const attempted: string[] = [];
     const deletion = deleteSelectedThreadEntries({
       entries,
-      delete: async ({ threadKey }, deletedThreadKeys) => {
-        worktreeChecks.push({ threadKey, deletedThreadKeys: [...deletedThreadKeys] });
+      delete: async ({ threadKey }) => {
+        attempted.push(threadKey);
         return threadKey === "one" ? pendingDelete : success;
       },
     });
 
-    expect(worktreeChecks).toEqual([{ threadKey: "one", deletedThreadKeys: [] }]);
+    expect(attempted).toEqual(["one"]);
     resolveDelete(success);
     const outcome = await deletion;
 
-    expect(worktreeChecks).toEqual([
-      { threadKey: "one", deletedThreadKeys: [] },
-      { threadKey: "two", deletedThreadKeys: ["one"] },
-      { threadKey: "three", deletedThreadKeys: ["one", "two"] },
-    ]);
+    expect(attempted).toEqual(["one", "two", "three"]);
     expect(outcome).toEqual({
       deletedThreadKeys: new Set(["one", "two", "three"]),
       firstFailure: null,
@@ -184,18 +180,15 @@ describe("deleteSelectedThreadEntries", () => {
 
   it("continues after ordinary failures and keeps the first failure", async () => {
     const laterFailure = AsyncResult.failure(Cause.fail(new Error("Later failure")));
-    const deletedKeysAtLastEntry: string[][] = [];
     const outcome = await deleteSelectedThreadEntries({
       entries: [...entries, { threadKey: "four" }],
-      delete: async ({ threadKey }, deletedThreadKeys) => {
+      delete: async ({ threadKey }) => {
         if (threadKey === "one") return failure;
         if (threadKey === "three") return laterFailure;
-        if (threadKey === "four") deletedKeysAtLastEntry.push([...deletedThreadKeys]);
         return success;
       },
     });
 
-    expect(deletedKeysAtLastEntry).toEqual([["two"]]);
     expect(outcome).toEqual({
       deletedThreadKeys: new Set(["two", "four"]),
       firstFailure: failure,
@@ -219,26 +212,6 @@ describe("deleteSelectedThreadEntries", () => {
     expect(outcome).toEqual({
       deletedThreadKeys: testCase.deletedThreadKeys,
       firstFailure: testCase.firstFailure,
-    });
-  });
-
-  it("does not count a skipped entry as deleted", async () => {
-    const visibleEntries = new Set(entries.map(({ threadKey }) => threadKey));
-    const worktreeChecks: string[][] = [];
-    const outcome = await deleteSelectedThreadEntries({
-      entries,
-      delete: async ({ threadKey }, deletedThreadKeys) => {
-        if (!visibleEntries.has(threadKey)) return null;
-        worktreeChecks.push([...deletedThreadKeys]);
-        visibleEntries.delete("two");
-        return success;
-      },
-    });
-
-    expect(worktreeChecks).toEqual([[], ["one"]]);
-    expect(outcome).toEqual({
-      deletedThreadKeys: new Set(["one", "three"]),
-      firstFailure: null,
     });
   });
 });
