@@ -1,5 +1,15 @@
 # T3 Code
 
+## This fork
+
+This repository is the Bl4ckBl1zZ fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). The rest of this file is upstream's. Where it names upstream infrastructure (app.t3.codes, store apps, npm and `t3` CLI releases, upstream CI), the fork differs:
+
+- **Desktop releases:** `.github/workflows/fork-macos-release.yml` publishes `fork-v<version>` GitHub Releases (macOS arm64, Windows x64/arm64) from `main`. Installed builds update from them.
+- **iOS:** `.github/workflows/mobile-ios-testflight.yml` builds `apps/mobile` and ships it to TestFlight. No Android, App Store, or OTA builds.
+- **Relay:** T3 Connect runs on the fork's self-hosted relay (`deploy-relay.yml`). Builds take the relay URL and Clerk config from repository variables.
+- **Old fork data:** databases from the pre-rework fork are upgraded in place by `apps/server/src/persistence/forkDatabaseBridge.ts`.
+- **Identity:** the product name "T3 Code (Alpha)", app IDs, and signing team stay unchanged so installed builds keep accepting updates.
+
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
 
 You can think of T3 Code as an open source "bring-your-own-subscription" alternative to apps like Claude Desktop, Codex App, Cursor Glass and Conductor.
