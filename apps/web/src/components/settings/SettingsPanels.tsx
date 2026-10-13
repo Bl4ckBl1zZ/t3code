@@ -280,6 +280,7 @@ function AboutVersionTitle() {
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
+  const [isChangingAutoUpdate, setIsChangingAutoUpdate] = useState(false);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
 
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
@@ -315,6 +316,26 @@ function AboutVersionSection() {
     },
     [selectedUpdateChannel],
   );
+
+  const handleAutoUpdateChange = useCallback((enabled: boolean) => {
+    const bridge = window.desktopBridge;
+    if (!bridge?.setAutoUpdateEnabled) return;
+    setIsChangingAutoUpdate(true);
+    void bridge
+      .setAutoUpdateEnabled(enabled)
+      .catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not change automatic updates",
+            description: error instanceof Error ? error.message : "Setting change failed.",
+          }),
+        );
+      })
+      .finally(() => {
+        setIsChangingAutoUpdate(false);
+      });
+  }, []);
 
   const handleButtonClick = useCallback(async () => {
     const bridge = window.desktopBridge;
@@ -445,6 +466,20 @@ function AboutVersionSection() {
           </Tooltip>
         }
       />
+      {hasDesktopBridge && window.desktopBridge?.setAutoUpdateEnabled ? (
+        <SettingsRow
+          {...searchableSetting("automatic-updates")}
+          description="Download updates in the background and install them once no agent is working, or when you quit."
+          control={
+            <Switch
+              checked={updateState?.autoUpdateEnabled === true}
+              disabled={updateState?.enabled !== true || isChangingAutoUpdate}
+              onCheckedChange={(checked) => handleAutoUpdateChange(Boolean(checked))}
+              aria-label="Install updates automatically"
+            />
+          }
+        />
+      ) : null}
       {hasDesktopBridge ? (
         <SettingsRow
           {...searchableSetting("update-track")}

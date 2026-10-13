@@ -123,6 +123,7 @@ describe("DesktopSettings", () => {
     assert.deepEqual(
       DesktopAppSettings.resolveDefaultDesktopSettings("0.0.17-nightly.20260415.1"),
       {
+        autoUpdateEnabled: false,
         linuxPasswordStore: "auto",
         localEnvironmentEnabled: true,
         mainWindowBounds: null,
@@ -153,6 +154,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          autoUpdateEnabled: false,
           linuxPasswordStore: "gnome-libsecret",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
@@ -261,6 +263,7 @@ describe("DesktopSettings", () => {
         );
 
         assert.deepEqual(yield* settings.load, {
+          autoUpdateEnabled: false,
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
@@ -274,6 +277,30 @@ describe("DesktopSettings", () => {
           wslOnly: false,
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
+      }),
+    ),
+  );
+
+  it.effect("keeps the fork's automatic update choice across later writes", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          environment.desktopSettingsPath,
+          `{ "autoUpdateEnabled": true }\n`,
+        );
+
+        assert.isTrue((yield* settings.load).autoUpdateEnabled);
+        yield* settings.setServerExposureMode("network-accessible");
+        assert.isTrue((yield* settings.load).autoUpdateEnabled);
+
+        yield* settings.setAutoUpdateEnabled(false);
+        const raw = yield* fileSystem.readFileString(environment.desktopSettingsPath);
+        assert.notInclude(raw, "autoUpdateEnabled");
+        assert.isFalse((yield* settings.load).autoUpdateEnabled);
       }),
     ),
   );
@@ -318,6 +345,7 @@ describe("DesktopSettings", () => {
           );
 
           assert.deepEqual(yield* settings.load, {
+            autoUpdateEnabled: false,
             linuxPasswordStore: "auto",
             localEnvironmentEnabled: true,
             mainWindowBounds: null,
@@ -395,6 +423,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          autoUpdateEnabled: false,
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
@@ -424,6 +453,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          autoUpdateEnabled: false,
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
@@ -452,6 +482,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          autoUpdateEnabled: false,
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,

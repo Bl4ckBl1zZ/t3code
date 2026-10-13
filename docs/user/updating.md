@@ -24,6 +24,15 @@ The confirmation counts the running threads that the restarts will interrupt,
 and how many can resume afterwards. See **Continue threads after restarts**
 below.
 
+## Install desktop updates automatically
+
+The desktop app asks before it installs an update. To skip that, turn on
+**Settings → General → Install updates automatically**. The app then downloads
+updates as they appear and restarts to install one once no agent is working on
+this machine: no turn is running or queued, and no background command is still
+going. If agents keep working, the update installs the next time you quit.
+While a Windows WSL backend is running alongside, the app waits for the quit.
+
 ## Before you update
 
 Server updates restart the connection and can interrupt active agents and

@@ -152,6 +152,18 @@ export class DesktopUpdateUnexpectedActionError extends Schema.TaggedError<Deskt
 
 export type DesktopUpdateConfigureError = never;
 
+export class DesktopUpdateAutoUpdatePersistenceError extends Schema.TaggedError<DesktopUpdateAutoUpdatePersistenceError>()(
+  "DesktopUpdateAutoUpdatePersistenceError",
+  {
+    enabled: Schema.Boolean,
+    cause: Schema.instanceOf(DesktopAppSettings.DesktopSettingsWriteError),
+  },
+) {
+  override get message(): string {
+    return `Failed to ${this.enabled ? "enable" : "disable"} automatic desktop updates.`;
+  }
+}
+
 export const DesktopUpdateSetChannelError = Schema.Union([
   DesktopUpdateActionInProgressError,
   DesktopUpdateChannelPersistenceError,
@@ -182,6 +194,12 @@ export class DesktopUpdates extends Context.Service<
     readonly setChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopUpdateState, DesktopUpdateSetChannelError>;
+    /** Persists the opt-in automatic install preference. DesktopAutoUpdate
+        acts on it; here it only rides along in the update state and lets a
+        quit install a downloaded update. */
+    readonly setAutoUpdateEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopUpdateState, DesktopUpdateAutoUpdatePersistenceError>;
     readonly check: (reason: string) => Effect.Effect<DesktopUpdateCheckResult>;
     readonly download: Effect.Effect<DesktopUpdateActionResult>;
     readonly install: Effect.Effect<DesktopUpdateActionResult>;
@@ -270,6 +288,7 @@ function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYm
 }
 
 function createBaseUpdateState(
+  settings: Pick<DesktopAppSettings.DesktopSettings, "autoUpdateEnabled">,
   channel: DesktopUpdateChannel,
   enabled: boolean,
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
@@ -278,6 +297,7 @@ function createBaseUpdateState(
     ...createInitialDesktopUpdateState(environment.appVersion, environment.runtimeInfo, channel),
     enabled,
     status: enabled ? "idle" : "disabled",
+    autoUpdateEnabled: settings.autoUpdateEnabled,
   };
 }
 
@@ -994,14 +1014,16 @@ export const make = Effect.gen(function* () {
 
       const settings = yield* desktopSettings.get;
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+      yield* setState(
+        createBaseUpdateState(settings, settings.updateChannel, enabled, environment),
+      );
       if (!enabled) {
         return;
       }
       yield* Ref.set(updaterConfiguredRef, true);
 
       yield* electronUpdater.setAutoDownload(false);
-      yield* electronUpdater.setAutoInstallOnAppQuit(false);
+      yield* electronUpdater.setAutoInstallOnAppQuit(settings.autoUpdateEnabled);
       yield* applyAutoUpdaterChannel(settings.updateChannel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
@@ -1065,7 +1087,9 @@ export const make = Effect.gen(function* () {
           );
 
         const enabled = yield* shouldEnableAutoUpdates;
-        yield* setState(createBaseUpdateState(nextChannel, enabled, environment));
+        yield* setState(
+          createBaseUpdateState(yield* desktopSettings.get, nextChannel, enabled, environment),
+        );
 
         if (!enabled || !(yield* Ref.get(updaterConfiguredRef))) {
           return yield* Ref.get(updateStateRef);
@@ -1079,6 +1103,23 @@ export const make = Effect.gen(function* () {
         );
         return yield* Ref.get(updateStateRef);
       }).pipe(Effect.ensuring(finishUpdateAction("channel")));
+    }),
+    setAutoUpdateEnabled: Effect.fn("desktop.updates.setAutoUpdateEnabled")(function* (
+      enabled: boolean,
+    ) {
+      yield* Effect.annotateCurrentSpan({ enabled });
+      yield* desktopSettings
+        .setAutoUpdateEnabled(enabled)
+        .pipe(
+          Effect.mapError(
+            (cause) => new DesktopUpdateAutoUpdatePersistenceError({ enabled, cause }),
+          ),
+        );
+      if (yield* Ref.get(updaterConfiguredRef)) {
+        yield* electronUpdater.setAutoInstallOnAppQuit(enabled);
+      }
+      yield* logUpdaterInfo("automatic update preference changed", { enabled });
+      return yield* updateState((current) => ({ ...current, autoUpdateEnabled: enabled }));
     }),
     check: Effect.fn("desktop.updates.check")(function* (reason: string) {
       yield* Effect.annotateCurrentSpan({ reason });

@@ -557,6 +557,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["about check for updates download install upgrade release"],
   },
   {
+    id: "automatic-updates",
+    title: "Install updates automatically",
+    to: "/settings/general",
+    searchTerms: ["auto update install restart idle agents background"],
+    desktopOnly: true,
+  },
+  {
     id: "update-track",
     title: "Update track",
     to: "/settings/general",

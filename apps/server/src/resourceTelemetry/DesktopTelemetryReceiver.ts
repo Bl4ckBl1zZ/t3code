@@ -185,6 +185,9 @@ export class DesktopTelemetryReceiver extends Context.Service<
     readonly cancelDesktopUpdate: (
       requestId: string,
     ) => Effect.Effect<void, DesktopTelemetryControlError>;
+    /** Tells the desktop app whether agent work is running here, so an
+        automatic update install can wait for it. */
+    readonly setAgentActivity: (busy: boolean) => Effect.Effect<void, DesktopTelemetryControlError>;
     /** Latest desktop update state report plus subsequent reports. The
         desktop replays its latest report when the backend attaches, so this
         is populated shortly after startup on desktop-managed servers. */
@@ -655,6 +658,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
       sendControlMessage({ version: 1, type: "commitDesktopUpdate", requestId }),
     cancelDesktopUpdate: (requestId) =>
       sendControlMessage({ version: 1, type: "cancelDesktopUpdate", requestId }),
+    setAgentActivity: (busy) => sendControlMessage({ version: 1, type: "setAgentActivity", busy }),
     desktopUpdates: Effect.gen(function* () {
       const subscription = yield* PubSub.subscribe(updateReportChanges);
       const initial = yield* Ref.get(latestUpdateReport);
@@ -706,6 +710,7 @@ export const layerTest = (
       requestDesktopUpdate: () => Effect.void,
       commitDesktopUpdate: () => Effect.void,
       cancelDesktopUpdate: () => Effect.void,
+      setAgentActivity: () => Effect.void,
       desktopUpdates:
         overrides.desktopUpdates ??
         Effect.succeed({

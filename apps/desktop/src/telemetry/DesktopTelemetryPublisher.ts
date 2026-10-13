@@ -53,6 +53,11 @@ interface PowerState {
   readonly speedLimitPercent: Option.Option<number>;
 }
 
+export interface DesktopAgentActivityReport {
+  readonly sourceId: string;
+  readonly busy: boolean;
+}
+
 interface HostPowerIntervals {
   readonly active: Duration.Duration;
   readonly idle: Duration.Duration;
@@ -77,6 +82,9 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly updateRequests: Stream.Stream<DesktopTelemetryRequestDesktopUpdate>;
     readonly updateCommits: Stream.Stream<DesktopTelemetryCommitDesktopUpdate>;
     readonly updateCancellations: Stream.Stream<DesktopTelemetryCancelDesktopUpdate>;
+    /** Agent activity each backend reports while an automatic install
+        waits. Single consumer. */
+    readonly agentActivity: Stream.Stream<DesktopAgentActivityReport>;
   }
 >()("@t3tools/desktop/telemetry/DesktopTelemetryPublisher") {}
 
@@ -179,6 +187,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateRequestQueue = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
+  const agentActivityQueue = yield* Queue.sliding<DesktopAgentActivityReport>(16);
 
   const offer = (event: PowerEvent): void => {
     Queue.offerUnsafe(powerEvents, event);
@@ -353,6 +362,10 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Queue.offer(updateCommitQueue, message).pipe(Effect.asVoid);
       case "cancelDesktopUpdate":
         return Queue.offer(updateCancellationQueue, message).pipe(Effect.asVoid);
+      case "setAgentActivity":
+        return Queue.offer(agentActivityQueue, { sourceId, busy: message.busy }).pipe(
+          Effect.asVoid,
+        );
     }
   };
   const removeControlSource: DesktopTelemetryPublisher["Service"]["removeControlSource"] = (
@@ -424,6 +437,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     updateRequests: Stream.fromQueue(updateRequestQueue),
     updateCommits: Stream.fromQueue(updateCommitQueue),
     updateCancellations: Stream.fromQueue(updateCancellationQueue),
+    agentActivity: Stream.fromQueue(agentActivityQueue),
   });
 });
 
