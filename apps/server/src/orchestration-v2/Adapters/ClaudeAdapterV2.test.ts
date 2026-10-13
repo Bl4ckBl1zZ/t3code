@@ -290,6 +290,28 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.deepEqual(options.supportedDialogKinds, ["resume_return"]);
   });
 
+  it("compacts at the tighter of the thread's Context slider and the provider setting", () => {
+    const compactAt = (stop: string, settings = AUTO_COMPACT_CLAUDE_SETTINGS) =>
+      (
+        ClaudeAdapterV2.makeClaudeQueryOptions({
+          modelSelection: {
+            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+            model: "claude-opus-5",
+            options: [{ id: "autoCompactWindow", value: stop }],
+          },
+          nativeThreadId: "native-thread-context-slider",
+          resume: false,
+          cwd: "/workspace",
+          settings,
+        }).settings as { autoCompactWindow?: number } | undefined
+      )?.autoCompactWindow;
+
+    assert.equal(compactAt("250k"), 250_000);
+    assert.equal(compactAt("750k"), 300_000);
+    assert.equal(compactAt("500k", DEFAULT_CLAUDE_SETTINGS), 500_000);
+    assert.isUndefined(compactAt("1m", DEFAULT_CLAUDE_SETTINGS));
+  });
+
   it("projects AskUserQuestion input with question text as the answer key", () => {
     assert.deepEqual(
       ClaudeAdapterV2.claudeUserInputQuestions({

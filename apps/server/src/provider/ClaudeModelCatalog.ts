@@ -37,6 +37,67 @@ export interface ClaudeModelCatalog {
   readonly models: ReadonlyArray<ClaudeCatalogModel>;
 }
 
+const CLAUDE_AUTO_COMPACT_CHOICES = [
+  { id: "250k", label: "250K", tokens: 250_000 },
+  { id: "500k", label: "500K", tokens: 500_000 },
+  { id: "750k", label: "750K", tokens: 750_000 },
+  { id: "1m", label: "1M", tokens: 1_000_000, isDefault: true },
+] as const;
+
+export const CLAUDE_AUTO_COMPACT_OPTION_ID = "autoCompactWindow";
+
+/** The top stop means "no cap of ours"; the adapter sends nothing for it. */
+const CLAUDE_AUTO_COMPACT_UNCAPPED_TOKENS = 1_000_000;
+
+const CLAUDE_AUTO_COMPACT_DESCRIPTOR = {
+  id: CLAUDE_AUTO_COMPACT_OPTION_ID,
+  label: "Context",
+  description:
+    "Claude summarizes the conversation once it passes this much context. The model's own window stays at 1M.",
+  type: "select" as const,
+  presentation: "slider" as const,
+  options: CLAUDE_AUTO_COMPACT_CHOICES.map(({ tokens: _tokens, ...choice }) => choice),
+  currentValue: "1m",
+};
+
+/**
+ * Models that always run at 1M get the composer's Context slider, which sets
+ * where Claude compacts. Models with a 200K/1M window picker keep the picker.
+ */
+function withCompactionControl(
+  model: ServerProviderModel,
+  runtime: ClaudeCodeProfile,
+): ServerProviderModel {
+  if ((runtime.fixedContextWindowTokens ?? 0) < CLAUDE_AUTO_COMPACT_UNCAPPED_TOKENS) return model;
+  const descriptors = (model.capabilities?.optionDescriptors ?? []).filter(
+    (descriptor) => descriptor.id !== CLAUDE_AUTO_COMPACT_OPTION_ID,
+  );
+  return {
+    ...model,
+    capabilities: {
+      ...model.capabilities,
+      optionDescriptors: [...descriptors, CLAUDE_AUTO_COMPACT_DESCRIPTOR],
+    },
+  };
+}
+
+/** The thread's Context slider in tokens, or undefined when it does not cap anything. */
+export function resolveClaudeCatalogAutoCompactTokens(
+  catalog: ClaudeModelCatalog,
+  selection: ModelSelection,
+): number | undefined {
+  const raw = getModelSelectionStringOptionValue(selection, CLAUDE_AUTO_COMPACT_OPTION_ID);
+  const descriptors = getProviderOptionDescriptors({
+    caps: getClaudeCatalogModelCapabilities(catalog, selection.model),
+    ...(raw ? { selections: [{ id: CLAUDE_AUTO_COMPACT_OPTION_ID, value: raw }] } : {}),
+  });
+  const value = getProviderOptionCurrentValue(
+    descriptors.find((option) => option.id === CLAUDE_AUTO_COMPACT_OPTION_ID),
+  );
+  const tokens = CLAUDE_AUTO_COMPACT_CHOICES.find((choice) => choice.id === value)?.tokens;
+  return tokens === undefined || tokens >= CLAUDE_AUTO_COMPACT_UNCAPPED_TOKENS ? undefined : tokens;
+}
+
 function tryResolveClaudeModelCatalog(
   resolved: ModelCatalog.ProviderCatalog | undefined,
 ): ClaudeModelCatalog | null {
@@ -48,7 +109,10 @@ function tryResolveClaudeModelCatalog(
     const adapter = decodeClaudeModelAdapter(entry.adapter ?? {});
     if (Option.isNone(profile) || Option.isNone(adapter)) return null;
     models.push({
-      model: ModelCatalog.catalogServerModel(resolved, entry),
+      model: withCompactionControl(
+        ModelCatalog.catalogServerModel(resolved, entry),
+        profile.value.claudeCode ?? {},
+      ),
       runtime: profile.value.claudeCode ?? {},
       compatibility: adapter.value.claudeCode ?? {},
     });

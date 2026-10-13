@@ -7,6 +7,7 @@ import {
   formatClaudeVersionUpgradeMessage,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogAutoCompactTokens,
   resolveClaudeCatalogContextWindowTokens,
   resolveClaudeCatalogEffort,
   resolveClaudeModelCatalog,
@@ -124,6 +125,45 @@ describe("Claude model catalog", () => {
     assert.isUndefined(
       resolveClaudeCatalogContextWindowTokens(catalog, { ...selection, model: "custom" }),
     );
+  });
+
+  it("gives only models that always run at 1M the Context slider", () => {
+    const source = manifest();
+    const catalog = catalogFromManifest({
+      ...source,
+      providers: {
+        claudeAgent: {
+          ...source.providers!.claudeAgent!,
+          profiles: {
+            ...source.providers!.claudeAgent!.profiles,
+            native1m: {
+              capabilities: { optionDescriptors: [] },
+              adapter: { claudeCode: { fixedContextWindowTokens: 1_000_000 } },
+            },
+          },
+          models: [
+            ...source.providers!.claudeAgent!.models,
+            { slug: "native-1m", name: "Native 1M", status: "current", profile: "native1m" },
+          ],
+        },
+      },
+    });
+    const optionIds = (slug: string) =>
+      catalog.models
+        .find((entry) => entry.model.slug === slug)
+        ?.model.capabilities?.optionDescriptors?.map((descriptor) => descriptor.id);
+    assert.deepStrictEqual(optionIds("native-1m"), ["autoCompactWindow"]);
+    assert.deepStrictEqual(optionIds("claude-synthetic-next"), ["effort", "contextWindow"]);
+
+    const compactAt = (options?: Array<{ id: string; value: string }>) =>
+      resolveClaudeCatalogAutoCompactTokens(catalog, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "native-1m",
+        ...(options ? { options } : {}),
+      });
+    assert.strictEqual(compactAt([{ id: "autoCompactWindow", value: "500k" }]), 500_000);
+    assert.isUndefined(compactAt([{ id: "autoCompactWindow", value: "1m" }]));
+    assert.isUndefined(compactAt());
   });
 
   it("filters models at runtime-version boundaries and derives the upgrade message", () => {

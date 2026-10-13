@@ -31,6 +31,7 @@ import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
+import { StepSlider } from "../ui/slider";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   ComposerControl,
@@ -397,6 +398,31 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id
             ? "ultrathink"
             : (getDescriptorStringValue(descriptor, modelSelection, reportedModelSelection) ?? "");
+
+        // An ordered scale steps between the same option ids as a slider.
+        if (descriptor.presentation === "slider") {
+          return (
+            <div key={descriptor.id}>
+              {index > 0 ? <MenuDivider /> : null}
+              <MenuGroup>
+                <div className="px-2 pt-1.5 pb-0.5 font-medium text-muted-foreground text-xs">
+                  {descriptor.label}
+                </div>
+                <StepSlider
+                  label={descriptor.label}
+                  stops={descriptor.options}
+                  value={selectedValue}
+                  onValueChange={(value) => handleSelectChange(descriptor, value)}
+                />
+                {descriptor.description ? (
+                  <div className="max-w-64 text-pretty px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                    {descriptor.description}
+                  </div>
+                ) : null}
+              </MenuGroup>
+            </div>
+          );
+        }
 
         return (
           <div key={descriptor.id}>

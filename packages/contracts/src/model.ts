@@ -21,12 +21,21 @@ const ProviderOptionDescriptorBase = {
   description: Schema.optional(TrimmedNonEmptyString),
 } as const;
 
+/**
+ * How a client should draw a select whose options are an ordered scale. A hint
+ * on `select` rather than a new descriptor type, so a client that does not know
+ * it keeps rendering the radio list.
+ */
+export const ProviderOptionPresentation = Schema.Literals(["slider"]);
+export type ProviderOptionPresentation = typeof ProviderOptionPresentation.Type;
+
 export const SelectProviderOptionDescriptor = Schema.Struct({
   ...ProviderOptionDescriptorBase,
   type: Schema.Literal("select"),
   options: Schema.Array(ProviderOptionChoice),
   currentValue: Schema.optional(TrimmedNonEmptyString),
   promptInjectedValues: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  presentation: Schema.optional(ProviderOptionPresentation),
 });
 export type SelectProviderOptionDescriptor = typeof SelectProviderOptionDescriptor.Type;
 

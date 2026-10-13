@@ -43,10 +43,17 @@ T3 Code uses the Claude configuration on the connected server.
 
 ## Compact long conversations
 
-Set **Auto-compact after** in the Claude provider settings to an integer between
-`100000` and `1000000`. For example, `300000` asks Claude to summarize at about
-300,000 tokens. This changes when compaction happens, not the model's context
-window. Leave it empty for Claude Code's default.
+On models that run at 1M, the **Context** slider in the model options sets when
+one thread compacts: pick 250K, 500K, 750K, or 1M. Below 1M, Claude summarizes the
+conversation once it passes that much context. 1M means no limit beyond the
+model's own. Opus 4.6 and Sonnet 4.6 show a 200K/1M **Context Window** choice
+instead.
+
+For a limit on every thread, set **Auto-compact after** in the Claude provider
+settings to an integer between `100000` and `1000000`. For example, `300000` asks
+Claude to summarize at about 300,000 tokens. When a thread's slider and this
+setting disagree, the smaller one applies. Leave it empty for Claude Code's
+default.
 
 You can also send `/compact` in an existing conversation. Web and desktop offer
 **Compact context** from the context meter. When you return to a large thread

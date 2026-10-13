@@ -12,6 +12,7 @@ import {
   isClaudeCatalogUltracodeEffort,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogAutoCompactTokens,
   resolveClaudeCatalogEffort,
   type ClaudeModelCatalog,
 } from "./provider/ClaudeModelCatalog.ts";
@@ -20,6 +21,8 @@ export interface CompiledClaudeModelSelection {
   readonly apiModelId: string;
   readonly effort: string | undefined;
   readonly promptEffort: string | undefined;
+  /** The Context slider in tokens, or undefined to run to the model's own window. */
+  readonly autoCompactWindow: number | undefined;
   readonly settings: Readonly<Record<string, boolean>>;
   readonly queryIdentity: string;
 }
@@ -49,11 +52,19 @@ export function compileClaudeModelSelection(
   };
   const apiModelId = resolveClaudeCatalogApiModelId(catalog, selection);
   const promptEffort = resolvePromptInjectedEffort(capabilities, rawEffort) ?? undefined;
+  const autoCompactWindow = resolveClaudeCatalogAutoCompactTokens(catalog, selection);
   return {
     apiModelId,
     effort,
     promptEffort,
+    autoCompactWindow,
     settings,
-    queryIdentity: JSON.stringify({ apiModelId, effort: effort ?? null, settings }),
+    // Moving the slider reopens the query, the same as changing model or effort.
+    queryIdentity: JSON.stringify({
+      apiModelId,
+      effort: effort ?? null,
+      autoCompactWindow: autoCompactWindow ?? null,
+      settings,
+    }),
   };
 }

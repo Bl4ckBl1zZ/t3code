@@ -107,7 +107,10 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
-import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
+import {
+  compileClaudeModelSelection,
+  type CompiledClaudeModelSelection,
+} from "../../claudeModelOptions.ts";
 import * as ServerConfig from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
@@ -947,6 +950,22 @@ export const layerQueryRunner: Layer.Layer<
   }),
 );
 
+/**
+ * The narrower of the thread's Context slider and the provider's
+ * "Auto-compact after" setting; undefined when neither caps anything.
+ */
+export function claudeAutoCompactWindow(
+  compiledSelection: Pick<CompiledClaudeModelSelection, "autoCompactWindow">,
+  settings: ClaudeSettings | undefined,
+): number | undefined {
+  // The settings schema constrains this to a 100k-1m integer or empty.
+  const configured = settings?.autoCompactWindow ? Number(settings.autoCompactWindow) : undefined;
+  const candidates = [compiledSelection.autoCompactWindow, configured].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  return candidates.length === 0 ? undefined : Math.min(...candidates);
+}
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -999,12 +1018,16 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
+  // The thread's Context slider and the provider's "Auto-compact after" both
+  // cap where Claude compacts; the tighter one wins. It is a Claude Code
+  // setting, so it rides `settings`, not the top-level query options.
+  const autoCompactWindow = claudeAutoCompactWindow(compiledSelection, input.settings);
   const effectiveQuerySettings =
-    input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
+    autoCompactWindow === undefined
       ? querySettings
       : ({
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
-          autoCompactWindow: Number(input.settings.autoCompactWindow),
+          autoCompactWindow,
         } as ClaudeSdkSettings);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
