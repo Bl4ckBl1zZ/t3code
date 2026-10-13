@@ -47,9 +47,12 @@ enum ThreadHistoricalWorkSummary {
             return label
         }
         if !sources.isEmpty {
-            let names = sources.map(\.name)
+            // Sources with different keys can share a label (a native app and
+            // the computer-use fallback both read "Computer Use"): name it once.
+            var names: [String] = []
+            for source in sources where !names.contains(source.name) { names.append(source.name) }
             let joined = names.count < 3 ? names.joined(separator: " and ") : names.dropLast().joined(separator: ", ") + ", and " + (names.last ?? "")
-            let suffix = sources.allSatisfy { $0.kind == "integration" } ? (sources.count == 1 ? " integration" : " integrations") : ""
+            let suffix = sources.allSatisfy { $0.kind == "integration" } ? (names.count == 1 ? " integration" : " integrations") : ""
             labels.insert("Used " + joined + suffix, at: 0)
         }
         labels = labels.enumerated().map { index, label in index == 0 ? label : label.prefix(1).lowercased() + label.dropFirst() }

@@ -258,6 +258,59 @@ final class ThreadWorkLogTests: XCTestCase {
         XCTAssertNil(row(opaque).detail)
     }
 
+    /// JavaScript REPL rows (computer use, node REPL) read as the action the
+    /// call names, falling back to what kind of call it is.
+    func testJavaScriptReplRowsUseTheirActionTitle() {
+        for toolName in ["cua_repl.js", "node_repl.js", "js"] {
+            let item = V2Fixture.turnItem(id: "cua", type: "dynamic_tool", extra: [
+                "toolName": .string(toolName),
+                "input": .object(["code": .string("await game.getAXStateAndScreenshot();"), "title": .string(" Inspect Saga music screen ")]),
+            ])
+            XCTAssertEqual(row(item).summary, "Inspect Saga music screen", toolName)
+
+            let fallback = toolName == "cua_repl.js" ? "Computer use" : "Run JavaScript"
+            for input: JSONValue in [.object(["title": .string(" ")]), .object(["title": .number(123)]), .object([:])] {
+                XCTAssertEqual(JavaScriptReplTool.title(toolName: toolName, input: input, retainedTitle: nil), fallback)
+            }
+            XCTAssertEqual(
+                JavaScriptReplTool.title(toolName: toolName, input: .object(["code": .string("await sky.get_app_state(app);")]), retainedTitle: nil),
+                "Computer use"
+            )
+        }
+        XCTAssertEqual(JavaScriptReplTool.title(toolName: "js", input: .object([:]), retainedTitle: "Read the window"), "Read the window")
+        XCTAssertEqual(JavaScriptReplTool.title(toolName: "js", input: .object(["title": .string("Inspect the window")]), retainedTitle: "Read the window"), "Inspect the window")
+        XCTAssertEqual(JavaScriptReplTool.title(toolName: "js", input: .object(["code": .string("await sky.click(app);")]), retainedTitle: "Js"), "Computer use")
+        XCTAssertEqual(JavaScriptReplTool.title(toolName: "node_repl.js", input: .object([:]), retainedTitle: "Node_repl.js"), "Run JavaScript")
+        XCTAssertNil(JavaScriptReplTool.title(toolName: "github.create_issue", input: .object(["title": .string("Issue title")]), retainedTitle: nil))
+    }
+
+    func testComputerUseReplCallsAreRecognizedBeforeResultMetadata() {
+        XCTAssertEqual(JavaScriptReplTool.surface(toolName: "cua_repl.js", input: .object([:])), "computer")
+        for name in ["node_repl.js", "js"] {
+            XCTAssertEqual(JavaScriptReplTool.surface(toolName: name, input: .object(["code": .string("await sky.get_app_state(app);")])), "computer")
+            XCTAssertEqual(JavaScriptReplTool.surface(toolName: name, input: .object(["code": .string("const sky = await import('@oai/sky');")])), "computer")
+            XCTAssertNil(JavaScriptReplTool.surface(toolName: name, input: .object(["code": .string("await fs.readFile(path);")])))
+        }
+        XCTAssertNil(JavaScriptReplTool.surface(toolName: "github.js", input: .object(["code": .string("await sky.click(app);")])))
+
+        let source: JSONValue = .object(["key": .string("mcp:node_repl"), "name": .string("node repl"), "kind": .string("integration")])
+        let failedSky = V2Fixture.turnItem(id: "sky", type: "dynamic_tool", status: "failed", extra: [
+            "title": .string("js"), "toolName": .string("node_repl.js"), "toolSource": source,
+            "input": .object(["code": .string("await sky.type_text({app:'T3 Code (Nightly)',text:'debug(ga.run)'});"), "title": .string("Restrict the breakpoint to Git actions")]),
+        ])
+        XCTAssertEqual(row(failedSky).summary, "Restrict the breakpoint to Git actions")
+        XCTAssertEqual(row(failedSky).icon, .computer)
+        XCTAssertEqual(failedSky.presentedToolSource, .computerUse)
+
+        let fetch = V2Fixture.turnItem(id: "fetch", type: "dynamic_tool", extra: [
+            "title": .string("js"), "toolName": .string("node_repl.js"), "toolSource": source,
+            "input": .object(["code": .string("await fetch('http://127.0.0.1/json/list');"), "title": .string("Discover the live Electron debugging endpoint")]),
+        ])
+        XCTAssertEqual(row(fetch).summary, "Discover the live Electron debugging endpoint")
+        XCTAssertEqual(row(fetch).icon, .code)
+        XCTAssertEqual(fetch.presentedToolSource?.kind, "integration")
+    }
+
     /// Without the MCP table a delegated-task row reads as
     /// `mcp__t3-code__delegate_task`.
     func testT3McpToolNamesResolveToTheirDisplayNames() {
