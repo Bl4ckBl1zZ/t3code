@@ -3859,7 +3859,13 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
 private struct FeatureRemoteAttachmentThumbnail: View {
     private struct Request: Hashable {
         let url: URL
+        let identity: String?
         let maximumPixelSize: Int
+        /// The image's own identity: a re-minted URL for the same attachment
+        /// keeps showing what is loaded while the cache answers.
+        var cacheKey: String {
+            FeatureAttachmentThumbnailLoader.cacheKey(for: url, identity: identity, maximumPixelSize: maximumPixelSize)
+        }
     }
 
     @SwiftUI.Environment(\.displayScale) private var displayScale
@@ -3868,10 +3874,11 @@ private struct FeatureRemoteAttachmentThumbnail: View {
     @State private var failedRequest: Request?
 
     let url: URL
+    var identity: String? = nil
 
     var body: some View {
         Group {
-            if loadedRequest == request, let image {
+            if loadedRequest?.cacheKey == request.cacheKey, let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -3887,6 +3894,7 @@ private struct FeatureRemoteAttachmentThumbnail: View {
             do {
                 let image = try await FeatureAttachmentThumbnailLoader.image(
                     for: activeRequest.url,
+                    identity: activeRequest.identity,
                     maximumPixelSize: activeRequest.maximumPixelSize
                 )
                 try Task.checkCancellation()
@@ -3907,6 +3915,7 @@ private struct FeatureRemoteAttachmentThumbnail: View {
     private var request: Request {
         Request(
             url: url,
+            identity: identity,
             maximumPixelSize: min(768, max(190, Int(ceil(190 * displayScale))))
         )
     }
@@ -4132,7 +4141,12 @@ private struct FeatureMessageAttachmentsView: View {
                                         previewData: previewData
                                     )
                                 } else if let url = attachment.url {
-                                    FeatureRemoteAttachmentThumbnail(url: url)
+                                    FeatureRemoteAttachmentThumbnail(
+                                        url: url,
+                                        identity: FeatureAttachmentThumbnailLoader.attachmentIdentity(
+                                            scope: mediaContext?.threadID, attachmentID: attachment.id
+                                        )
+                                    )
                                 } else {
                                     attachmentPlaceholder(systemImage: "photo")
                                 }

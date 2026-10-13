@@ -560,6 +560,7 @@ struct UserMessageAnnotationCard: View {
 /// A message image from the server or, while it is still sending, from the
 /// bytes on this device. Downsampled and cached like the attachment grid.
 struct UserMessageAttachmentImage: View {
+    @SwiftUI.Environment(\.markdownMediaContext) private var mediaContext
     let attachment: FeatureMessageAttachment
     let maximumPixelSize: Int
     @State private var image: UIImage?
@@ -579,7 +580,11 @@ struct UserMessageAttachmentImage: View {
         .accessibilityHidden(true)
         .task(id: "\(attachment.id)#\(maximumPixelSize)") {
             if let url = attachment.url {
-                image = try? await FeatureAttachmentThumbnailLoader.image(for: url, maximumPixelSize: maximumPixelSize)
+                image = try? await FeatureAttachmentThumbnailLoader.image(
+                    for: url,
+                    identity: FeatureAttachmentThumbnailLoader.attachmentIdentity(scope: mediaContext?.threadID, attachmentID: attachment.id),
+                    maximumPixelSize: maximumPixelSize
+                )
             } else if let data = attachment.previewData {
                 image = await Task.detached(priority: .utility) { UIImage(data: data) }.value
             }
