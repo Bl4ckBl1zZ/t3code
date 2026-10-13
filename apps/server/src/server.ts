@@ -73,6 +73,7 @@ import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as ProjectTeardownScriptRunner from "./project/ProjectTeardownScriptRunner.ts";
+import * as T3ProjectFileSync from "./project/T3ProjectFileSync.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -592,6 +593,10 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // existed, or by a cleanup write that failed. See ProjectService.delete
   // for the normal (on-delete) path.
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+  // Mirrors each project's actions and the scripts in its t3.json.
+  Layer.effectDiscard(T3ProjectFileSync.make.pipe(Effect.flatMap((sync) => sync.start()))).pipe(
+    Layer.provide(RuntimeLayer.layerProjectService),
+  ),
 ).pipe(
   // Core Services
   Layer.provideMerge(layerOrchestrationApplication),
