@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import type { OrchestrationV2Subagent, OrchestrationV2SubagentWorkflow } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { deriveWorkflowGroups, projectedSubagentsToRuntime } from "./subagentRuntime.ts";
+import {
+  currentWorkflowPhase,
+  deriveWorkflowGroups,
+  formatSubagentUsage,
+  projectedSubagentsToRuntime,
+} from "./subagentRuntime.ts";
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 
@@ -216,5 +221,58 @@ describe("deriveWorkflowGroups over a dynamic workflow", () => {
     expect(groups[0]?.unphasedMembers.map((agent) => agent.title)).toEqual(["alpha:one"]);
     expect(groups[1]?.phases).toEqual([]);
     expect(groups[1]?.unphasedMembers).toEqual([]);
+  });
+});
+
+describe("currentWorkflowPhase", () => {
+  const plan = [
+    { index: 1, title: "Alpha" },
+    { index: 2, title: "Beta" },
+    { index: 3, title: "Gamma" },
+  ];
+
+  it("names the latest phase with a live member", () => {
+    const [group] = groupsOf([
+      subagent({
+        workflow: {
+          phases: plan,
+          agents: [
+            member({ state: "completed" }),
+            member({ index: 2, label: "beta:one", phaseIndex: 2, phaseTitle: "Beta" }),
+          ],
+        },
+      }),
+    ]);
+    expect(currentWorkflowPhase(group!)).toEqual({ position: 2, count: 3, title: "Beta" });
+  });
+
+  it("falls back to the latest phase reached once nothing runs", () => {
+    const [group] = groupsOf([
+      subagent({
+        status: "completed",
+        completedAt: at("2026-08-01T10:00:09.000Z"),
+        workflow: { phases: plan, agents: [member({ state: "completed" })] },
+      }),
+    ]);
+    expect(currentWorkflowPhase(group!)).toEqual({ position: 1, count: 3, title: "Alpha" });
+  });
+
+  it("is null before any member starts", () => {
+    const [group] = groupsOf([subagent({ workflow: { phases: plan, agents: [] } })]);
+    expect(currentWorkflowPhase(group!)).toBeNull();
+  });
+});
+
+describe("formatSubagentUsage", () => {
+  it("compacts tokens and counts tool uses", () => {
+    expect(formatSubagentUsage({ totalTokens: 71_141, toolUses: 3 })).toBe(
+      "71.1K tokens · 3 tool uses",
+    );
+    expect(formatSubagentUsage({ totalTokens: 900, toolUses: 1 })).toBe("900 tokens · 1 tool use");
+    expect(formatSubagentUsage({ totalTokens: 12_000 })).toBe("12K tokens");
+  });
+
+  it("is null when nothing was reported", () => {
+    expect(formatSubagentUsage(null)).toBeNull();
   });
 });
