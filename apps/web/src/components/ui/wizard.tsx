@@ -79,7 +79,7 @@ export function WizardSteps({
   const Step = onStepChange ? "button" : "div";
   return (
     <ol
-      className="grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-zinc-25 p-1 ring-1 ring-black/5 dark:bg-white/4 dark:ring-white/5"
+      className="grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-background p-1 ring-1 ring-black/5 dark:bg-white/4 dark:ring-white/5"
       role="list"
       aria-label="Setup progress"
     >
@@ -141,7 +141,7 @@ export function WizardPanel({
   return (
     <div
       data-slot="dialog-panel"
-      className="min-w-0 space-y-4 bg-zinc-25/80 px-6 py-5 ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5"
+      className="min-w-0 space-y-4 bg-background/80 px-6 py-5 ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5"
     >
       <AnimatedHeight holdHeight={holdHeight}>{children}</AnimatedHeight>
     </div>
