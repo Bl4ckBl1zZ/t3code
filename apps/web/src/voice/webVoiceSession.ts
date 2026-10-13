@@ -1,15 +1,10 @@
 import {
-  ManagedRelay,
-  ManagedRelaySessionError,
-  relayProtectedErrorMessage,
-  relayVoiceInputErrorIsRetryable,
-  relayVoiceInputErrorMessage,
+  describeManagedRelayVoiceFailure,
   transcribeManagedRelayVoice,
 } from "@t3tools/client-runtime/relay";
-import { RelayVoiceInputError, type VoiceTranscriptionRequest } from "@t3tools/contracts/relay";
+import type { VoiceTranscriptionRequest } from "@t3tools/contracts/relay";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
-import * as Schema from "effect/Schema";
 import { useSyncExternalStore } from "react";
 
 import { refreshManagedRelayVoiceInput } from "../cloud/managedRelayState";
@@ -62,9 +57,6 @@ export interface VoiceTarget {
 type ComposerDelivery = (text: string, locale: string) => void;
 
 const IDLE: VoiceSessionState = { phase: "idle" };
-const isRelayVoiceInputError = Schema.is(RelayVoiceInputError);
-const isRequestTimeout = Schema.is(ManagedRelay.ManagedRelayRequestTimeoutError);
-const isRequestFailed = Schema.is(ManagedRelay.ManagedRelayRequestFailedError);
 
 let state: VoiceSessionState = IDLE;
 const stateListeners = new Set<() => void>();
@@ -115,28 +107,6 @@ function clearClipTimer(): void {
   clipTimer = null;
 }
 
-function failureFromCause(cause: unknown): { message: string; canRetry: boolean } {
-  if (isRelayVoiceInputError(cause)) {
-    return {
-      message: relayVoiceInputErrorMessage(cause),
-      canRetry: relayVoiceInputErrorIsRetryable(cause),
-    };
-  }
-  if (cause instanceof ManagedRelaySessionError) {
-    return { message: "Sign in to T3 Connect to use voice input.", canRetry: false };
-  }
-  if (isRequestTimeout(cause)) {
-    return { message: "Transcription timed out.", canRetry: true };
-  }
-  if (isRequestFailed(cause)) {
-    return {
-      message: cause.relayError ? relayProtectedErrorMessage(cause.relayError) : cause.message,
-      canRetry: cause.transportFailed === true || cause.relayError === undefined,
-    };
-  }
-  return { message: "Transcription failed.", canRetry: true };
-}
-
 async function transcribe(
   current: VoiceTarget,
   clip: WebVoiceClip,
@@ -159,7 +129,7 @@ async function transcribe(
   transcription = null;
   refreshManagedRelayVoiceInput();
   if (Exit.isFailure(exit)) {
-    const failure = failureFromCause(Cause.squash(exit.cause));
+    const failure = describeManagedRelayVoiceFailure(Cause.squash(exit.cause));
     if (!failure.canRetry) pendingClip = null;
     setState({ phase: "failed", targetKey: current.key, ...failure });
     return;

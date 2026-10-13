@@ -8,6 +8,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import {
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
+  RelayVoiceInputError,
 } from "@t3tools/contracts/relay";
 import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
 import * as Cause from "effect/Cause";
@@ -21,12 +22,18 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import { findErrorTraceId } from "../errors/errorTrace.ts";
 import * as ManagedRelay from "./managedRelay.ts";
-import { relayProtectedErrorMessage } from "./errorPresentation.ts";
+import {
+  relayProtectedErrorMessage,
+  relayVoiceInputErrorIsRetryable,
+  relayVoiceInputErrorMessage,
+} from "./errorPresentation.ts";
 
 const DEFAULT_STALE_TIME_MS = 15_000;
 const DEFAULT_IDLE_TTL_MS = 5 * 60_000;
 const CLERK_TOKEN_EXPIRY_SKEW_MS = 5_000;
 const isManagedRelayRequestFailedError = Schema.is(ManagedRelay.ManagedRelayRequestFailedError);
+const isManagedRelayRequestTimeoutError = Schema.is(ManagedRelay.ManagedRelayRequestTimeoutError);
+const isRelayVoiceInputError = Schema.is(RelayVoiceInputError);
 
 export interface ManagedRelaySession {
   readonly accountId: string;
@@ -242,6 +249,32 @@ export const transcribeManagedRelayVoice = Effect.fn(
   const relay = yield* ManagedRelay.ManagedRelayClient;
   return yield* relay.transcribeVoice({ clerkToken, request });
 });
+
+/** What to tell the user when `transcribeManagedRelayVoice` fails, and whether resending the clip can help. */
+export function describeManagedRelayVoiceFailure(cause: unknown): {
+  readonly message: string;
+  readonly canRetry: boolean;
+} {
+  if (isRelayVoiceInputError(cause)) {
+    return {
+      message: relayVoiceInputErrorMessage(cause),
+      canRetry: relayVoiceInputErrorIsRetryable(cause),
+    };
+  }
+  if (cause instanceof ManagedRelaySessionError) {
+    return { message: "Sign in to T3 Connect to use voice input.", canRetry: false };
+  }
+  if (isManagedRelayRequestTimeoutError(cause)) {
+    return { message: "Transcription timed out.", canRetry: true };
+  }
+  if (isManagedRelayRequestFailedError(cause)) {
+    return {
+      message: cause.relayError ? relayProtectedErrorMessage(cause.relayError) : cause.message,
+      canRetry: cause.transportFailed === true || cause.relayError === undefined,
+    };
+  }
+  return { message: "Transcription failed.", canRetry: true };
+}
 
 function requireClerkToken(
   get: Atom.AtomContext,
