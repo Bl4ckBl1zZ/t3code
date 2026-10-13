@@ -17,7 +17,7 @@ import type {
 import { resolveThreadChangeStat } from "@t3tools/shared/git";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   CheckIcon,
@@ -1085,8 +1085,6 @@ export default function GitActionsControl({
     [activeEnvironmentId, gitCwd],
   );
   const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
-  let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
-
   const persistThreadBranchSync = useCallback(
     (branch: string | null, manualSelection = false) => {
       if (!activeThreadRef) {
@@ -1316,8 +1314,10 @@ export default function GitActionsControl({
     });
   }, [gitStatusForActions, onOpenPullRequest, threadToastData]);
 
-  runGitActionWithToast = useEffectEvent(
-    async ({
+  // React 19.2 leaves useEffectEvent stale inside the memoized details panel.
+  // Bind each render's actions to its checkout and thread, including retained toast actions.
+  const runGitActionWithToast = useCallback(
+    async function runGitActionWithToast({
       action,
       commitMessage,
       onConfirmed,
@@ -1325,7 +1325,7 @@ export default function GitActionsControl({
       statusOverride,
       featureBranch = false,
       filePaths,
-    }: RunGitActionWithToastInput) => {
+    }: RunGitActionWithToastInput) {
       const actionStatus = statusOverride ?? gitStatusForActions;
       const actionBranch = actionStatus?.refName ?? null;
       const actionIsDefaultBranch = featureBranch ? false : isDefaultRef;
@@ -1455,6 +1455,14 @@ export default function GitActionsControl({
         });
       }
     },
+    [
+      activeServerThread,
+      gitStatusForActions,
+      isDefaultRef,
+      runImmediateGitAction,
+      syncThreadBranchAfterGitAction,
+      threadToastData,
+    ],
   );
 
   const continuePendingDefaultBranchAction = () => {
