@@ -2,15 +2,19 @@
  * T3ProjectFileSync - keeps a project's actions and the `scripts` in its
  * checked-in `t3.json` the same, in both directions.
  *
- * - A `t3.json` that declares `scripts` gives the project its own action list
- *   (the project override of `defaultProjectScripts`), when the server first
- *   sees the project and whenever the file changes on disk. The file wins a
- *   conflict: it is the checked-in source a teammate or agent just edited.
- * - An in-app edit of a project's own actions rewrites `scripts` in the file,
- *   creating it if needed. Every other field, every unknown field, and the
- *   unknown fields of each script survive the rewrite.
- * - Once per T3 home, projects with their own actions and no `t3.json` get
- *   one. Deleting the file afterwards is respected until the next edit.
+ * Only projects with their own action list (the project override of
+ * `defaultProjectScripts`) take part. A project that follows the environment's
+ * shared list never adopts a repository's scripts on its own: commands from a
+ * cloned repo first reach it through the manual import, which is the trust
+ * boundary. Once a project has its own list:
+ *
+ * - A change to `scripts` on disk replaces the list, as does a file that
+ *   differs when the server first sees the project. The file wins a conflict:
+ *   it is the checked-in source a teammate or agent just edited.
+ * - An in-app edit rewrites `scripts`, creating the file if needed. Every other
+ *   field, every unknown field, and the unknown fields of each script survive.
+ * - Once per T3 home, a project with no `t3.json` gets one. Deleting the file
+ *   afterwards is respected until the next edit.
  *
  * Files are polled by mtime, so a project costs one `stat` per round.
  *
@@ -27,7 +31,6 @@ import {
   type ServerSettings,
   type T3ProjectFileScript,
 } from "@t3tools/contracts";
-import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -40,12 +43,15 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
+import { relayUrlConfig } from "../cloud/publicConfig.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettingsService from "../serverSettings.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const POLL_INTERVAL = "2 seconds";
 const BACKFILL_MARKER = "t3-json-backfill.done";
+/** Where the relay serves this build's schema; see `infra/relay` `layerProjectFileSchemaRoute`. */
+const RELAY_PROJECT_FILE_SCHEMA_PATH = "/schema/t3.json";
 
 const decodeRawFile = Schema.decodeUnknownEffect(
   fromLenientJson(Schema.Record(Schema.String, Schema.Unknown)),
@@ -145,6 +151,7 @@ const isRawObject = (value: unknown): value is RawObject =>
 export function renderProjectFile(
   existing: RawObject | null,
   scripts: ReadonlyArray<ProjectScript>,
+  schemaUrl: string = T3_PROJECT_FILE_SCHEMA_URL,
 ): string {
   const existingScripts = Array.isArray(existing?.scripts)
     ? existing.scripts.filter(isRawObject)
@@ -174,7 +181,7 @@ export function renderProjectFile(
   });
   const document = existing
     ? { ...existing, scripts: fileScripts }
-    : { $schema: T3_PROJECT_FILE_SCHEMA_URL, scripts: fileScripts };
+    : { $schema: schemaUrl, scripts: fileScripts };
   return `${JSON.stringify(document, null, 2)}\n`;
 }
 
@@ -216,6 +223,13 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const baselines = new Map<ProjectId, Baseline>();
+  // New files point at the schema this build's relay serves, which knows this
+  // build's fields; without a relay, at upstream's published schema.
+  const relayUrl = yield* relayUrlConfig.pipe(Effect.orElseSucceed(() => null));
+  const schemaUrl =
+    relayUrl === null
+      ? T3_PROJECT_FILE_SCHEMA_URL
+      : new URL(RELAY_PROJECT_FILE_SCHEMA_PATH, relayUrl).toString();
 
   const fileStamp = (filePath: string) =>
     fileSystem.stat(filePath).pipe(
@@ -271,14 +285,10 @@ export const make = Effect.gen(function* () {
     const fileNorm = fileScripts === undefined ? null : normalizeScripts(fileScripts);
     const fileChanged = baseline === undefined || fileNorm !== baseline.file;
 
-    // A file that declares scripts is the project's list: adopt it when it is
-    // new to this server, when it changed, or when the project has no list of
-    // its own (a reset in the app follows the file again).
-    if (fileScripts !== undefined && fileNorm !== ownNorm && (fileChanged || own === undefined)) {
-      yield* setOwnScripts(
-        project.id,
-        scriptsFromFile(fileScripts, resolveProjectScripts(settings, project)),
-      );
+    // The file replaces a project's own list when it is new to this server or
+    // changed. A project without its own list is left to the manual import.
+    if (own !== undefined && fileScripts !== undefined && fileNorm !== ownNorm && fileChanged) {
+      yield* setOwnScripts(project.id, scriptsFromFile(fileScripts, own));
       yield* Effect.logInfo("Applied t3.json scripts to project actions", {
         projectId: project.id,
       });
@@ -290,7 +300,7 @@ export const make = Effect.gen(function* () {
       if (ownNorm !== fileNorm) {
         yield* fileSystem.writeFileString(
           filePath,
-          renderProjectFile(file.status === "valid" ? file.raw : null, own),
+          renderProjectFile(file.status === "valid" ? file.raw : null, own, schemaUrl),
         );
         yield* Effect.logInfo("Saved project actions to t3.json", { projectId: project.id });
       }
@@ -312,6 +322,18 @@ export const make = Effect.gen(function* () {
   const backfill = Effect.gen(function* () {
     const marker = path.join(config.stateDir, BACKFILL_MARKER);
     if (yield* fileSystem.exists(marker)) return;
+    // The fork recorded its own backfill in a settings key this build drops on
+    // decode. Its users may since have deleted a t3.json on purpose.
+    const forkBackfilled = yield* fileSystem.readFileString(config.settingsPath).pipe(
+      Effect.flatMap(decodeRawFile),
+      Effect.map((raw) => raw.projectFileBackfillApplied === true),
+      Effect.orElseSucceed(() => false),
+    );
+    if (forkBackfilled) {
+      yield* fileSystem.makeDirectory(config.stateDir, { recursive: true });
+      yield* fileSystem.writeFileString(marker, "");
+      return;
+    }
     const settings = yield* settingsService.getSettings;
     for (const project of yield* activeProjects) {
       const own = ownScripts(settings, project.id);
@@ -324,7 +346,7 @@ export const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      yield* fileSystem.writeFileString(filePath, renderProjectFile(null, own)).pipe(
+      yield* fileSystem.writeFileString(filePath, renderProjectFile(null, own, schemaUrl)).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Failed to seed t3.json for a project", {
             projectId: project.id,

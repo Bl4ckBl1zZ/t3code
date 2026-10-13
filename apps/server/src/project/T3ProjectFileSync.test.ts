@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProjectId, type ProjectScript } from "@t3tools/contracts";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -21,7 +22,7 @@ const dev: ProjectScript = {
   runOnWorktreeCreate: false,
 };
 
-const harness = (initialScripts?: ReadonlyArray<ProjectScript>) =>
+const harness = (initialScripts?: ReadonlyArray<ProjectScript>, env: Record<string, string> = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-json-sync-" });
@@ -58,7 +59,11 @@ const harness = (initialScripts?: ReadonlyArray<ProjectScript>) =>
         ServerConfig.layerTest(root, { prefix: "t3-json-sync-home-" }),
       ),
     );
-    const makeSync = T3ProjectFileSync.make.pipe(Effect.provide(context));
+    const makeSync = T3ProjectFileSync.make.pipe(
+      Effect.provide(context),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+    );
+    const config = yield* ServerConfig.ServerConfig.pipe(Effect.provide(context));
     const settings = yield* ServerSettings.ServerSettingsService.pipe(Effect.provide(context));
     const filePath = `${root}/t3.json`;
     const ownScripts = settings.getSettings.pipe(
@@ -70,7 +75,7 @@ const harness = (initialScripts?: ReadonlyArray<ProjectScript>) =>
       });
     const writeFile = (contents: string) => fs.writeFileString(filePath, contents);
     const readFile = fs.readFileString(filePath).pipe(Effect.map((text) => JSON.parse(text)));
-    return { fs, makeSync, filePath, ownScripts, setOwnScripts, writeFile, readFile };
+    return { fs, config, makeSync, filePath, ownScripts, setOwnScripts, writeFile, readFile };
   });
 
 const run = <A, E>(effect: Effect.Effect<A, E, NodeServices.NodeServices | Scope.Scope>) =>
@@ -83,6 +88,7 @@ describe("T3ProjectFileSync", () => {
         const h = yield* harness([dev]);
         yield* h.writeFile(
           JSON.stringify({
+            $schema: "https://mirror.example/t3.json",
             iconPath: "logo.svg",
             futureField: { keep: true },
             scripts: [
@@ -113,6 +119,7 @@ describe("T3ProjectFileSync", () => {
         yield* sync.syncNow;
 
         const file = yield* h.readFile;
+        assert.equal(file.$schema, "https://mirror.example/t3.json");
         assert.equal(file.iconPath, "logo.svg");
         assert.deepEqual(file.futureField, { keep: true });
         assert.deepEqual(file.scripts, [
@@ -167,7 +174,7 @@ describe("T3ProjectFileSync", () => {
     ),
   );
 
-  it.live("adopts t3.json scripts for a project without its own actions", () =>
+  it.live("leaves t3.json to the manual import until the project has its own actions", () =>
     run(
       Effect.gen(function* () {
         const h = yield* harness();
@@ -177,9 +184,14 @@ describe("T3ProjectFileSync", () => {
         }`);
         const sync = yield* h.makeSync;
         yield* sync.syncNow;
+        assert.equal(yield* h.ownScripts, undefined);
+
+        // Importing gives the project its own list, which the file then mirrors.
+        yield* h.setOwnScripts([{ ...dev, id: "test", name: "Test", command: "vp test" }, dev]);
+        yield* sync.syncNow;
         assert.deepEqual(
-          (yield* h.ownScripts)?.map((script) => script.command),
-          ["vp test"],
+          (yield* h.readFile).scripts.map((script: { command: string }) => script.command),
+          ["vp test", "vp dev"],
         );
       }),
     ),
@@ -199,6 +211,36 @@ describe("T3ProjectFileSync", () => {
           `{ "scripts": [{ "name": "Broken" }] }`,
         );
         assert.equal((yield* h.ownScripts)?.[0]?.name, "Renamed");
+      }),
+    ),
+  );
+
+  it.live("points a new t3.json at the configured relay's schema", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* harness([dev], { T3CODE_RELAY_URL: "https://relay.example.test" });
+        yield* (yield* h.makeSync).syncNow;
+        assert.equal((yield* h.readFile).$schema, "https://relay.example.test/schema/t3.json");
+      }),
+    ),
+  );
+
+  it.live("skips the backfill the fork already ran", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* harness([dev]);
+        yield* h.fs.makeDirectory(h.config.stateDir, { recursive: true });
+        yield* h.fs.writeFileString(
+          h.config.settingsPath,
+          JSON.stringify({ projectFileBackfillApplied: true }),
+        );
+        yield* (yield* h.makeSync).syncNow;
+        assert.equal(yield* h.fs.exists(h.filePath), false);
+
+        // Recorded in this build's marker, so it holds once the fork key is gone.
+        yield* h.fs.remove(h.config.settingsPath);
+        yield* (yield* h.makeSync).syncNow;
+        assert.equal(yield* h.fs.exists(h.filePath), false);
       }),
     ),
   );
