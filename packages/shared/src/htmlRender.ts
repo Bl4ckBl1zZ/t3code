@@ -329,9 +329,12 @@ const BASE_CSS =
   // Focus outlines paint inside the element, so the frame edge never clips them.
   ":where(:focus-visible){outline:2px solid var(--ring)}:focus-visible{outline-width:2px!important;outline-offset:-2px!important}";
 
+// Filters names and values as the bootstrap does, since a client's theme can
+// carry custom colors into a document's <style>.
 function rootRule(theme: HtmlRenderTheme): string {
   const declarations = Object.entries(theme.variables)
-    .map(([name, value]) => `${name}:${value};`)
+    .filter(([name]) => /^--[a-z0-9-]+$/.test(name))
+    .map(([name, value]) => `${name}:${value.replace(/[;{}<>]/g, "")};`)
     .join("");
   return `:root{color-scheme:${theme.appearance};${declarations}}`;
 }
@@ -347,12 +350,15 @@ function rootRule(theme: HtmlRenderTheme): string {
 // so its client can fit the frame to the page.
 const BOOTSTRAP_SCRIPT = `(function(){var s=document.getElementById("t3-theme"),n=0;if(!s)return;var b=${JSON.stringify(BASE_CSS)};function a(t){if(!t||typeof t!=="object"||!t.variables||typeof t.variables!=="object")return;var c=":root{color-scheme:"+(t.appearance==="light"?"light":"dark")+";";for(var k in t.variables){if(/^--[a-z0-9-]+$/.test(k))c+=k+":"+String(t.variables[k]).replace(/[;{}<>]/g,"")+";";}s.textContent=c+"}"+b;}try{var m=/[#&]${THEME_FRAGMENT_KEY}=([^&]*)/.exec(location.hash);if(m){a(JSON.parse(decodeURIComponent(m[1])));history.replaceState(history.state,"",location.pathname+location.search);}}catch(e){}window.addEventListener("message",function(e){var d=e.data,p=d&&d.params;if(d&&d.jsonrpc==="2.0"&&d.method===${JSON.stringify(HOST_CONTEXT_CHANGED_METHOD)}&&p&&p.styles)a({appearance:p.theme,variables:p.styles.variables});});document.addEventListener("click",function(e){var l=e.isTrusted?e.composedPath().find(function(t){return t&&t.matches&&t.matches("a[href]");}):null,u;if(!l)return;try{u=new URL(l.getAttribute("href"),document.baseURI);}catch(x){return;}if(!/^https?:$/.test(u.protocol)||u.href.split("#")[0]===location.href.split("#")[0])return;if(window.parent!==window){e.preventDefault();window.parent.postMessage({jsonrpc:"2.0",id:"t3-link-"+(++n),method:${JSON.stringify(OPEN_LINK_METHOD)},params:{url:u.href}},"*");}else{l.setAttribute("target","_blank");l.setAttribute("rel","noopener");}},true);if(window.parent!==window){var h,o,z=function(){var r=document.documentElement,v=Math.ceil(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);if(v===h)return;h=v;window.parent.postMessage({jsonrpc:"2.0",method:${JSON.stringify(SIZE_CHANGED_METHOD)},params:{height:v}},"*");};if(window.ResizeObserver){o=new ResizeObserver(z);o.observe(document.documentElement);}document.addEventListener("DOMContentLoaded",function(){if(o&&document.body)o.observe(document.body);z();});window.addEventListener("load",z);}})();`;
 
-function bootstrapMarkup(markup: string): string {
+function bootstrapMarkup(markup: string, theme?: HtmlRenderTheme): string {
   const dark = htmlRenderTheme(T3_CODE_DARK_THEME_COLORS, "dark");
   const light = htmlRenderTheme(T3_CODE_LIGHT_THEME_COLORS, "light");
   // Without a client-provided theme (a direct download, the headless preview
   // without a fragment) the page follows the OS appearance.
-  const defaultCss = `${rootRule(dark)}@media (prefers-color-scheme: light){${rootRule(light)}}${BASE_CSS}`;
+  const defaultCss =
+    theme === undefined
+      ? `${rootRule(dark)}@media (prefers-color-scheme: light){${rootRule(light)}}${BASE_CSS}`
+      : `${rootRule(theme)}${BASE_CSS}`;
   return [
     /<meta\s[^>]*charset/i.test(markup.slice(0, 4096)) ? "" : '<meta charset="utf-8">',
     /<meta\s[^>]*name\s*=\s*["']?viewport/i.test(markup)
@@ -414,4 +420,23 @@ export function injectHtmlRenderBootstrap(html: string): string {
     return `${html.slice(0, at)}<head>${markup}</head>${html.slice(at)}`;
   }
   return `<!doctype html><head>${markup}</head>${html}`;
+}
+
+// An inline document is not served by the asset route, so it carries its own
+// policy: no network, no form posts, and no <base> retargeting.
+const INLINE_DOCUMENT_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'";
+
+/**
+ * A document for HTML a client holds as a string rather than a published page:
+ * legacy `t3-html` fences in old messages, shown through `srcdoc` (web) or a
+ * WebView's `html` source (mobile). It has no URL fragment, so the theme is
+ * written in up front; later changes arrive through the same bootstrap.
+ *
+ * The trusted head comes before every byte of the page, so its policy covers
+ * all of it. A full page's own doctype, <html>, and <head> fold into this
+ * document, and its head content still applies.
+ */
+export function htmlRenderInlineDocument(html: string, theme: HtmlRenderTheme): string {
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${INLINE_DOCUMENT_CSP}">${bootstrapMarkup("", theme)}</head>${html}</html>`;
 }

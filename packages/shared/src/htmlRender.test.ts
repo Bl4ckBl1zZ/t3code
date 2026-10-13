@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   HTML_RENDER_MAX_HEIGHT,
   htmlRenderFrameHeight,
+  htmlRenderInlineDocument,
   htmlRenderReferencesEqual,
   htmlRenderTheme,
   htmlRenderThemeFragment,
@@ -71,6 +72,35 @@ describe("injectHtmlRenderBootstrap", () => {
       injected.indexOf("<html><head>"),
     );
     expect(injected).toContain('<meta name="viewport" content="width=device-width');
+  });
+});
+
+describe("htmlRenderInlineDocument", () => {
+  const theme = htmlRenderTheme(T3_CODE_LIGHT_THEME_COLORS, "light");
+
+  it("puts the network policy and theme ahead of every byte of the page", () => {
+    const page = "<script>fetch('https://example.com')</script><head><title>x</title></head>";
+    const document = htmlRenderInlineDocument(page, theme);
+    const policyAt = document.indexOf('http-equiv="Content-Security-Policy"');
+    expect(policyAt).toBeGreaterThan(-1);
+    expect(document.slice(0, document.indexOf(page))).toContain("default-src 'none'");
+    expect(policyAt).toBeLessThan(document.indexOf('<style id="t3-theme">'));
+    expect(document.indexOf("</head>")).toBeLessThan(document.indexOf(page));
+  });
+
+  it("writes the given theme instead of following the OS appearance", () => {
+    const document = htmlRenderInlineDocument("<p>x</p>", theme);
+    expect(document).toContain(":root{color-scheme:light;");
+    expect(document).not.toContain("prefers-color-scheme");
+  });
+
+  it("cannot be broken out of by a custom theme value", () => {
+    const document = htmlRenderInlineDocument("<p>x</p>", {
+      appearance: "dark",
+      variables: { "--background": "red</style><script>alert(1)</script>", "bad name": "x" },
+    });
+    expect(document).toContain("--background:red/stylescriptalert(1)/script;");
+    expect(document).not.toContain("bad name");
   });
 });
 

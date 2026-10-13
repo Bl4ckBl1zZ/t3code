@@ -1,15 +1,18 @@
 import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
+  clampHtmlRenderHeight,
   htmlRenderFileName,
   htmlRenderFrameHeight,
+  htmlRenderInlineDocument,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
   type HtmlRenderReference,
   type HtmlRenderTheme,
 } from "@t3tools/shared/htmlRender";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, View, type ColorValue } from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, View, type ColorValue } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { SymbolView } from "../../components/AppSymbol";
@@ -77,19 +80,50 @@ function readOverflowMessage(data: string): Overflow | null {
   }
 }
 
+const HEIGHT_MESSAGE_TYPE = "t3-html-render-height";
+
+// Reports the page's content height, measured as a framed page's bootstrap
+// measures it, for pages no server measured (legacy inline embeds).
+const HEIGHT_SCRIPT = `(function(){var last;function report(){var d=document.documentElement,h=Math.ceil(d.scrollHeight>d.clientHeight?d.scrollHeight:d.getBoundingClientRect().height);if(h===last)return;last=h;window.ReactNativeWebView.postMessage(JSON.stringify({type:${JSON.stringify(HEIGHT_MESSAGE_TYPE)},height:h}));}report();if(window.ResizeObserver){var r=new ResizeObserver(report);r.observe(document.documentElement);if(document.body)r.observe(document.body);}window.addEventListener("load",report);})();true;`;
+
+function readHeightMessage(data: string): number | null {
+  try {
+    const message: unknown = JSON.parse(data);
+    return typeof message === "object" &&
+      message !== null &&
+      "type" in message &&
+      message.type === HEIGHT_MESSAGE_TYPE &&
+      "height" in message &&
+      typeof message.height === "number" &&
+      Number.isFinite(message.height) &&
+      message.height > 0
+      ? message.height
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 const withoutFragment = (url: string) => url.split("#", 1)[0];
+
+// A page given as a string (`html`) loads as this document.
+const INLINE_DOCUMENT_URL = "about:blank";
 
 /**
  * An agent's HTML page, themed before first paint and kept in step with the app theme.
- * The page may move within its own document; links leave for the browser.
+ * The page may move within its own document; links leave for the browser. A page
+ * held as a string (`html`, a legacy embed) loads with the theme written in.
  */
-export function HtmlRenderWebView(props: {
-  readonly uri: string;
-  readonly title: string;
-  /** Inside the feed, the page takes scroll gestures only when it overflows its frame. */
-  readonly nested: boolean;
-  readonly onLoadError?: () => void;
-}) {
+export function HtmlRenderWebView(
+  props: ({ readonly uri: string } | { readonly html: string }) & {
+    readonly title: string;
+    /** Inside the feed, the page takes scroll gestures only when it overflows its frame. */
+    readonly nested: boolean;
+    readonly onLoadError?: () => void;
+    /** Receives the page's content height whenever it changes, for pages without a measured height. */
+    readonly onContentHeight?: (height: number) => void;
+  },
+) {
   const theme = useHtmlRenderTheme();
   const [initialTheme] = useState(theme);
   const [generation, setGeneration] = useState(0);
@@ -99,10 +133,21 @@ export function HtmlRenderWebView(props: {
   const crashes = useRef(0);
   // The theme the loaded document shows; null until it loads.
   const shownTheme = useRef<HtmlRenderTheme | null>(null);
+  const uri = "uri" in props ? props.uri : null;
+  const html = "html" in props ? props.html : null;
+  const pageUrl = uri ?? INLINE_DOCUMENT_URL;
   const source = useMemo(
-    () => ({ uri: props.uri + htmlRenderThemeFragment(initialTheme) }),
-    [props.uri, initialTheme],
+    () =>
+      html !== null
+        ? { html: htmlRenderInlineDocument(html, initialTheme) }
+        : { uri: pageUrl + htmlRenderThemeFragment(initialTheme) },
+    [html, pageUrl, initialTheme],
   );
+  const { onContentHeight } = props;
+  const injectedJavaScript = [
+    props.nested ? OVERFLOW_SCRIPT : "",
+    onContentHeight ? HEIGHT_SCRIPT : "",
+  ].join("");
   useEffect(() => {
     if (shownTheme.current === null || shownTheme.current === theme) return;
     shownTheme.current = theme;
@@ -156,8 +201,7 @@ export function HtmlRenderWebView(props: {
         // dropped. A link the reader taps opens as a new window, which the
         // platform allows only from a tap, and goes to the browser.
         onShouldStartLoadWithRequest={(request) =>
-          request.isTopFrame === false ||
-          withoutFragment(request.url) === withoutFragment(props.uri)
+          request.isTopFrame === false || withoutFragment(request.url) === withoutFragment(pageUrl)
         }
         onOpenWindow={(event) => {
           const url = event.nativeEvent.targetUrl;
@@ -172,12 +216,14 @@ export function HtmlRenderWebView(props: {
         onHttpError={props.onLoadError}
         onContentProcessDidTerminate={restart}
         onRenderProcessGone={restart}
-        {...(props.nested
+        {...(injectedJavaScript !== ""
           ? {
-              injectedJavaScript: OVERFLOW_SCRIPT,
+              injectedJavaScript,
               onMessage: (event: WebViewMessageEvent) => {
                 const next = readOverflowMessage(event.nativeEvent.data);
                 if (next !== null) setOverflow(next);
+                const height = readHeightMessage(event.nativeEvent.data);
+                if (height !== null) onContentHeight?.(height);
               },
             }
           : {})}
@@ -293,6 +339,85 @@ export function ThreadHtmlRender(props: {
           </Pressable>
         ) : null}
       </View>
+    </View>
+  );
+}
+
+const LEGACY_EMBED_DEFAULT_HEIGHT = 220;
+
+/**
+ * A legacy `t3-html` fence inside an assistant reply: the page inline at the
+ * height it reports, with a full-screen view for pages that need more room.
+ */
+export function ThreadLegacyHtmlEmbed(props: { readonly html: string }) {
+  const insets = useSafeAreaInsets();
+  const [contentHeight, setContentHeight] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const height = clampHtmlRenderHeight(contentHeight ?? LEGACY_EMBED_DEFAULT_HEIGHT);
+  return (
+    <View style={{ marginBottom: ROW_BOTTOM_MARGIN, height }}>
+      {failed ? (
+        <View className="flex-1 items-center justify-center">
+          <Text className="text-sm text-foreground-muted">Embed unavailable</Text>
+        </View>
+      ) : (
+        <>
+          <HtmlRenderWebView
+            html={props.html}
+            title="Interactive embed"
+            nested
+            onLoadError={() => setFailed(true)}
+            onContentHeight={setContentHeight}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Expand embed"
+            hitSlop={8}
+            className="absolute right-1.5 top-1.5 h-7 w-7 items-center justify-center rounded-full border border-border/60 bg-card/80"
+            onPress={() => setExpanded(true)}
+          >
+            <SymbolView
+              name="arrow.up.left.and.arrow.down.right"
+              size={12}
+              tintColorClassName="accent-icon-subtle"
+              type="monochrome"
+            />
+          </Pressable>
+        </>
+      )}
+      <Modal
+        visible={expanded}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setExpanded(false)}
+      >
+        <View className="flex-1 bg-screen" style={{ paddingTop: insets.top }}>
+          <View className="h-11 flex-row items-center justify-between px-3">
+            <Text className="text-base font-semibold text-foreground" numberOfLines={1}>
+              Interactive embed
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close embed"
+              hitSlop={8}
+              onPress={() => setExpanded(false)}
+            >
+              <SymbolView
+                name="xmark"
+                size={18}
+                tintColorClassName="accent-icon-subtle"
+                type="monochrome"
+              />
+            </Pressable>
+          </View>
+          <View className="flex-1" style={{ paddingBottom: insets.bottom }}>
+            {expanded ? (
+              <HtmlRenderWebView html={props.html} title="Interactive embed" nested={false} />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
