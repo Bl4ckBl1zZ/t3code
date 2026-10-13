@@ -2684,14 +2684,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect.each([
-    { model: "claude-opus-5-5", shown: true },
-    { model: "claude-fable-5-1", shown: true },
-    { model: "claude-opus-5", shown: false },
-    { model: "claude-sonnet-4-6", shown: false },
-  ] as const)(
-    "shows $model thinking right before a tool call as text: $shown",
-    ({ model, shown }) =>
+  // Summarized thinking can't tell a progress update from reasoning, so root
+  // thinking stays unprojected on every model, even right before a tool call.
+  it.effect.each(["claude-opus-5-5", "claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-6"])(
+    "never shows %s thinking right before a tool call as text",
+    (model) =>
       Effect.gen(function* () {
         const harness = yield* makeWakeHarness;
         yield* harness.runtime.startTurn(
@@ -2735,9 +2732,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ? [event.turnItem.text]
             : [],
         );
-        // Only the thinking right before the call is an update; earlier
-        // thinking stays unprojected.
-        assert.deepEqual(texts, shown ? ["Found it: the memory file is the cause."] : []);
+        assert.deepEqual(texts, []);
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );
 
