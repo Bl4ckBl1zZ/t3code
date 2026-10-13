@@ -81,12 +81,11 @@ it.effect.each(["0", "-10"])("rejects a grace override of %s minutes", (value) =
 it.effect("loads voice defaults from blank deploy variables", () =>
   Effect.gen(function* () {
     const provider = ConfigProvider.fromEnv({
-      env: { VOICE_INPUT_ENABLED: "", VOICE_INPUT_MODEL: " ", OPENROUTER_API_KEY: "" },
+      env: { VOICE_INPUT_ENABLED: " ", OPENROUTER_API_KEY: "" },
     });
     expect(yield* voiceInputConfig.parse(provider)).toEqual({
       enabled: true,
       openRouterApiKey: undefined,
-      model: "google/gemini-2.5-flash",
       dailySeconds: 1800,
       maxClipSeconds: 120,
       maxUploadBytes: 10 * 1024 * 1024,
@@ -94,13 +93,11 @@ it.effect("loads voice defaults from blank deploy variables", () =>
   }),
 );
 
-it.effect.each([
-  { VOICE_INPUT_MODEL: "openai/gpt-5" },
-  { VOICE_INPUT_ENABLED: "yes" },
-  { VOICE_INPUT_DAILY_SECONDS: "0" },
-])("rejects voice variables %o", (env) =>
-  Effect.gen(function* () {
-    const error = yield* Effect.flip(voiceInputConfig.parse(ConfigProvider.fromEnv({ env })));
-    expect(error._tag).toBe("ConfigError");
-  }),
+it.effect.each([{ VOICE_INPUT_ENABLED: "yes" }, { VOICE_INPUT_DAILY_SECONDS: "0" }])(
+  "rejects voice variables %o",
+  (env) =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(voiceInputConfig.parse(ConfigProvider.fromEnv({ env })));
+      expect(error._tag).toBe("ConfigError");
+    }),
 );

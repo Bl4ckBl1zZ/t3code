@@ -18,7 +18,6 @@ import * as VoiceInput from "./VoiceInput.ts";
 const voiceConfig: RelayConfiguration.VoiceInputConfig = {
   enabled: true,
   openRouterApiKey: Redacted.make("sk-or-shared"),
-  model: "google/gemini-2.5-flash",
   dailySeconds: 10,
   maxClipSeconds: 6,
   maxUploadBytes: 64 * 1024,
@@ -160,7 +159,7 @@ layer(PgliteRelayDb.layer, { timeout: 60_000 })("VoiceInput", (it) => {
         });
         expect(openRouter.requests[0]?.headers.authorization).toBe("Bearer sk-or-shared");
         const sent = openRouter.body(0);
-        expect(sent.model).toBe("google/gemini-2.5-flash");
+        expect(sent.model).toBe("openai/gpt-audio");
         const prompt = JSON.stringify(sent.messages);
         expect(prompt).toContain('\\"T3 Code\\",\\"Effect\\"');
         expect(prompt).toContain('language \\"en\\"');

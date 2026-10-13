@@ -2,6 +2,7 @@ import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react"
 import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import {
   AudioModule,
+  IOSOutputFormat,
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
@@ -52,16 +53,27 @@ const SIGNED_OUT_VOICE_STATUS_ATOM = Atom.make(AsyncResult.initial<never>()).pip
 const VOICE_METERING_INTERVAL_MS = 80;
 // The native constructor takes platform-flattened options, as `useAudioRecorder`
 // builds them with expo-audio's internal `createRecordingOptions`.
-const { ios: IOS_RECORDING_OPTIONS, android: ANDROID_RECORDING_OPTIONS } =
-  RecordingPresets.HIGH_QUALITY;
-const VOICE_RECORDING_OPTIONS = {
-  extension: RecordingPresets.HIGH_QUALITY.extension,
-  sampleRate: RecordingPresets.HIGH_QUALITY.sampleRate,
-  numberOfChannels: RecordingPresets.HIGH_QUALITY.numberOfChannels,
-  bitRate: RecordingPresets.HIGH_QUALITY.bitRate,
-  isMeteringEnabled: true,
-  ...(Platform.OS === "ios" ? IOS_RECORDING_OPTIONS : ANDROID_RECORDING_OPTIONS),
-};
+// iOS records 16 kHz mono PCM WAV because the relay's speech model accepts only
+// WAV and MP3 (two minutes is under 4 MB). Android's recorder cannot write WAV.
+const VOICE_RECORDING_OPTIONS =
+  Platform.OS === "ios"
+    ? {
+        extension: ".wav",
+        sampleRate: 16_000,
+        numberOfChannels: 1,
+        bitRate: 256_000,
+        isMeteringEnabled: true,
+        ...RecordingPresets.HIGH_QUALITY.ios,
+        outputFormat: IOSOutputFormat.LINEARPCM,
+      }
+    : {
+        extension: RecordingPresets.HIGH_QUALITY.extension,
+        sampleRate: RecordingPresets.HIGH_QUALITY.sampleRate,
+        numberOfChannels: RecordingPresets.HIGH_QUALITY.numberOfChannels,
+        bitRate: RecordingPresets.HIGH_QUALITY.bitRate,
+        isMeteringEnabled: true,
+        ...RecordingPresets.HIGH_QUALITY.android,
+      };
 
 async function releaseVoiceRecordingAudio(): Promise<void> {
   try {

@@ -20,15 +20,15 @@ falls back to on-device dictation) while it is off.
 
 ## Variables
 
-| Variable                       | Default                   | Meaning                                                                                                                                       |
-| ------------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VOICE_INPUT_ENABLED`          | `true`                    | Kill switch. `false` turns voice off for everyone without removing the key; settings and usage are kept.                                      |
-| `VOICE_INPUT_MODEL`            | `google/gemini-2.5-flash` | OpenRouter model. Allowed: `google/gemini-2.5-flash`, `google/gemini-2.5-flash-lite`, `google/gemini-2.5-pro`, `openai/gpt-4o-audio-preview`. |
-| `VOICE_INPUT_DAILY_SECONDS`    | `1800`                    | Audio seconds each account may transcribe per UTC day.                                                                                        |
-| `VOICE_INPUT_MAX_CLIP_SECONDS` | `120`                     | Longest single recording. Clients stop recording at this length.                                                                              |
-| `VOICE_INPUT_MAX_UPLOAD_BYTES` | `10485760`                | Largest decoded upload.                                                                                                                       |
+| Variable                       | Default    | Meaning                                                                                                  |
+| ------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------- |
+| `VOICE_INPUT_ENABLED`          | `true`     | Kill switch. `false` turns voice off for everyone without removing the key; settings and usage are kept. |
+| `VOICE_INPUT_DAILY_SECONDS`    | `1800`     | Audio seconds each account may transcribe per UTC day.                                                   |
+| `VOICE_INPUT_MAX_CLIP_SECONDS` | `120`      | Longest single recording. Clients stop recording at this length.                                         |
+| `VOICE_INPUT_MAX_UPLOAD_BYTES` | `10485760` | Largest decoded upload.                                                                                  |
 
-A value outside the allowlist or a non-positive number fails the deploy instead of
+The model is fixed in code as `openai/gpt-audio`, which accepts WAV and MP3 only.
+Web and iOS record WAV. A non-boolean switch or a non-positive number fails the deploy instead of
 running with a surprising setting. Changing a variable takes effect on the next deploy.
 
 ## How the caps hold

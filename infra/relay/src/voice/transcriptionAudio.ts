@@ -14,7 +14,8 @@ export function decodedBase64Length(data: string): number | null {
 }
 
 // Enough for the RIFF header plus metadata chunks some encoders put before "data".
-const WAV_HEADER_BASE64_CHARS = 4096;
+// Apple's recorder pads with a FLLR chunk so "data" starts at byte 4096.
+const WAV_HEADER_BASE64_CHARS = 8192;
 
 function ascii(bytes: Uint8Array, offset: number): string {
   return String.fromCharCode(...bytes.subarray(offset, offset + 4));

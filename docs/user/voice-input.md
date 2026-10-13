@@ -66,7 +66,7 @@ resets.
 ## Privacy
 
 Recordings travel through T3 Connect to OpenRouter and on to the speech model
-provider, Google Gemini by default, which return the text. T3 Connect does not store
+provider, OpenAI, which return the text. T3 Connect does not store
 audio. It keeps the resulting text for up to a day so a retried request returns the
 same transcript, then deletes it. Daily usage totals are kept for a week. Your
 settings are stored with your account until you change them.

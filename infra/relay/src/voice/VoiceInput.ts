@@ -29,6 +29,8 @@ import { decodedBase64Length, wavDurationSeconds } from "./transcriptionAudio.ts
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_TIMEOUT = "90 seconds";
+/** The only transcription model. Changing it is a code change, not a deploy setting. */
+const OPENROUTER_MODEL = "openai/gpt-audio";
 // Two minutes of speech is a few hundred tokens; the cap bounds a runaway reply.
 const OPENROUTER_MAX_TOKENS = 2048;
 // Clients stop at the limit by their own clock; allow for timer and encoder slop.
@@ -325,7 +327,6 @@ const make = Effect.gen(function* () {
     readonly request: VoiceTranscriptionRequest;
     readonly settings: VoiceInputSettings;
     readonly cleanup: boolean;
-    readonly model: string;
   }) {
     const upstreamFailure = (status: number | null) => (cause: unknown) =>
       new VoiceInputUpstreamError({ code: "transcription_failed", status, cause });
@@ -333,7 +334,7 @@ const make = Effect.gen(function* () {
       HttpClientRequest.bearerToken(Redacted.value(input.apiKey)),
       HttpClientRequest.setHeader("x-title", "T3 Code"),
       HttpClientRequest.bodyJson({
-        model: input.model,
+        model: OPENROUTER_MODEL,
         temperature: 0,
         max_tokens: OPENROUTER_MAX_TOKENS,
         messages: [
@@ -478,7 +479,6 @@ const make = Effect.gen(function* () {
         request,
         settings,
         cleanup,
-        model: voice.model,
       }).pipe(
         Effect.tapError((error) =>
           Effect.all(

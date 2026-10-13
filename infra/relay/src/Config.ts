@@ -48,23 +48,10 @@ export const legacyTunnelGraceMinutesConfig = Config.option(
   ),
 );
 
-/**
- * Models that accept OpenRouter `input_audio`. The deploy variable picks one;
- * adding a model is a code change, so a typo cannot send paid audio elsewhere.
- */
-export const VoiceInputModel = Schema.Literals([
-  "google/gemini-2.5-flash",
-  "google/gemini-2.5-flash-lite",
-  "google/gemini-2.5-pro",
-  "openai/gpt-4o-audio-preview",
-]);
-export type VoiceInputModel = typeof VoiceInputModel.Type;
-
 export interface VoiceInputConfig {
   /** Kill switch. Voice is also off while no OpenRouter key is configured. */
   readonly enabled: boolean;
   readonly openRouterApiKey: Redacted.Redacted<string> | undefined;
-  readonly model: VoiceInputModel;
   /** Audio seconds each account may transcribe per UTC day. */
   readonly dailySeconds: number;
   readonly maxClipSeconds: number;
@@ -99,7 +86,6 @@ export const voiceInputConfig: Config.Config<VoiceInputConfig> = Config.all({
       Option.getOrUndefined(Option.filter(key, (value) => Redacted.value(value).trim().length > 0)),
     ),
   ),
-  model: voiceVariable("VOICE_INPUT_MODEL", VoiceInputModel, "google/gemini-2.5-flash"),
   dailySeconds: voiceVariable("VOICE_INPUT_DAILY_SECONDS", PositiveIntFromString, 30 * 60),
   maxClipSeconds: voiceVariable("VOICE_INPUT_MAX_CLIP_SECONDS", PositiveIntFromString, 120),
   maxUploadBytes: voiceVariable(

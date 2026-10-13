@@ -55,7 +55,7 @@ export const VoiceInputStatus = Schema.Struct({
 });
 export type VoiceInputStatus = typeof VoiceInputStatus.Type;
 
-/** Containers the transcription model accepts. Browsers record WebM, so web sends WAV. */
+/** Containers clients may send. The relay's model takes only WAV and MP3, so web and iOS send WAV. */
 export const VoiceAudioFormat = Schema.Literals(["wav", "m4a", "mp3", "ogg", "aac", "flac"]);
 export type VoiceAudioFormat = typeof VoiceAudioFormat.Type;
 
