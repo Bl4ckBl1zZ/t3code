@@ -20,11 +20,13 @@ import {
   CHAT_MARKDOWN_REHYPE_PLUGINS,
 } from "@t3tools/shared/markdownPipeline";
 import { useAtomValue } from "@effect/atom-react";
+import { isLegacyHtmlEmbedLanguage } from "@t3tools/shared/legacyHtmlEmbed";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
 } from "@t3tools/shared/composerContextClipboard";
 import {
+  AppWindowIcon,
   ChevronRightIcon,
   CodeIcon,
   FileSpreadsheetIcon,
@@ -34,6 +36,7 @@ import {
   InfoIcon,
   LightbulbIcon,
   MailIcon,
+  Maximize2Icon,
   MessageSquareIcon,
   MessageSquareWarningIcon,
   OctagonAlertIcon,
@@ -157,6 +160,7 @@ import { createIncrementalHighlightedDocument } from "../lib/incrementalHighligh
 import { HighlightedCodeLines } from "./chat/HighlightedCodeLines";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { MermaidDiagram } from "./chat/MermaidDiagram";
+import { LegacyHtmlEmbedDialog, LegacyHtmlEmbedFrame } from "./chat/LegacyHtmlEmbed";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings, useClientSettings } from "../hooks/useSettings";
 import {
@@ -1081,6 +1085,104 @@ function MarkdownMermaidCodeBlock({
             </pre>
           ) : null}
         </RenderErrorBoundary>
+      ) : (
+        children
+      )}
+    </MarkdownCodeBlock>
+  );
+}
+
+/**
+ * Legacy `t3-html` fences render as a sandboxed HTML page once the response
+ * settles and the fence is closed; until then, and behind the code toggle,
+ * they keep the highlighted source.
+ */
+function MarkdownLegacyHtmlEmbedCodeBlock({
+  code,
+  language,
+  fenceTitle,
+  theme,
+  isStreaming,
+  isClosed,
+  children,
+}: {
+  code: string;
+  language: string;
+  fenceTitle: string | null;
+  theme: "light" | "dark";
+  isStreaming: boolean;
+  isClosed: boolean;
+  children: ReactNode;
+}) {
+  const [showCode, setShowCode] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const searching = use(MarkdownFindContext);
+  const revealSource = useCallback(() => setShowCode(true), []);
+  const sourceRevealRef = useFindRevealRef(revealSource);
+  const canShowEmbed = !isStreaming && isClosed && code.trim().length > 0;
+  const showEmbed = canShowEmbed && !showCode;
+  const toggleLabel = showCode ? "Show embed" : "Show code";
+  return (
+    <MarkdownCodeBlock
+      code={code}
+      language={language}
+      fenceTitle={fenceTitle}
+      theme={theme}
+      isStreaming={isStreaming}
+      canWrap={!showEmbed}
+      diagram={showEmbed}
+      leadingActions={
+        canShowEmbed ? (
+          <span className="flex items-center gap-0.5">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost-muted"
+                    size="icon-xs"
+                    onClick={() => setShowCode((value) => !value)}
+                    aria-label={toggleLabel}
+                  />
+                }
+              >
+                {showCode ? <AppWindowIcon className="size-3" /> : <CodeIcon className="size-3" />}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{toggleLabel}</TooltipPopup>
+            </Tooltip>
+            {showEmbed ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost-muted"
+                      size="icon-xs"
+                      onClick={() => setExpanded(true)}
+                      aria-label="Expand embed"
+                    />
+                  }
+                >
+                  <Maximize2Icon className="size-3" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">Expand embed</TooltipPopup>
+              </Tooltip>
+            ) : null}
+          </span>
+        ) : null
+      }
+    >
+      {showEmbed ? (
+        <>
+          <LegacyHtmlEmbedFrame html={code} />
+          <LegacyHtmlEmbedDialog html={code} open={expanded} onOpenChange={setExpanded} />
+          {/* Find counts the source; a selected match here switches to it. */}
+          {searching ? (
+            <pre ref={sourceRevealRef} hidden>
+              {code}
+            </pre>
+          ) : null}
+        </>
       ) : (
         children
       )}
@@ -3391,6 +3493,20 @@ const CHAT_MARKDOWN_COMPONENTS = {
         >
           {highlightedCode}
         </MarkdownMermaidCodeBlock>
+      );
+    }
+    if (isLegacyHtmlEmbedLanguage(language)) {
+      return (
+        <MarkdownLegacyHtmlEmbedCodeBlock
+          code={codeBlock.code}
+          language={language}
+          fenceTitle={fenceTitle}
+          theme={resolvedTheme}
+          isStreaming={isStreaming}
+          isClosed={isClosedCodeFence(node, text)}
+        >
+          {highlightedCode}
+        </MarkdownLegacyHtmlEmbedCodeBlock>
       );
     }
     return (

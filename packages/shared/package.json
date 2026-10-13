@@ -127,6 +127,10 @@
       "types": "./src/htmlRender.ts",
       "import": "./src/htmlRender.ts"
     },
+    "./legacyHtmlEmbed": {
+      "types": "./src/legacyHtmlEmbed.ts",
+      "import": "./src/legacyHtmlEmbed.ts"
+    },
     "./favicon": {
       "types": "./src/favicon.ts",
       "import": "./src/favicon.ts"

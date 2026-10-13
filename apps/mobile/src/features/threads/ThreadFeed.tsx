@@ -46,6 +46,10 @@ import {
 } from "@t3tools/shared/codexArtifactTemplates";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import { isMarkdownFileLinkLabel } from "@t3tools/shared/markdownLinks";
+import {
+  splitLegacyHtmlEmbedMarkdown,
+  type LegacyHtmlEmbedMarkdownSegment,
+} from "@t3tools/shared/legacyHtmlEmbed";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -56,6 +60,7 @@ import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presen
 import {
   renderCodexFileCitationsAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
+  type CodexArtifactTemplateMarkdownSegment,
 } from "@t3tools/shared/codexMarkdownDirectives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { imageMimeType } from "@t3tools/shared/image";
@@ -197,7 +202,7 @@ import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pend
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
 import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
-import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
+import { htmlRenderRowHeight, ThreadHtmlRender, ThreadLegacyHtmlEmbed } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import {
@@ -821,9 +826,27 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
 }) {
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
-  const segments = useMemo(() => splitCodexArtifactTemplateMarkdown(liveMarkdown), [liveMarkdown]);
+  const segments = useMemo(
+    () =>
+      splitCodexArtifactTemplateMarkdown(liveMarkdown).flatMap<
+        CodexArtifactTemplateMarkdownSegment | LegacyHtmlEmbedMarkdownSegment
+      >((segment) =>
+        segment.kind === "markdown"
+          ? splitLegacyHtmlEmbedMarkdown(segment.markdown).map((part) => ({
+              ...part,
+              sourceOffset: segment.sourceOffset + part.sourceOffset,
+            }))
+          : [segment],
+      ),
+    [liveMarkdown],
+  );
 
   return segments.map((segment) => {
+    if (segment.kind === "html-embed") {
+      return (
+        <ThreadLegacyHtmlEmbed key={`html-embed:${segment.sourceOffset}`} html={segment.html} />
+      );
+    }
     if (segment.kind === "artifact-template") {
       return (
         <ArtifactTemplateCard

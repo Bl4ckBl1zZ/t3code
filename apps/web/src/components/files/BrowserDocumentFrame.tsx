@@ -1,4 +1,5 @@
 import {
+  htmlRenderInlineDocument,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
   htmlRenderResult,
@@ -64,18 +65,25 @@ export function BrowserDocumentFrame(props: {
  * A sandboxed agent HTML render in the app theme. The page reads the theme from
  * its URL fragment before first paint, then follows changes posted to its
  * bootstrap. The first URL is kept for the frame's lifetime: signed asset URLs
- * re-mint while it stays mounted, and a new src would reload the page.
+ * re-mint while it stays mounted, and a new src would reload the page. A page
+ * held as a string (`html`, a legacy embed) is written into the frame with the
+ * theme already in it, under the same sandbox.
  */
-export function HtmlRenderDocument(props: {
-  readonly src: string;
-  readonly title: string;
-  readonly className?: string;
-  /** Receives the page's content height whenever it changes, so an inline frame can fit it. */
-  readonly onContentHeight?: (height: number) => void;
-}) {
+export function HtmlRenderDocument(
+  props: ({ readonly src: string } | { readonly html: string }) & {
+    readonly title: string;
+    readonly className?: string;
+    /** Receives the page's content height whenever it changes, so an inline frame can fit it. */
+    readonly onContentHeight?: (height: number) => void;
+  },
+) {
   const theme = useHtmlRenderTheme();
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [src] = useState(() => `${props.src.split("#", 1)[0]}${htmlRenderThemeFragment(theme)}`);
+  const [source] = useState(() =>
+    "html" in props
+      ? { srcDoc: htmlRenderInlineDocument(props.html, theme) }
+      : { src: `${props.src.split("#", 1)[0]}${htmlRenderThemeFragment(theme)}` },
+  );
   const [loaded, setLoaded] = useState(false);
   const postTheme = () => {
     frameRef.current?.contentWindow?.postMessage(htmlRenderThemeMessage(theme), "*");
@@ -122,7 +130,7 @@ export function HtmlRenderDocument(props: {
   return (
     <iframe
       ref={frameRef}
-      src={src}
+      {...source}
       title={props.title}
       // Never allow-same-origin: the opaque origin keeps the page out of the app's session.
       sandbox="allow-scripts allow-forms"
