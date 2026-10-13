@@ -669,6 +669,134 @@ describe("handoff delivery", () => {
     }),
   );
 
+  describe("summaries of omitted history", () => {
+    const long = Array.from({ length: 12 }, (_, index) =>
+      message(
+        `item:long:${index}`,
+        index % 2 === 0 ? "user" : "assistant",
+        `Step ${index}: ${"detail ".repeat(120)}`,
+      ),
+    );
+    const longHandoff: OrchestrationV2ContextHandoff = {
+      ...handoff,
+      history: {
+        ...handoff.history!,
+        messages: long,
+        omittedItems: 1,
+        omittedItemIds: [TurnItemId.make("item:omitted-during-preparation")],
+      },
+    };
+
+    it.effect("summarizes what the budget leaves out without displacing selected items", () =>
+      Effect.gen(function* () {
+        let durable = longHandoff;
+        const requests: Array<{
+          omittedItemIds: ReadonlyArray<string>;
+          omittedMessages: ReadonlyArray<OrchestrationV2HistoricalMessage>;
+        }> = [];
+        const result = yield* deliverContextHandoffs({
+          handoffs: [durable],
+          providerThread,
+          budget: 6_000,
+          alreadyDeliveredItemIds: new Set(),
+          summarize: (input) =>
+            Effect.sync(() => {
+              requests.push(input);
+              return "The user wants every step kept; step 0 set the constraints.";
+            }),
+          persist: (value) =>
+            Effect.sync(() => {
+              durable = value;
+            }),
+        });
+        yield* result.delivered;
+
+        assert.lengthOf(requests, 1);
+        assert.deepEqual(requests[0]!.omittedItemIds, ["item:omitted-during-preparation"]);
+        assert.include(result.context, "step 0 set the constraints");
+        assert.isAtMost(Buffer.byteLength(JSON.stringify(result.context)) + 256, 6_000);
+        // Every item is either delivered verbatim or handed to the summarizer.
+        const summarized = requests[0]!.omittedMessages.map((item) => item.itemId);
+        const delivered = durable.delivery!.itemIds;
+        assert.isAbove(summarized.length, 0);
+        assert.isAbove(delivered.length, 0);
+        assert.sameMembers(
+          [...summarized, ...delivered],
+          long.map((item) => item.itemId),
+        );
+        for (const itemId of delivered) assert.include(result.context, itemId);
+        assert.equal(
+          durable.history?.summary,
+          "The user wants every step kept; step 0 set the constraints.",
+        );
+        assert.deepEqual(decodeHandoff(durable).history?.summary, durable.history?.summary);
+      }),
+    );
+
+    it.effect("reuses a stored summary when delivery is retried", () =>
+      Effect.gen(function* () {
+        const result = yield* deliverContextHandoffs({
+          handoffs: [
+            { ...longHandoff, history: { ...longHandoff.history!, summary: "Stored summary." } },
+          ],
+          providerThread,
+          budget: 6_000,
+          alreadyDeliveredItemIds: new Set(),
+          summarize: () => Effect.die("a stored summary must not be generated again"),
+          persist: () => Effect.void,
+        });
+        assert.include(result.context, "Stored summary.");
+      }),
+    );
+
+    it.effect("shortens a summary longer than its reserve", () =>
+      Effect.gen(function* () {
+        const result = yield* deliverContextHandoffs({
+          handoffs: [longHandoff],
+          providerThread,
+          budget: 6_000,
+          alreadyDeliveredItemIds: new Set(),
+          summarize: () => Effect.succeed("constraint ".repeat(2_000)),
+          persist: () => Effect.void,
+        });
+        assert.include(result.context, "[summary truncated]");
+        assert.isAtMost(Buffer.byteLength(JSON.stringify(result.context)) + 256, 6_000);
+      }),
+    );
+
+    it.effect("does not summarize when the whole history fits", () =>
+      Effect.gen(function* () {
+        const result = yield* deliverContextHandoffs({
+          handoffs: [handoff],
+          providerThread,
+          budget: 16_000,
+          alreadyDeliveredItemIds: new Set(),
+          summarize: () => Effect.die("nothing was omitted"),
+          persist: () => Effect.void,
+        });
+        assert.notInclude(result.context, "AI summary");
+      }),
+    );
+
+    it.effect("delivers the verbatim selection unchanged when no summary is available", () =>
+      Effect.gen(function* () {
+        const input = {
+          handoffs: [longHandoff],
+          providerThread,
+          budget: 6_000,
+          alreadyDeliveredItemIds: new Set<string>(),
+          persist: () => Effect.void,
+        };
+        const without = yield* deliverContextHandoffs(input);
+        const unavailable = yield* deliverContextHandoffs({
+          ...input,
+          summarize: () => Effect.succeed(null),
+        });
+        assert.equal(unavailable.context, without.context);
+      }),
+    );
+  });
+
   it.effect("fails before delivery when even the coverage marker cannot fit", () =>
     Effect.gen(function* () {
       let calls = 0;

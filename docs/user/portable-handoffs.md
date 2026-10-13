@@ -13,9 +13,11 @@ Other providers receive the same selection as attributed conversation context. A
 copy the outgoing provider's reasoning, tool-call state, or attachments.
 
 The handoff includes references to omitted history. The agent can use T3 Code's thread-reading tool
-to retrieve saved messages and activity, including the remainder of a long item. For an important
-constraint, you can still repeat it in your next message. A handoff is a budgeted selection, not an
-agent-written summary.
+to retrieve saved messages and activity, including the remainder of a long item. When history is
+left out, T3 Code also asks the text generation model (Settings → General → Text generation) for a
+short summary of the omitted part and sends it ahead of the selected messages. Summarizing adds a
+model call before the turn starts; if it fails or takes longer than 90 seconds, the handoff goes
+ahead without it. For an important constraint, you can still repeat it in your next message.
 
 ## Context limits
 

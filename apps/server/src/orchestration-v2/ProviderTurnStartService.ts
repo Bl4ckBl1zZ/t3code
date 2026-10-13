@@ -27,6 +27,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
+import * as ContextHandoffSummary from "./ContextHandoffSummary.ts";
 import {
   DEFAULT_HANDOFF_TOKEN_CAP,
   handoffTokenCapConfig,
@@ -88,6 +89,7 @@ export const layer: Layer.Layer<
   never,
   | EventSink.EventSinkV2
   | ContextHandoffService.ContextHandoffServiceV2
+  | ContextHandoffSummary.ContextHandoffSummary
   | IdAllocator.IdAllocatorV2
   | FileSystem.FileSystem
   | GitWorkflowService.GitWorkflowService
@@ -102,6 +104,7 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
+    const contextHandoffSummary = yield* ContextHandoffSummary.ContextHandoffSummary;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
     const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -1137,6 +1140,26 @@ export const layer: Layer.Layer<
               });
             }),
             alreadyDeliveredItemIds: deliveredItemIds,
+            summarize: (omitted) =>
+              contextHandoffSummary.summarize({
+                threadId: projection.thread.id,
+                projectId: projection.thread.projectId,
+                cwd: resolvedRuntimePolicy.cwd,
+                fromProviderInstanceIds: Array.from(
+                  new Set(
+                    [...effectiveHandoffs, ...retryHandoff].flatMap((handoff) =>
+                      handoff.fromProviderThreadIds.flatMap((id) => {
+                        const source = projection.providerThreads.find(
+                          (candidate) => candidate.id === id,
+                        );
+                        return source === undefined ? [] : [source.providerInstanceId];
+                      }),
+                    ),
+                  ),
+                ),
+                toProviderInstanceId: run.providerInstanceId,
+                ...omitted,
+              }),
             ...(session.injectHistory === undefined
               ? {}
               : {

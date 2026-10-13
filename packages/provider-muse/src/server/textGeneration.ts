@@ -21,6 +21,7 @@ import { investigationUnsupported } from "@t3tools/provider-core/server/textGene
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildHandoffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
 } from "@t3tools/provider-core/server/textGenerationPrompts";
@@ -342,6 +343,16 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     });
     return { title: sanitizeThreadTitle(generated.title) };
   });
+  const generateHandoffSummary: ProviderTextGeneration["generateHandoffSummary"] = Effect.fn(
+    "MuseTextGeneration.generateHandoffSummary",
+  )(function* (input) {
+    const generated = yield* runMuseJson({
+      operation: "generateHandoffSummary",
+      ...buildHandoffSummaryPrompt(input),
+      modelSelection: input.modelSelection,
+    });
+    return { summary: generated.summary.trim() };
+  });
   // Muse runs in an empty read-only directory and cannot be pointed at a checkout to read.
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Muse Code"));
@@ -350,6 +361,7 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateHandoffSummary,
     generateReviewGuide,
   } satisfies ProviderTextGeneration;
 });

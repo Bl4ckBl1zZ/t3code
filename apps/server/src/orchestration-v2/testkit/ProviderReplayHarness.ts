@@ -26,6 +26,7 @@ import * as CheckpointRollbackService from "../CheckpointRollbackService.ts";
 import * as CommandPolicy from "../CommandPolicy.ts";
 import * as CommandReceiptStore from "../CommandReceiptStore.ts";
 import * as ContextHandoffService from "../ContextHandoffService.ts";
+import * as ContextHandoffSummary from "../ContextHandoffSummary.ts";
 import * as EffectOutbox from "../EffectOutbox.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as EventSink from "../EventSink.ts";
@@ -387,6 +388,7 @@ export function layerWithRegistry<Error>(
     Layer.provide(
       Layer.mergeAll(
         layerContextHandoffServiceProvided,
+        ContextHandoffSummary.layerDisabled,
         layerEventSinkProvided,
         IdAllocator.layer,
         layerStores,

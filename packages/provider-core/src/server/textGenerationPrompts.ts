@@ -493,3 +493,36 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Context handoff summary
+// ---------------------------------------------------------------------------
+
+export interface HandoffSummaryPromptInput {
+  transcript: string;
+  fromProvider: string;
+  toProvider: string;
+}
+
+export function buildHandoffSummaryPrompt(input: HandoffSummaryPromptInput) {
+  const prompt = [
+    "You compact part of a coding conversation so a different AI model can continue the work.",
+    "The newest messages reach that model verbatim; you summarize the older or oversized ones it will not see.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    "- Keep what is needed to continue: the user's goals and constraints, decisions and their reasons, work done, unresolved problems, and stated next steps.",
+    "- Keep exact identifiers verbatim: file paths, branch names, function and type names, commands, URLs, and error messages.",
+    "- Write concise markdown. State only facts from the transcript; do not invent details.",
+    "- Do not address the reader or comment on the handoff itself.",
+    "",
+    `The conversation ran on ${input.fromProvider} and continues on ${input.toProvider}.`,
+    "",
+    "Transcript:",
+    limitSection(input.transcript, 80_000),
+  ].join("\n");
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}
