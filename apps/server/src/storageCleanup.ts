@@ -1,4 +1,5 @@
 import {
+  CommandId,
   GitCommandError,
   OrchestrationV2AppThreadJson,
   OrchestrationV2ProviderSessionJson,
@@ -15,12 +16,13 @@ import type {
   StorageCleanupReport,
   StorageCleanupReportEntry,
 } from "@t3tools/contracts";
-import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
+import { resolveProjectSettings, resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -71,6 +73,23 @@ const worktreeCleanupEnabled = (rules: WorktreeCleanupRules) =>
   rules.worktreeOnDelete ||
   rules.worktreeUnchanged;
 
+/**
+ * Whether a deleted thread's worktree may be removed: the delete rule is on, or
+ * storage cleanup deleted the thread itself and the project has not turned
+ * worktree cleanup off.
+ */
+function deletedThreadWorktreeRule(
+  settings: ServerSettings,
+  projectId: ProjectId,
+  autoDeleted: boolean,
+): boolean {
+  return (
+    resolveWorktreeCleanup(settings, projectId).worktreeOnDelete ||
+    (autoDeleted &&
+      resolveProjectSettings(settings, projectId).settings.worktreeCleanup?.mode !== "off")
+  );
+}
+
 function anyWorktreePolicy(
   settings: ServerSettings,
   predicate: (rules: WorktreeCleanupRules) => boolean,
@@ -99,9 +118,12 @@ function sameProjectWorktreePolicies(left: ServerSettings, right: ServerSettings
 
 /** Live sessions keep their cwd even when no turn is currently running. */
 export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
+  return thread.branch !== null && thread.worktreePath !== null && threadAtRest(thread, now);
+}
+
+/** No run, queued prompt, question or background work holds the thread. */
+function threadAtRest(thread: OrchestrationV2ThreadShell, now: number): boolean {
   return (
-    thread.branch !== null &&
-    thread.worktreePath !== null &&
     thread.activeRunId === null &&
     (thread.status === "idle" ||
       thread.status === "completed" ||
@@ -174,6 +196,7 @@ const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const terminals = yield* TerminalManager.TerminalManager;
+  const crypto = yield* Crypto.Crypto;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
@@ -206,6 +229,15 @@ const make = Effect.gen(function* () {
           inside(worktreePath, cwd)
         );
       });
+
+  // Deleting a thread closes its terminals. Idle shells may go, as on settle;
+  // a running command such as a dev server keeps the thread.
+  const threadRunsCommand = (threadId: string) =>
+    [...(liveTerminals.get(threadId)?.values() ?? [])].some(
+      (terminal) =>
+        (terminal.status === "starting" || terminal.status === "running") &&
+        terminal.hasRunningSubprocess,
+    );
 
   const measureWorktree = (worktreePath: string) =>
     Effect.gen(function* () {
@@ -410,15 +442,28 @@ const make = Effect.gen(function* () {
       );
       if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
     }
-    const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
-          SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
+    const deletedRows = yield* sql<{
+      payload_json: string;
+      workspaceRoot: string;
+      autoDeleted: number | boolean;
+    }>`
+          SELECT t.payload_json, p.workspace_root AS "workspaceRoot",
+            EXISTS (
+              SELECT 1 FROM orchestration_command_receipts r
+              WHERE r.aggregate_kind = 'thread' AND r.aggregate_id = t.thread_id
+                AND r.command_type = 'thread.auto-delete' AND r.status = 'accepted'
+            ) AS "autoDeleted"
           FROM orchestration_v2_projection_threads t
           JOIN projection_projects p ON p.project_id = t.project_id
           WHERE t.deleted_at IS NOT NULL
         `;
     const deletedThreads = (yield* Effect.forEach(deletedRows, (row) =>
       decodeCleanupThread(row.payload_json).pipe(
-        Effect.map((thread) => ({ ...thread, workspaceRoot: row.workspaceRoot })),
+        Effect.map((thread) => ({
+          ...thread,
+          workspaceRoot: row.workspaceRoot,
+          autoDeleted: Boolean(row.autoDeleted),
+        })),
       ),
     )).filter((thread) => thread.worktreePath !== null && thread.branch !== null);
     const snapshot = yield* readThreads();
@@ -433,9 +478,12 @@ const make = Effect.gen(function* () {
     ];
     for (const thread of candidates) {
       const settings = resolveWorktreeCleanup(serverSettings, thread.projectId);
-      if (!worktreeCleanupEnabled(settings)) continue;
-      const worktreePath = path.resolve(thread.worktreePath!);
       const deleted = "workspaceRoot" in thread;
+      const autoDeleted = deleted && thread.autoDeleted;
+      const deletedRule =
+        deleted && deletedThreadWorktreeRule(serverSettings, thread.projectId, autoDeleted);
+      if (!worktreeCleanupEnabled(settings) && !deletedRule) continue;
+      const worktreePath = path.resolve(thread.worktreePath!);
       const project = deleted
         ? { workspaceRoot: thread.workspaceRoot }
         : snapshot.projects.find((entry) => entry.id === thread.projectId);
@@ -452,7 +500,7 @@ const make = Effect.gen(function* () {
       const keep = (reason: string) => entries.push({ ...entry, reason: sentence(reason) });
       yield* Effect.gen(function* () {
         if (!(yield* fs.exists(worktreePath))) return;
-        if (deleted && !settings.worktreeOnDelete) return keep("no rules apply");
+        if (deleted && !deletedRule) return keep("no rules apply");
         const shared = groups.get(worktreePath)?.length ?? 0;
         if (shared > 1) return keep(`shared by ${shared} threads`);
         if (project === undefined) return keep("project is unavailable");
@@ -483,7 +531,9 @@ const make = Effect.gen(function* () {
           storageCleanupActivityAt(thread) < now - settings.worktreeAfterDays * DAY_MS;
         let eligible = deleted || old;
         let removalReason = deleted
-          ? "thread was deleted"
+          ? autoDeleted
+            ? "thread was auto-deleted"
+            : "thread was deleted"
           : `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} days`;
         if (!eligible && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
           const repositoryCwd = path.resolve(project.workspaceRoot);
@@ -551,8 +601,11 @@ const make = Effect.gen(function* () {
           if (deleted) {
             if (
               latest.length > 0 ||
-              !resolveWorktreeCleanup(yield* settingsService.getSettings, thread.projectId)
-                .worktreeOnDelete
+              !deletedThreadWorktreeRule(
+                yield* settingsService.getSettings,
+                thread.projectId,
+                autoDeleted,
+              )
             )
               return "thread or cleanup settings changed since check";
             // V2 deletion queues durable cleanup. Do not remove its checkout until
@@ -646,6 +699,101 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // When the thread entered Settled. Automatic settlement backdates `settledAt`
+  // to the last activity, so the clock is the latest settle event itself;
+  // `settledAt` covers threads whose events were compacted away.
+  const settledSince = Effect.fn("StorageCleanup.settledSince")(function* (
+    thread: OrchestrationV2ThreadShell,
+  ) {
+    const rows = yield* sql<{ occurredAt: string }>`
+      SELECT occurred_at AS "occurredAt" FROM orchestration_events
+      WHERE aggregate_kind = 'thread' AND stream_id = ${thread.id}
+        AND application_event_version = 2 AND event_type = 'thread.settled'
+      ORDER BY sequence DESC LIMIT 1
+    `;
+    const recorded = rows[0] === undefined ? Number.NaN : Date.parse(rows[0].occurredAt);
+    if (!Number.isNaN(recorded)) return recorded;
+    return thread.settledAt === null ? null : DateTime.toEpochMillis(thread.settledAt);
+  });
+
+  // Deletes threads settled for `afterDays` the way a manual delete does. Their
+  // worktrees are removed afterwards by cleanWorktrees as deleted threads, so the
+  // same local-change checks apply, and branches are kept.
+  const deleteSettledThreads = Effect.fn("StorageCleanup.deleteSettledThreads")(function* (
+    afterDays: number,
+    now: number,
+    entries: StorageCleanupReportEntry[],
+  ) {
+    const settled = (yield* projections.getShellSnapshot()).threads.filter(
+      (thread) =>
+        thread.settledOverride === "settled" &&
+        thread.pinnedAt == null &&
+        thread.archivedAt === null &&
+        thread.deletedAt === null,
+    );
+    if (settled.length === 0) return;
+    const scheduled = new Set(
+      (yield* sql<{ threadId: string }>`
+        SELECT DISTINCT thread_id AS "threadId" FROM scheduled_tasks WHERE thread_id IS NOT NULL
+      `).map((row) => row.threadId),
+    );
+    for (const thread of settled) {
+      const entry: StorageCleanupReportEntry = {
+        kind: "thread",
+        outcome: "kept",
+        reason: "",
+        path: thread.worktreePath,
+        threadId: thread.id,
+        threadTitle: thread.title,
+        bytes: null,
+        files: null,
+      };
+      const keep = (reason: string) => entries.push({ ...entry, reason: sentence(reason) });
+      yield* Effect.gen(function* () {
+        const since = yield* settledSince(thread);
+        if (since === null) return;
+        const days = Math.max(0, Math.floor((now - since) / DAY_MS));
+        if (since > now - afterDays * DAY_MS)
+          return keep(`settled for ${days} of ${afterDays} days`);
+        if (scheduled.has(thread.id)) return keep("a scheduled task uses this thread");
+        if (!threadAtRest(thread, now)) return keep("thread is running or has pending work");
+        if (threadRunsCommand(thread.id)) return keep("a terminal is running a command");
+        if ((yield* settingsService.getSettings).autoDeleteSettledAfterDays !== afterDays)
+          return keep("settings changed since check");
+        const deleted = yield* engine
+          .dispatch({
+            type: "thread.auto-delete",
+            commandId: CommandId.make(
+              `server:auto-delete:${thread.id}:${yield* crypto.randomUUIDv4}`,
+            ),
+            threadId: thread.id,
+            snapshotAt: thread.updatedAt,
+          })
+          .pipe(
+            Effect.as(true),
+            Effect.catchTags({ OrchestratorDispatchError: () => Effect.succeed(false) }),
+          );
+        if (!deleted) return keep("thread changed since check");
+        entries.push({
+          ...entry,
+          outcome: "removed",
+          reason: sentence(`deleted after ${days} days settled`),
+        });
+        yield* Effect.logInfo("storage cleanup deleted settled thread", { threadId: thread.id });
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            entries.push({ ...entry, outcome: "failed", reason: cleanupFailureReason(error) });
+            yield* Effect.logWarning("storage cleanup failed for settled thread", {
+              threadId: thread.id,
+              error,
+            });
+          }),
+        ),
+      );
+    }
+  });
+
   const cleanFiles = Effect.fn("StorageCleanup.cleanFiles")(function* (
     root: string,
     days: number | null,
@@ -691,6 +839,25 @@ const make = Effect.gen(function* () {
     const serverSettings = yield* settingsService.getSettings;
     const settings = serverSettings.storageCleanup;
     const entries: StorageCleanupReportEntry[] = [];
+    // Before worktrees, so a deleted thread's worktree is considered in the same pass.
+    if (serverSettings.autoDeleteSettledAfterDays !== null)
+      yield* deleteSettledThreads(serverSettings.autoDeleteSettledAfterDays, now, entries).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            entries.push({
+              kind: "thread",
+              outcome: "failed",
+              reason: cleanupFailureReason(error),
+              path: null,
+              threadId: null,
+              threadTitle: null,
+              bytes: null,
+              files: null,
+            });
+            yield* Effect.logWarning("settled thread cleanup failed", { error });
+          }),
+        ),
+      );
     yield* cleanWorktrees(serverSettings, now, entries).pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {
@@ -775,9 +942,14 @@ const make = Effect.gen(function* () {
     yield* SubscriptionRef.set(reportRef, latestReport);
     return latestReport;
   });
+  // A burst of deletions queues one follow-up sweep; it reads state when it starts.
+  let eventSweepQueued = false;
   const worker = yield* makeDrainableWorker(
     (completion: Deferred.Deferred<StorageCleanupReport, ServerSettingsError> | undefined) =>
-      sweep(completion === undefined ? "automatic" : "manual").pipe(
+      Effect.suspend(() => {
+        eventSweepQueued = false;
+        return sweep(completion === undefined ? "automatic" : "manual");
+      }).pipe(
         Effect.exit,
         Effect.flatMap((exit) =>
           completion === undefined
@@ -830,6 +1002,7 @@ const make = Effect.gen(function* () {
         if (
           Equal.equals(settings.storageCleanup, lastSettings.storageCleanup) &&
           Equal.equals(settings.worktreeCleanup, lastSettings.worktreeCleanup) &&
+          settings.autoDeleteSettledAfterDays === lastSettings.autoDeleteSettledAfterDays &&
           sameProjectWorktreePolicies(settings, lastSettings)
         )
           return Effect.void;
@@ -838,12 +1011,19 @@ const make = Effect.gen(function* () {
       }),
     );
     yield* forkParked(
-      Stream.runForEach(events, (event) =>
-        (event.type === "thread.deleted" || event.type === "provider-session.updated") &&
-        anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)
-          ? worker.enqueue(undefined)
-          : Effect.void,
-      ).pipe(
+      Stream.runForEach(events, (event) => {
+        if (eventSweepQueued) return Effect.void;
+        const deleteRule = anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete);
+        // Worktrees of auto-deleted threads wait for the deletion's cleanup to finish.
+        const autoDelete = lastSettings.autoDeleteSettledAfterDays !== null;
+        if (
+          !(event.type === "thread.deleted" && (deleteRule || autoDelete)) &&
+          !(event.type === "provider-session.updated" && deleteRule)
+        )
+          return Effect.void;
+        eventSweepQueued = true;
+        return worker.enqueue(undefined);
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Storage cleanup event stream failed", { cause }),
         ),

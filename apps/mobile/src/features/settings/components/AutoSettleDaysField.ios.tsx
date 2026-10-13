@@ -15,20 +15,22 @@ import {
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
 } from "@t3tools/contracts";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useAppearancePreferences } from "../appearance/AppearancePreferencesProvider";
 import type { AutoSettleDaysFieldProps } from "./AutoSettleDaysField";
-
-const days = Array.from(
-  { length: MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS - MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS + 1 },
-  (_, index) => MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS + index,
-);
 
 export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
   const { themeAppearance, themeVariables: colors, appearance } = useAppearancePreferences();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(props.value);
+  const min = props.min ?? MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS;
+  const max = props.max ?? MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS;
+  const label = props.accessibilityLabel ?? "Days before auto-settle";
+  const days = useMemo(
+    () => Array.from({ length: max - min + 1 }, (_, index) => min + index),
+    [min, max],
+  );
   return (
     <Host matchContents colorScheme={themeAppearance} seedColor={colors["--color-primary"]}>
       <Popover isPresented={open} onIsPresentedChange={setOpen}>
@@ -42,7 +44,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
             modifiers={[
               buttonStyle("bordered"),
               disabled(props.disabled),
-              accessibilityLabel(`Days before auto-settle: ${props.value}`),
+              accessibilityLabel(`${label}: ${props.value}`),
               frame({ minWidth: 64, minHeight: 44 }),
               foregroundStyle(colors["--color-primary-text"]),
               font({ size: appearance.baseFontSize }),
@@ -60,7 +62,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
             ]}
           >
             <Picker
-              label="Days before auto-settle"
+              label={label}
               selection={draft}
               onSelectionChange={setDraft}
               modifiers={[pickerStyle("wheel"), frame({ height: 180 })]}

@@ -180,11 +180,13 @@ function CleanupResults({
     <>
       {report.entries.map((entry, index) => {
         const name =
-          entry.kind === "worktree"
-            ? (entry.path?.split(/[\\/]/).findLast(Boolean) ?? "Worktrees")
-            : entry.kind === "logs"
-              ? "Rotated logs"
-              : "Browser artifacts";
+          entry.kind === "thread"
+            ? (entry.threadTitle ?? "Settled threads")
+            : entry.kind === "worktree"
+              ? (entry.path?.split(/[\\/]/).findLast(Boolean) ?? "Worktrees")
+              : entry.kind === "logs"
+                ? "Rotated logs"
+                : "Browser artifacts";
         return (
           <SettingsRow
             key={`${entry.path ?? entry.kind}:${entry.threadId ?? index}`}
@@ -275,6 +277,7 @@ function CleanupSection() {
       rules.worktreeOnDelete ||
       rules.worktreeUnchanged;
     return (
+      settings.autoDeleteSettledAfterDays !== null ||
       settings.storageCleanup.browserArtifactsAfterDays !== null ||
       settings.storageCleanup.logsAfterDays !== null ||
       enabled(resolveWorktreeCleanup(settings, null)) ||
@@ -610,6 +613,38 @@ export function StorageSettingsPanel() {
           </>
         )}
       </SettingsSection>
+
+      {!isProjectScope &&
+        connectedEnvironments.every(
+          (environment) =>
+            environment.serverConfig?.environment.capabilities.settledThreadAutoDelete === true,
+        ) && (
+          <SettingsSection id="storage-threads" title="Threads">
+            <SettingsRow
+              {...searchableSetting("storage-settled-threads")}
+              status={
+                targets.some(
+                  (entry) =>
+                    entry.settings.autoDeleteSettledAfterDays !==
+                    scopedSettings.autoDeleteSettledAfterDays,
+                )
+                  ? "Mixed across selected machines"
+                  : undefined
+              }
+              description="Permanently delete threads settled this many days, then remove their worktrees unless they have local changes. Branches, pinned threads and threads with scheduled tasks are kept."
+              serverScoped
+              control={
+                <RetentionControl
+                  label="Delete settled threads"
+                  value={scopedSettings.autoDeleteSettledAfterDays}
+                  onChange={(autoDeleteSettledAfterDays) =>
+                    updateSettings({ autoDeleteSettledAfterDays })
+                  }
+                />
+              }
+            />
+          </SettingsSection>
+        )}
 
       {!isProjectScope && (
         <SettingsSection id="storage-artifacts" title="Artifacts and logs">

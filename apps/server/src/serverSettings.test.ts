@@ -2168,6 +2168,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       // The fork's buffered default delivered each message whole.
       assert.equal(settings.responseStreamingMode, "turn");
+      // Same key and meaning here: storage cleanup's settled-thread rule.
+      assert.equal(settings.autoDeleteSettledAfterDays, 2);
       assert.deepEqual<ServerSettings["projectSettingsOverrides"]>(
         settings.projectSettingsOverrides,
         {
@@ -2191,7 +2193,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const persisted = JSON.parse(yield* fileSystem.readFileString(serverConfig.settingsPath));
       for (const key of [
         "enableLegacyTokenStreaming",
-        "autoDeleteSettledAfterDays",
         "enableHermes",
         "enableRemoteHermes",
         "hermesProactiveDefaultApplied",
@@ -2205,6 +2206,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         assert.notProperty(persisted, key);
       }
       assert.equal(persisted.responseStreamingMode, "turn");
+      assert.equal(persisted.autoDeleteSettledAfterDays, 2);
       assert.deepEqual(Object.keys(persisted.providerInstances), ["claudeAgent"]);
     }).pipe(Effect.provide(layerServerSettings())),
   );

@@ -165,8 +165,18 @@ thread is deleted, including archived threads and worktrees left by earlier dele
 server waits for sessions and terminals to stop and retries skipped worktrees after restart.
 Existing prompts for deleting a worktree manually remain available when this policy is off.
 
+Turn on **Delete settled threads** under **Threads** to permanently delete threads that have
+stayed settled for a chosen number of days, counted from when each thread was settled. Their
+worktrees are removed afterwards with the same checks as **Delete worktrees with deleted
+threads**, even when that rule is off: worktrees with local changes stay, and so do the worktrees
+of projects whose cleanup is **Off**. Branches are kept, so commits that were never pushed are not
+lost. Pinned and archived threads, threads with a scheduled task, threads with a running turn,
+question, or background work, and threads whose terminal is running a command are never deleted.
+On iOS and Android, the same setting is in **Settings → Thread behavior → Auto-delete**.
+
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
-worktrees were removed or kept and why, plus any failures.
+threads and worktrees were removed or kept and why, including how many days each settled thread
+has left, plus any failures.
 
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.

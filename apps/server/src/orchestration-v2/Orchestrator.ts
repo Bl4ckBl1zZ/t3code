@@ -437,6 +437,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.archive":
     case "thread.unarchive":
     case "thread.delete":
+    case "thread.auto-delete":
     case "thread.settle":
     case "thread.auto-settle":
     case "thread.unsettle":
@@ -10706,7 +10707,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
         break;
       }
-      case "thread.delete": {
+      case "thread.delete":
+      case "thread.auto-delete": {
         const projection = yield* projectionStore
           .getThreadRecords(command.threadId, [
             "runs",
@@ -10721,9 +10723,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
             ),
           );
+        if (command.type === "thread.auto-delete") {
+          // Storage cleanup decided from a shell snapshot. Anything the user did
+          // since, or work that started, keeps the thread.
+          const { thread } = projection;
+          if (
+            thread.deletedAt !== null ||
+            thread.archivedAt !== null ||
+            thread.pinnedAt != null ||
+            thread.settledOverride !== "settled" ||
+            DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt) ||
+            projection.runs.some((run) =>
+              ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+            ) ||
+            projection.runtimeRequests.some((request) => request.status === "pending")
+          ) {
+            return yield* new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: `Thread ${command.threadId} changed before automatic deletion.`,
+            });
+          }
+        }
         return yield* mapDispatchError(command)(
           planThreadDeletion({
-            command,
+            command: {
+              type: "thread.delete",
+              commandId: command.commandId,
+              threadId: command.threadId,
+            },
             projection,
             attachmentIds: yield* projectionStore
               .getThreadAttachmentIds(command.threadId)

@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
+import type * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -12,7 +13,10 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   DEFAULT_SERVER_SETTINGS,
+  OrchestrationV2AppThreadJson,
   StorageCleanupReport,
+  type OrchestrationV2ServerCommand,
+  type TerminalMetadataStreamEvent,
   type WorktreeKeepWhen,
 } from "@t3tools/contracts";
 import * as ServerConfig from "./config.ts";
@@ -45,6 +49,9 @@ import {
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const decodeCleanupReport = Schema.decodeSync(StorageCleanupReport);
+const encodeAppThreadJson = Schema.encodeEffect(
+  Schema.fromJsonString(OrchestrationV2AppThreadJson),
+);
 
 function at(offsetMs: number): DateTime.Utc {
   return DateTime.makeUnsafe(NOW_MS + offsetMs);
@@ -251,6 +258,14 @@ const cleanupFixture = Effect.gen(function* () {
   let editBeforeRemoval = false;
   let openSessionCwd: string | null = null;
   let fullStatusCalls = 0;
+  // Settle event times by thread, threads bound to scheduled tasks, deleted
+  // thread rows, and the commands storage cleanup dispatched.
+  const settledEvents = new Map<string, string>();
+  let scheduledThreadIds: Array<string> = [];
+  let deletedRows: Array<{ payload_json: string; workspaceRoot: string; autoDeleted: number }> = [];
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  const rejectedThreadIds = new Set<string>();
+  let terminalListener: ((event: TerminalMetadataStreamEvent) => Effect.Effect<void>) | null = null;
   const context = yield* Layer.build(StorageCleanup.layer).pipe(
     Effect.provideService(GitVcsDriver.GitVcsDriver, {
       ...git,
@@ -278,10 +293,33 @@ const cleanupFixture = Effect.gen(function* () {
     } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
     Effect.provideService(Orchestrator.OrchestratorV2, {
       streamDomainEvents: Stream.empty,
+      dispatch: (command: OrchestrationV2ServerCommand) =>
+        Effect.suspend(() => {
+          dispatched.push(command);
+          return rejectedThreadIds.has(commandThreadId(command))
+            ? Effect.fail(
+                new Orchestrator.OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                }),
+              )
+            : Effect.succeed({});
+        }),
     } as unknown as Orchestrator.OrchestratorV2["Service"]),
-    Effect.provideService(SqlClient.SqlClient, ((strings: TemplateStringsArray) =>
-      Effect.sync(() =>
-        openSessionCwd !== null && strings.join("").includes("projection_provider_sessions")
+    Effect.provideService(SqlClient.SqlClient, ((
+      strings: TemplateStringsArray,
+      ...values: Array<unknown>
+    ) =>
+      Effect.sync(() => {
+        const text = strings.join("?");
+        if (text.includes("FROM scheduled_tasks"))
+          return scheduledThreadIds.map((threadId) => ({ threadId }));
+        if (text.includes("'thread.settled'")) {
+          const occurredAt = settledEvents.get(String(values[0]));
+          return occurredAt === undefined ? [] : [{ occurredAt }];
+        }
+        if (text.includes("deleted_at IS NOT NULL")) return deletedRows;
+        return openSessionCwd !== null && text.includes("projection_provider_sessions")
           ? [
               {
                 payload_json: JSON.stringify({
@@ -298,13 +336,17 @@ const cleanupFixture = Effect.gen(function* () {
                 }),
               },
             ]
-          : [],
-      )) as unknown as SqlClient.SqlClient),
+          : [];
+      })) as unknown as SqlClient.SqlClient),
     Effect.provideService(GitManager.GitManager, {
       invalidateStatus: () => Effect.void,
     } as unknown as GitManager.GitManager["Service"]),
     Effect.provideService(TerminalManager.TerminalManager, {
-      subscribeMetadata: () => Effect.succeed(() => {}),
+      subscribeMetadata: (listener: (event: TerminalMetadataStreamEvent) => Effect.Effect<void>) =>
+        Effect.sync(() => {
+          terminalListener = listener;
+          return () => {};
+        }),
     } as unknown as TerminalManager.TerminalManager["Service"]),
     Effect.provideService(ServerActivation, Effect.never),
   );
@@ -343,6 +385,22 @@ const cleanupFixture = Effect.gen(function* () {
       openSessionCwd = cwd;
     },
     fullStatusCalls: () => fullStatusCalls,
+    repo,
+    updateSettings: (
+      update: (current: import("@t3tools/contracts").ServerSettings) => typeof settings,
+    ) => {
+      settings = update(settings);
+    },
+    settledEvents,
+    setScheduledThreadIds: (ids: Array<string>) => {
+      scheduledThreadIds = ids;
+    },
+    setDeletedRows: (rows: typeof deletedRows) => {
+      deletedRows = rows;
+    },
+    dispatched,
+    rejectedThreadIds,
+    emitTerminal: (event: TerminalMetadataStreamEvent) => terminalListener!(event),
   };
 });
 const cleanupTestLayer = GitVcsDriver.layer.pipe(
@@ -358,8 +416,13 @@ const runCleanupTest = <A, E>(
     | GitVcsDriver.GitVcsDriver
     | Path.Path
     | Scope.Scope
+    | Crypto.Crypto
   >,
 ) => effect.pipe(Effect.provide(cleanupTestLayer), Effect.scoped);
+
+function commandThreadId(command: OrchestrationV2ServerCommand): string {
+  return "threadId" in command ? command.threadId : "";
+}
 
 describe("storage cleanup reports and local file policies", () => {
   it.live("measures nested regular files without following symlinks", () =>
@@ -749,5 +812,188 @@ describe("storage cleanup reports and local file policies", () => {
         ]);
       }),
     ),
+  );
+});
+
+describe("settled thread auto-delete", () => {
+  // Live tests run on the wall clock, so ages count back from now.
+  const ago = (days: number) => DateTime.makeUnsafe(Date.now() - days * DAY_MS);
+  const daysAgo = (days: number) => DateTime.formatIso(ago(days));
+  const settled = (id: string, overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
+    shell({
+      id: ThreadId.make(id),
+      title: id,
+      settledOverride: "settled",
+      settledAt: ago(30),
+      updatedAt: ago(10),
+      ...overrides,
+    });
+
+  it.live("deletes threads settled past the limit and reports the ones it keeps", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fixture = yield* cleanupFixture;
+        fixture.disable();
+        for (const [id, days] of [
+          ["due", 3],
+          ["recent", 1],
+          ["backdated", 1],
+          ["scheduled", 5],
+          ["running", 5],
+          ["terminal", 5],
+          ["raced", 5],
+          ["pinned", 5],
+          ["archived", 5],
+        ] as const)
+          fixture.settledEvents.set(id, daysAgo(days));
+        const due = settled("due");
+        fixture.setThreads([
+          due,
+          settled("recent"),
+          // Automatic settlement backdates settledAt; the settle event is the clock.
+          settled("backdated", { settledAt: ago(20) }),
+          // Without a settle event, settledAt is the fallback.
+          settled("no-event", { settledAt: ago(4) }),
+          settled("scheduled"),
+          settled("running", { activeRunId: RunId.make("run-1") }),
+          settled("terminal"),
+          settled("raced"),
+          settled("pinned", { pinnedAt: ago(1) }),
+          settled("archived", { archivedAt: ago(1) }),
+          shell({ id: ThreadId.make("active"), title: "active" }),
+        ]);
+        fixture.setScheduledThreadIds(["scheduled"]);
+        fixture.rejectedThreadIds.add("raced");
+        yield* fixture.emitTerminal({
+          type: "upsert",
+          terminal: {
+            threadId: "terminal",
+            terminalId: "default",
+            cwd: fixture.repo,
+            worktreePath: null,
+            status: "running",
+            pid: 1,
+            exitCode: null,
+            exitSignal: null,
+            hasRunningSubprocess: true,
+            label: "bun dev",
+            updatedAt: daysAgo(0),
+          },
+        });
+
+        // Off by default.
+        expect((yield* fixture.service.runNow).entries).toEqual([]);
+        expect(fixture.dispatched).toEqual([]);
+
+        fixture.updateSettings((current) => ({ ...current, autoDeleteSettledAfterDays: 2 }));
+        const report = yield* fixture.service.runNow;
+        expect(
+          fixture.dispatched.map((command) => [command.type, commandThreadId(command)]),
+        ).toEqual([
+          ["thread.auto-delete", "due"],
+          ["thread.auto-delete", "no-event"],
+          ["thread.auto-delete", "raced"],
+        ]);
+        const first = fixture.dispatched[0];
+        expect(
+          first?.type === "thread.auto-delete" && DateTime.toEpochMillis(first.snapshotAt),
+        ).toBe(DateTime.toEpochMillis(due.updatedAt));
+        expect(
+          Object.fromEntries(
+            report.entries
+              .filter((entry) => entry.kind === "thread")
+              .map((entry) => [entry.threadId, `${entry.outcome}: ${entry.reason}`]),
+          ),
+        ).toEqual({
+          due: "removed: Deleted after 3 days settled",
+          "no-event": "removed: Deleted after 4 days settled",
+          recent: "kept: Settled for 1 of 2 days",
+          backdated: "kept: Settled for 1 of 2 days",
+          scheduled: "kept: A scheduled task uses this thread",
+          running: "kept: Thread is running or has pending work",
+          terminal: "kept: A terminal is running a command",
+          raced: "kept: Thread changed since check",
+        });
+        expect(report.entries[0]).toMatchObject({ outcome: "removed", threadTitle: "due" });
+      }),
+    ),
+  );
+
+  it.live(
+    "removes an auto-deleted thread's worktree only when it is safe, keeping its branch",
+    () =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* cleanupFixture;
+          fixture.disable();
+          fixture.setThreads([]);
+          const payload = yield* encodeAppThreadJson({
+            createdBy: "user",
+            creationSource: "web",
+            id: ThreadId.make("thread-1"),
+            projectId: ProjectId.make("project-1"),
+            title: "Thread",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: "feature",
+            worktreePath: fixture.worktree,
+            activeProviderThreadId: null,
+            lineage: {
+              rootThreadId: ThreadId.make("thread-1"),
+              parentThreadId: null,
+              relationshipToParent: null,
+            },
+            forkedFrom: null,
+            createdAt: ago(30),
+            updatedAt: ago(1),
+            archivedAt: null,
+            settledOverride: "settled",
+            settledAt: ago(5),
+            lastVisitedAt: null,
+            deletedAt: ago(1),
+          });
+          const row = (autoDeleted: boolean) => ({
+            payload_json: payload,
+            workspaceRoot: fixture.repo,
+            autoDeleted: autoDeleted ? 1 : 0,
+          });
+
+          // A manual delete without the delete rule leaves its worktree alone.
+          fixture.setDeletedRows([row(false)]);
+          expect((yield* fixture.service.runNow).entries).toEqual([]);
+
+          // So does a project whose worktree cleanup is off.
+          fixture.setDeletedRows([row(true)]);
+          fixture.updateSettings((current) => ({
+            ...current,
+            projectSettingsOverrides: {
+              [ProjectId.make("project-1")]: { worktreeCleanup: { mode: "off" } },
+            },
+          }));
+          expect((yield* fixture.service.runNow).entries).toEqual([]);
+          fixture.updateSettings((current) => ({ ...current, projectSettingsOverrides: {} }));
+
+          yield* fixture.fs.writeFileString(`${fixture.worktree}/notes.txt`, "draft\n");
+          expect((yield* fixture.service.runNow).entries).toMatchObject([
+            {
+              kind: "worktree",
+              outcome: "kept",
+              reason: "Has uncommitted changes (1 file)",
+              threadId: "thread-1",
+            },
+          ]);
+          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+
+          yield* fixture.fs.remove(`${fixture.worktree}/notes.txt`);
+          expect((yield* fixture.service.runNow).entries).toMatchObject([
+            { kind: "worktree", outcome: "removed", reason: "Thread was auto-deleted" },
+          ]);
+          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(false);
+          // The branch keeps any commits that were never pushed.
+          yield* fixture.command(fixture.repo, ["rev-parse", "--verify", "refs/heads/feature"]);
+        }),
+      ),
   );
 });
