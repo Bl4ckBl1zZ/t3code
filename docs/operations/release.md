@@ -542,7 +542,9 @@ Checklist:
 
 1. Apple Developer account access:
    - Team has rights to create Developer ID certificates.
-2. Create an explicit App ID for `com.t3tools.t3code` and enable Associated Domains.
+2. Create an explicit App ID for `com.t3tools.t3code` and enable Associated Domains. A fork that
+   signs its own build sets `T3CODE_DESKTOP_APP_ID` to its App ID; the packager uses it for the
+   bundle identifier and the passkey keychain group.
 3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
    App ID with Associated Domains enabled.
 4. Export the certificate + private key as `.p12` from Keychain.
