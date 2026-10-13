@@ -52,6 +52,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -87,6 +88,7 @@ import {
   CLAUDE_T3_MCP_TOOL_WILDCARD,
   ClaudeAdapterV2Driver,
   ClaudeAgentSdkQueryRunner,
+  ClaudeAgentSdkQueryRunnerError,
   claudeAgentSdkQueryRunnerLiveLayer,
   ClaudeBackgroundWorkBlocksQueryReplacementError,
   ClaudeProviderCapabilitiesV2,
@@ -1595,7 +1597,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
     readonly interrupt?: Effect.Effect<void>;
     readonly settings?: ClaudeSettings;
-    readonly stopTask?: (taskId: string) => Effect.Effect<void>;
+    readonly stopTask?: (taskId: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
     // A CLI process opened after the first streams from its own queue, so the
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
@@ -1620,6 +1622,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const offeredMessages: Array<SDKUserMessage> = [];
       const permissionModeChanges: Array<string> = [];
       const continuationRequests: Array<ProviderContinuationRequest> = [];
+      // Each event of these kinds, in order, for tests that wait on the next one.
+      const continuationReceipts = yield* Queue.unbounded<ProviderContinuationRequest>();
+      const terminalReceipts =
+        yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>>();
+      const subagentReceipts =
+        yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "subagent.updated" }>>();
       let openedOptions: ClaudeAgentSdkQueryOptions | undefined;
       const adapter = makeClaudeAdapterV2({
         ...(options?.usageLimitListener ? { usageLimitListener: options.usageLimitListener } : {}),
@@ -1633,7 +1641,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           offer: (request) =>
             Effect.sync(() => {
               continuationRequests.push(request);
-            }),
+            }).pipe(Effect.andThen(Queue.offer(continuationReceipts, request))),
         },
         queryRunner: {
           allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
@@ -1708,8 +1716,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const events: Array<ProviderAdapterV2Event> = [];
       yield* runtime.events.pipe(
         Stream.runForEach((event) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             events.push(event);
+            if (event.type === "subagent.updated") yield* Queue.offer(subagentReceipts, event);
+            if (event.type === "turn.terminal") yield* Queue.offer(terminalReceipts, event);
           }),
         ),
         Effect.forkScoped,
@@ -1739,7 +1749,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         },
         permissionModeChanges,
         continuationRequests,
+        continuationReceipts,
         events,
+        terminalReceipts,
+        subagentReceipts,
         getOpenedOptions: () => openedOptions,
         terminalEvents,
         hasPendingBackgroundWork,
@@ -5012,18 +5025,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect.each([false, true])(
-    "stops one native subagent while its sibling keeps running, owner settled %s",
-    (ownerSettled) =>
+  it.effect.each([
+    [false, "stopped"],
+    [true, "stopped"],
+    [false, "completed"],
+  ] as const)(
+    "stops one native subagent while its sibling keeps running, owner settled %s, outcome %s",
+    ([ownerSettled, outcome]) =>
       Effect.scoped(
         Effect.gen(function* () {
           const stopped: string[] = [];
+          const stopRequested = yield* Deferred.make<void>();
           let closes = 0;
           const harness = yield* makeWakeHarnessWithOptions({
             stopTask: (taskId) =>
               Effect.sync(() => {
                 stopped.push(taskId);
-              }),
+              }).pipe(Effect.andThen(Deferred.succeed(stopRequested, undefined))),
             interrupt: Effect.die("A child stop must not interrupt its owner"),
             close: () =>
               Effect.sync(() => {
@@ -5082,7 +5100,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }
           const stop = harness.runtime.stopSubagent;
           assert.isDefined(stop);
-          yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" });
+          // Stop resolves only once the native outcome arrives.
+          const stopping = yield* stop!({
+            providerThread: harness.providerThread,
+            nativeTaskId: "agent-stop",
+          }).pipe(Effect.forkScoped);
+          yield* Deferred.await(stopRequested);
           assert.deepEqual(stopped, ["agent-stop"]);
           yield* Queue.offer(
             harness.sdkMessages,
@@ -5091,7 +5114,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               subtype: "task_notification",
               task_id: "agent-stop",
               tool_use_id: "toolu-stop",
-              status: "stopped",
+              status: outcome,
               output_file: "/tmp/agent-stop.output",
               summary: "Stopped by user",
               uuid: "00000000-0000-4000-8000-000000000804",
@@ -5123,11 +5146,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             );
             yield* awaitUntil(() => harness.terminalEvents().length === 2, "wake terminal");
           }
-          yield* awaitUntil(() => subagentStatus("agent-stop") === "cancelled", "child stopped");
+          const expected = outcome === "stopped" ? "cancelled" : "completed";
+          assert.equal((yield* Fiber.join(stopping))?.status, expected);
+          yield* awaitUntil(() => subagentStatus("agent-stop") === expected, "child stopped");
           assert.equal(subagentStatus("agent-keep"), "running");
           assert.lengthOf(harness.terminalEvents(), ownerSettled ? 2 : 0);
-          // A child that already ended has nothing left to stop.
-          yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" });
+          // A child that already ended returns its confirmed outcome, unasked.
+          assert.equal(
+            (yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" }))
+              ?.status,
+            expected,
+          );
           assert.deepEqual(stopped, ["agent-stop"]);
           assert.equal(closes, 0);
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
@@ -8977,6 +9006,340 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each([false, true])(
+    "drops an idle start superseded by live completion, later resume %s",
+    (resume) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarness;
+          const startTurn = (ordinal: number, continuation = false) =>
+            harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: DateTime.makeUnsafe(0),
+                attemptId: RunAttemptId.make(`attempt-stale-start-${ordinal}`),
+                providerTurnOrdinal: ordinal,
+                text: "Continue work.",
+                attachments: [],
+                ...(continuation
+                  ? {
+                      messageCreatedBy: "agent" as const,
+                      messageCreationSource: "provider" as const,
+                    }
+                  : {}),
+              }),
+            );
+          const started = (taskId: string, suffix: string) =>
+            makeSubagentTaskStartedFrame({
+              taskId,
+              toolUseId: `toolu-${taskId}`,
+              uuid: `00000000-0000-4000-8000-${suffix}`,
+            });
+          const finished = (taskId: string, suffix: string) =>
+            makeSubagentNotificationFrame({
+              taskId,
+              toolUseId: `toolu-${taskId}`,
+              summary: "Finished audit.",
+              uuid: `00000000-0000-4000-8000-${suffix}`,
+            });
+          yield* startTurn(1);
+          yield* harness.offerAndWait(started("stale-agent", "000000004001"));
+          yield* harness.offerAndWait(started("wake-agent", "000000004002"));
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000004003",
+              result: "Agents launched.",
+            }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          // The background task resumes in the idle gap, before a user turn.
+          yield* harness.offerAndWait(started("stale-agent", "000000004004"));
+          yield* startTurn(2);
+          yield* harness.offerAndWait(finished("stale-agent", "000000004005"));
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000004006",
+              result: "User turn finished.",
+            }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          if (resume) yield* harness.offerAndWait(started("stale-agent", "000000004007"));
+          yield* harness.offerAndWait(finished("wake-agent", "000000004008"));
+          yield* Queue.take(harness.continuationReceipts);
+          yield* startTurn(3, true);
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000004009",
+              result: "Wake finished.",
+            }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          const latest = harness.events.findLast(
+            (event) =>
+              event.type === "subagent.updated" &&
+              event.subagent.nativeTaskRef?.nativeId === "stale-agent",
+          );
+          assert.equal(latest?.type, "subagent.updated");
+          if (latest?.type !== "subagent.updated") return;
+          assert.equal(latest.subagent.status, resume ? "running" : "completed");
+          assert.equal(latest.subagent.result, resume ? null : "Finished audit.");
+          assert.equal(latest.subagent.completedAt === null, resume);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
+
+  const makeStopFixture = (options?: Parameters<typeof makeWakeHarnessWithOptions>[0]) =>
+    Effect.gen(function* () {
+      const requests = yield* Queue.unbounded<void>();
+      const harness = yield* makeWakeHarnessWithOptions({
+        ...options,
+        stopTask: (id) =>
+          Queue.offer(requests, undefined).pipe(
+            Effect.andThen(options?.stopTask?.(id) ?? Effect.void),
+          ),
+      });
+      let sequence = 4500;
+      const uuid = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
+      const startTurn = (continuation = false) =>
+        harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: DateTime.makeUnsafe(0),
+            attemptId: RunAttemptId.make(`attempt-stop-${continuation ? 2 : 1}`),
+            providerTurnOrdinal: continuation ? 2 : 1,
+            text: "Run an audit.",
+            attachments: [],
+            ...(continuation
+              ? { messageCreatedBy: "agent" as const, messageCreationSource: "provider" as const }
+              : {}),
+          }),
+        );
+      const start = (toolUseId = "toolu-stop-agent") =>
+        harness.offerAndWait(
+          makeSubagentTaskStartedFrame({
+            taskId: "stop-agent",
+            toolUseId,
+            uuid: uuid(),
+          }),
+        );
+      const notify = (
+        status: "completed" | "failed" | "stopped",
+        summary = "Native outcome.",
+        toolUseId = "toolu-stop-agent",
+      ) =>
+        harness.offerAndWait(
+          claudeSdkFrame({
+            ...makeSubagentNotificationFrame({
+              taskId: "stop-agent",
+              toolUseId,
+              summary,
+              uuid: uuid(),
+            }),
+            status,
+          }),
+        );
+      const stop = (requestedAt?: DateTime.Utc) =>
+        harness.runtime.stopSubagent!({
+          providerThread: harness.providerThread,
+          nativeTaskId: "stop-agent",
+          ...(requestedAt === undefined ? {} : { requestedAt }),
+        });
+      const finishParent = () =>
+        harness
+          .offerAndWait(makeResultFrame({ uuid: uuid(), result: "Launched." }))
+          .pipe(Effect.andThen(Queue.take(harness.terminalReceipts)));
+      yield* startTurn();
+      yield* start();
+      yield* Queue.take(harness.subagentReceipts);
+      return {
+        ...harness,
+        start,
+        notify,
+        stop,
+        finishParent,
+        replay: () => startTurn(true),
+        uuid,
+        requests,
+      };
+    });
+
+  it.effect.each([
+    [false, "no notification"],
+    [true, "no notification"],
+    [false, "stop fails"],
+    [false, "stop hangs"],
+  ] as const)("never infers an outcome from Stop, owner settled %s and %s", ([idle, failure]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const requested = yield* Deferred.make<void>();
+        const fixture = yield* makeStopFixture({
+          stopTask: () =>
+            Deferred.succeed(requested, undefined).pipe(
+              Effect.andThen(
+                failure === "stop fails"
+                  ? new ClaudeAgentSdkQueryRunnerError({
+                      method: "stopTask",
+                      cause: "Task is no longer live",
+                    })
+                  : failure === "stop hangs"
+                    ? Effect.never
+                    : Effect.void,
+              ),
+            ),
+        });
+        if (idle) yield* fixture.finishParent();
+        const stopping = yield* fixture.stop().pipe(Effect.exit, Effect.forkScoped);
+        yield* Deferred.await(requested);
+        yield* TestClock.adjust("2 seconds");
+        const result = yield* Fiber.join(stopping);
+        assert.isTrue(Exit.isFailure(result));
+        assert.equal(
+          fixture.events.findLast((event) => event.type === "subagent.updated")?.subagent.status,
+          "running",
+        );
+        assert.isTrue(yield* fixture.hasPendingBackgroundWork);
+        yield* fixture.notify("completed");
+        assert.equal((yield* Queue.take(fixture.subagentReceipts)).subagent.status, "completed");
+        // An idle owner still owes the wake that reports it, which pins idle here.
+        assert.equal(yield* fixture.hasPendingBackgroundWork, idle);
+        assert.lengthOf(fixture.continuationRequests, idle ? 1 : 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect.each([1, 2, 3, 4, 5, 6, 7, 8])(
+    "accepts completion during Stop at scheduler step %s",
+    (pauseAt) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* makeStopFixture();
+          const resumptions = yield* Queue.unbounded<() => void>();
+          const scheduler = yield* Scheduler.Scheduler;
+          const dispatcher = scheduler.makeDispatcher();
+          let checks = 0;
+          // Pause Stop before its SDK request and deliver the outcome while it is suspended.
+          const stopping = yield* fixture.stop().pipe(
+            Effect.provideService(Scheduler.Scheduler, {
+              executionMode: scheduler.executionMode,
+              shouldYield: () => ++checks === pauseAt,
+              makeDispatcher: () => ({
+                scheduleTask: (task, priority) => {
+                  if (checks === pauseAt) Queue.offerUnsafe(resumptions, task);
+                  else dispatcher.scheduleTask(task, priority);
+                },
+                flush: () => dispatcher.flush(),
+              }),
+            }),
+            Effect.exit,
+            Effect.forkScoped,
+          );
+          const resume = yield* Queue.take(resumptions);
+          yield* fixture.notify("completed");
+          const completed = yield* Queue.take(fixture.subagentReceipts);
+          yield* Effect.sync(resume);
+          yield* TestClock.adjust("2 seconds");
+          assert.deepEqual(
+            yield* Fiber.join(stopping),
+            Exit.succeed({
+              status: "completed" as const,
+              completedAt: completed.subagent.completedAt!,
+              result: "Native outcome.",
+            }),
+          );
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
+
+  it.effect("retains native confirmation after the synchronous Agent tool result", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeStopFixture({
+          stopTask: () => Effect.die("Task already completed"),
+        });
+        yield* fixture.notify("completed");
+        const completed = yield* Queue.take(fixture.subagentReceipts);
+        yield* fixture.offerAndWait(
+          claudeSdkFrame({
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "toolu-stop-agent", content: "Tool result." },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: fixture.uuid(),
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        assert.equal((yield* Queue.take(fixture.subagentReceipts)).subagent.result, "Tool result.");
+        assert.deepEqual(yield* fixture.stop(), {
+          status: "completed",
+          completedAt: completed.subagent.completedAt!,
+          result: "Native outcome.",
+        });
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect.each(["completed", "failed", "stopped"] as const)(
+    "applies idle %s once, preserves a genuine resume, and only confirms native outcomes",
+    (status) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let stops = 0;
+          const fixture = yield* makeStopFixture({
+            stopTask: () => Effect.sync(() => void stops++),
+          });
+          yield* fixture.finishParent();
+          yield* TestClock.adjust("1 second");
+          yield* fixture.notify(status);
+          const completed = yield* Queue.take(fixture.subagentReceipts);
+          const expected = status === "stopped" ? "cancelled" : status;
+          assert.equal(completed.subagent.status, expected);
+          assert.lengthOf(fixture.offeredMessages, 1);
+          // The card settled before the parent's wake, which is still owed.
+          assert.lengthOf(fixture.continuationRequests, 1);
+          assert.deepEqual(yield* fixture.stop(), {
+            status: expected,
+            completedAt: completed.subagent.completedAt!,
+            result: "Native outcome.",
+          });
+          assert.equal(stops, 0);
+          yield* TestClock.adjust("1 second");
+          yield* fixture.start("toolu-resume");
+          assert.isUndefined(yield* fixture.stop(completed.subagent.completedAt!));
+          assert.equal(stops, 0);
+          const stopping = yield* fixture.stop().pipe(Effect.exit, Effect.forkScoped);
+          yield* Queue.take(fixture.requests);
+          const beforeReplay = fixture.events.length;
+          yield* fixture.replay();
+          const reopened = yield* Queue.take(fixture.subagentReceipts);
+          assert.equal(reopened.subagent.status, "running");
+          assert.isNull(reopened.subagent.completedAt);
+          assert.isFalse(
+            fixture.events
+              .slice(beforeReplay)
+              .some(
+                (event) => event.type === "subagent.updated" && event.subagent.status !== "running",
+              ),
+          );
+          yield* TestClock.adjust("2 seconds");
+          assert.isTrue(Exit.isFailure(yield* Fiber.join(stopping)));
+          assert.equal(stops, 1);
+          yield* fixture.notify("completed", "Resumed outcome.", "toolu-resume");
+          const resumed = yield* Queue.take(fixture.subagentReceipts);
+          assert.equal(resumed.subagent.result, "Resumed outcome.");
+          assert.isAbove(
+            DateTime.toEpochMillis(resumed.subagent.completedAt!),
+            DateTime.toEpochMillis(completed.subagent.completedAt!),
+          );
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
+
   describe("Claude workflows", () => {
     const WORKFLOW_TASK_ID = "task-workflow-run";
     const WORKFLOW_TOOL_USE_ID = "toolu-workflow-run";
@@ -9478,6 +9841,66 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, "failed");
           assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "failed");
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+
+    it.effect("a pending Stop is not confirmed by the run's local workflow cleanup", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const stoppedTasks: Array<string> = [];
+          const stopRequested = yield* Deferred.make<void>();
+          const harness = yield* makeWorkflowHarnessWithOptions({
+            stopTask: (taskId) =>
+              Effect.sync(() => void stoppedTasks.push(taskId)).pipe(
+                Effect.andThen(Deferred.succeed(stopRequested, undefined)),
+                Effect.asVoid,
+              ),
+          });
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-workflow-pending-stop"),
+              text: "Run the workflow.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({
+            harness,
+            snapshotUuid: "00000000-0000-4000-8000-000000001050",
+          });
+          const stopping = yield* harness.runtime.stopSubagent!({
+            providerThread: harness.providerThread,
+            nativeTaskId: WORKFLOW_TASK_ID,
+          }).pipe(Effect.exit, Effect.forkScoped);
+          yield* Deferred.await(stopRequested);
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000001053",
+              result: "Root turn ended.",
+              terminalReason: "api_error",
+              isError: true,
+            }),
+          );
+          yield* awaitUntil(() => stoppedTasks.length === 2, "workflow stop");
+          assert.deepEqual(stoppedTasks, [WORKFLOW_TASK_ID, WORKFLOW_TASK_ID]);
+          yield* awaitUntil(
+            () => workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status === "failed",
+            "workflow settled",
+          );
+          // Parent failure assigns a local outcome without a task_notification.
+          yield* TestClock.adjust("2 seconds");
+          assert.isTrue(Exit.isFailure(yield* Fiber.join(stopping)));
+          // Local parent cleanup still cannot provide a confirmed outcome on retry.
+          const retry = yield* harness.runtime.stopSubagent!({
+            providerThread: harness.providerThread,
+            nativeTaskId: WORKFLOW_TASK_ID,
+          }).pipe(Effect.exit, Effect.forkScoped);
+          yield* TestClock.adjust("2 seconds");
+          assert.isTrue(Exit.isFailure(yield* Fiber.join(retry)));
           assert.isFalse(yield* harness.hasPendingBackgroundWork);
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
       ),

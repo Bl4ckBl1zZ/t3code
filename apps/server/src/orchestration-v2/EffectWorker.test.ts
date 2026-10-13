@@ -10,6 +10,7 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
+  type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -103,11 +104,14 @@ function makeExecutorLayer(input: {
   readonly events: Ref.Ref<ReadonlyArray<string>>;
   readonly failFirstStart?: Ref.Ref<boolean>;
   readonly interrupt?: ProviderTurnControlServiceV2["Service"]["interrupt"];
+  readonly settle?: (
+    command: Extract<OrchestrationV2Command, { readonly type: "thread.background-work.settle" }>,
+  ) => Effect.Effect<void>;
 }) {
   const record = (event: string) => Ref.update(input.events, (events) => [...events, event]);
   const dependencies = Layer.mergeAll(
     Layer.succeed(BackgroundWorkSettleDispatch, {
-      settle: (command) => record(command.type),
+      settle: input.settle ?? ((command) => record(command.type)),
     }),
     Layer.succeed(
       ProviderTurnControlServiceV2,
@@ -238,33 +242,68 @@ it.effect("settles a stopped run when its adapter has already lost the native tu
   }),
 );
 
-it.effect("a native subagent stop does not settle its owner's background work", () =>
-  Effect.gen(function* () {
-    const now = yield* DateTime.now;
-    const events = yield* Ref.make<ReadonlyArray<string>>([]);
-    const layer = makeExecutorLayer({
-      events,
-      interrupt: (input) => {
-        assert.equal(input.subagent?.nativeTaskId, "native-task");
-        return Ref.update(events, (current) => [...current, "stop-child"]);
-      },
-    });
-    yield* Effect.gen(function* () {
-      const executor = yield* OrchestrationEffectExecutorV2;
-      yield* executor.execute({
-        ...restartEffect(now, { type: "detach" }),
-        request: {
-          type: "provider-turn.interrupt",
-          providerSessionId: oldSessionId,
-          providerThreadId,
-          providerTurnId,
-          subagent: { id: NodeId.make("subagent"), nativeTaskId: "native-task" },
+it.effect.each(["confirmed", "unconfirmed", "failed"] as const)(
+  "a native subagent stop only repairs %s provider evidence",
+  (outcome) =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const events = yield* Ref.make<ReadonlyArray<string>>([]);
+      const layer = makeExecutorLayer({
+        events,
+        interrupt: (input) => {
+          assert.equal(input.subagent?.nativeTaskId, "native-task");
+          return Ref.update(events, (current) => [...current, "stop-child"]).pipe(
+            Effect.andThen(
+              outcome === "failed"
+                ? new ProviderTurnControlError({
+                    threadId,
+                    providerTurnId,
+                    operation: "interrupt",
+                    cause: "SDK stop failed",
+                  })
+                : Effect.succeed(
+                    outcome === "confirmed"
+                      ? {
+                          status: "cancelled" as const,
+                          completedAt: now,
+                          result: "Stopped by Claude",
+                        }
+                      : undefined,
+                  ),
+            ),
+          );
+        },
+        // The owner's background work stays running: only the child's
+        // confirmed outcome is settled.
+        settle: (command) => {
+          assert.equal(command.subagent?.id, "subagent");
+          assert.deepEqual(command.subagent?.outcome, {
+            status: "cancelled",
+            completedAt: now,
+            result: "Stopped by Claude",
+          });
+          return Ref.update(events, (current) => [...current, "settle-child"]);
         },
       });
-    }).pipe(Effect.provide(layer));
-    // The owner's background work stays running: no settle follows.
-    assert.deepEqual(yield* Ref.get(events), ["stop-child"]);
-  }),
+      const execution = yield* Effect.gen(function* () {
+        const executor = yield* OrchestrationEffectExecutorV2;
+        yield* executor.execute({
+          ...restartEffect(now, { type: "detach" }),
+          request: {
+            type: "provider-turn.interrupt",
+            providerSessionId: oldSessionId,
+            providerThreadId,
+            providerTurnId,
+            subagent: { id: NodeId.make("subagent"), nativeTaskId: "native-task" },
+          },
+        });
+      }).pipe(Effect.provide(layer), Effect.exit);
+      assert.equal(Exit.isFailure(execution), outcome === "failed");
+      assert.deepEqual(
+        yield* Ref.get(events),
+        outcome === "confirmed" ? ["stop-child", "settle-child"] : ["stop-child"],
+      );
+    }),
 );
 
 it.effect("requeues a claim when a pre-execution worker check fails", () =>
