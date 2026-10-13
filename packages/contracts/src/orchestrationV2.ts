@@ -3181,6 +3181,17 @@ const OrchestrationV2InternalCommand = Schema.Union([
       }),
     ),
   }),
+  /**
+   * Storage cleanup's settled-thread rule. Deletes like `thread.delete`, but is
+   * rejected unless the thread is still settled, unpinned, unarchived and idle,
+   * and unchanged since `snapshotAt`, so it never races a user action.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.auto-delete"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    snapshotAt: Schema.DateTimeUtc,
+  }),
   /** Records that the provider rollback `requestId` failed for good. */
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback.fail"),

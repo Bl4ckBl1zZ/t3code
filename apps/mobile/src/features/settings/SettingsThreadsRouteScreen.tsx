@@ -56,6 +56,8 @@ export function SettingsThreadsRouteScreen() {
 }
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
+/** Matches the web Storage setting's starting value. */
+const AUTO_DELETE_DEFAULT_DAYS = 8;
 
 /**
  * Mobile edits auto-settle defaults across selected capable targets.
@@ -96,6 +98,7 @@ function AutoSettleSettingsRows() {
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
+      autoDeleteSettledAfterDays?: number | null;
     },
   ) => {
     if (
@@ -176,6 +179,17 @@ function AutoSettleSettingsRows() {
   };
 
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
+  // Environment-wide storage cleanup rule, so it has no project override.
+  const supportsAutoDelete =
+    !projectSelected &&
+    syncTargets.every(
+      (target) =>
+        target.environment.serverConfig.environment.capabilities.settledThreadAutoDelete === true,
+    );
+  const autoDeleteDays = uniformMobileSetting(displayTargets, "autoDeleteSettledAfterDays");
+  const autoDeleteMixed = displayTargets.some(
+    (target) => target.settings.autoDeleteSettledAfterDays !== autoDeleteDays,
+  );
 
   return (
     <View className="gap-6">
@@ -236,6 +250,42 @@ function AutoSettleSettingsRows() {
           </View>
         ) : null}
       </SettingsSection>
+      {supportsAutoDelete ? (
+        <View className="gap-3">
+          <SettingsSection title="Auto-delete">
+            <SettingsSwitchRow
+              icon="trash"
+              label="Delete settled threads"
+              value={autoDeleteMixed ? null : autoDeleteDays !== null}
+              disabled={disabled}
+              onValueChange={(value) =>
+                writeToAll({ autoDeleteSettledAfterDays: value ? AUTO_DELETE_DEFAULT_DAYS : null })
+              }
+            />
+            {!autoDeleteMixed && autoDeleteDays !== null ? (
+              <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
+                <View className="w-[22px] android:w-6" />
+                <Text className="flex-1 text-foreground text-lg android:text-base">
+                  Settled days
+                </Text>
+                <AutoSettleDaysField
+                  value={autoDeleteDays}
+                  min={1}
+                  max={365}
+                  accessibilityLabel="Days settled before deletion"
+                  disabled={disabled}
+                  onValueChange={(value) => writeToAll({ autoDeleteSettledAfterDays: value })}
+                />
+              </View>
+            ) : null}
+          </SettingsSection>
+          <Text className="px-2 text-sm text-foreground-muted">
+            Permanently delete threads settled this many days, then remove their worktrees unless
+            they have local changes. Branches, pinned threads and threads with scheduled tasks are
+            kept.
+          </Text>
+        </View>
+      ) : null}
       {pendingWrites === 0 && mismatches.length > 0 ? (
         <SettingsSection title="Across environments">
           <View className="gap-3 p-4">

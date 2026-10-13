@@ -191,6 +191,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "storage-settled-threads",
+    title: "Delete settled threads",
+    to: "/settings/storage",
+    scope: "environment-defaults",
+    searchTerms: ["auto delete settled threads days retention cleanup worktree remove old"],
+  },
+  {
     id: "storage-worktrees-location",
     title: "Worktree location",
     to: "/settings/storage",

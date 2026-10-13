@@ -10,6 +10,10 @@ export interface AutoSettleDaysFieldProps {
   readonly value: number;
   readonly onValueChange: (value: number) => void;
   readonly disabled?: boolean;
+  /** Defaults to the auto-settle range and label; other day settings pass their own. */
+  readonly min?: number;
+  readonly max?: number;
+  readonly accessibilityLabel?: string;
 }
 
 export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
@@ -25,8 +29,8 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
     const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
     if (
       Number.isInteger(parsed) &&
-      parsed >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-      parsed <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
+      parsed >= (props.min ?? MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS) &&
+      parsed <= (props.max ?? MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS) &&
       parsed !== props.value
     ) {
       props.onValueChange(parsed);
@@ -41,7 +45,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
       onChangeText={setDraft}
       onBlur={commit}
       onSubmitEditing={commit}
-      accessibilityLabel="Days before auto-settle"
+      accessibilityLabel={props.accessibilityLabel ?? "Days before auto-settle"}
       editable={!props.disabled}
     />
   );

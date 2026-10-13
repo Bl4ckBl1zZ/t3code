@@ -134,6 +134,9 @@ sending an answer or restarting the agent. Settling also closes the thread's
 terminals that wait at an idle prompt, and keeps their output. A terminal that
 runs a command, such as a dev server, stays open.
 
+To delete settled threads and their worktrees after a number of days, see
+[Storage cleanup](./project-settings.md#storage-cleanup). Pin a thread to keep it.
+
 To reclaim disk space from settled work, turn on **Run in the thread's worktree when the
 thread settles** for one of the project's actions, or set `"runOnSettle": true` on a
 `t3.json` script, for example `cargo clean`. It runs each time a thread in its own

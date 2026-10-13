@@ -2409,6 +2409,63 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("automatic deletion only deletes a thread that stayed settled and unchanged", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("auto-delete-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("auto-delete-create"),
+        threadId,
+        projectId: ProjectId.make("auto-delete-project"),
+        title: "Settled work",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const autoDelete = (name: string, snapshotAt: DateTime.Utc) =>
+        orchestrator.dispatch({
+          type: "thread.auto-delete",
+          commandId: CommandId.make(`auto-delete-${name}`),
+          threadId,
+          snapshotAt,
+        });
+      const updatedAt = Effect.map(
+        orchestrator.getThreadShell(threadId),
+        (shell) => shell?.updatedAt ?? DateTime.makeUnsafe(0),
+      );
+
+      // An active thread is never deleted.
+      const active = yield* autoDelete("active", yield* updatedAt).pipe(Effect.flip);
+      assert.instanceOf(active, Orchestrator.OrchestratorDispatchError);
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("auto-delete-settle"),
+        threadId,
+      });
+      // A change after the sweep's snapshot wins.
+      const settledAt = yield* updatedAt;
+      const stale = yield* autoDelete(
+        "stale",
+        DateTime.makeUnsafe(DateTime.toEpochMillis(settledAt) - 1),
+      ).pipe(Effect.flip);
+      assert.instanceOf(stale, Orchestrator.OrchestratorDispatchError);
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.deletedAt);
+
+      yield* autoDelete("fresh", settledAt);
+      assert.isNotNull((yield* orchestrator.getThreadProjection(threadId)).thread.deletedAt);
+      assert.notInclude(
+        (yield* orchestrator.getShellSnapshot()).threads.map((thread) => thread.id),
+        threadId,
+      );
+    }),
+  );
+
   it.effect("archiving ends watches, and an archived thread cannot start one", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
