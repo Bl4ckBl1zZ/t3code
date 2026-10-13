@@ -32,6 +32,38 @@ final class CredentialRejectionTests: XCTestCase {
         XCTAssertFalse(CredentialRejection.isRejected(T3ConnectRelayError.environmentMismatch))
     }
 
+    /// A host swapping in a new tunnel answers 403 until the tunnel is up;
+    /// that keeps retrying, while other connect refusals stay final.
+    func testTunnelStillBeingSetUpRetriesAndOtherConnectRefusalsBlock() {
+        let notReady = T3ConnectRelayError.from(
+            status: 403,
+            code: "environment_connect_not_authorized",
+            reason: "managed_endpoint_allocation_not_ready",
+            message: nil,
+            traceID: "trace-connect-refused"
+        )
+        guard case let .tunnelNotReady(traceID) = notReady else {
+            return XCTFail("Expected tunnelNotReady, got \(notReady)")
+        }
+        XCTAssertEqual(traceID, "trace-connect-refused")
+        XCTAssertFalse(CredentialRejection.isRejected(notReady))
+        XCTAssertEqual(
+            notReady.errorDescription,
+            "The environment's T3 Connect tunnel is still being set up."
+        )
+
+        for reason in ["endpoint_provider_not_managed", nil] as [String?] {
+            let refused = T3ConnectRelayError.from(
+                status: 403,
+                code: "environment_connect_not_authorized",
+                reason: reason,
+                message: nil,
+                traceID: "trace-connect-refused"
+            )
+            XCTAssertTrue(CredentialRejection.isRejected(refused))
+        }
+    }
+
     func testRefusedRedialAfterAServerCloseFailsWaitingRequestsWithTheRefusal() async throws {
         let socket = ServerClosedSocket()
         let dials = RefusingDials()

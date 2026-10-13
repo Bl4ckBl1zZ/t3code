@@ -4433,6 +4433,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                                 .disconnected,
                                 detail: self.refusedCredentialDetail(environmentID: environmentID)
                             )
+                        } else if case .tunnelNotReady = error as? T3ConnectRelayError {
+                            self.emitConnection(
+                                .reconnecting,
+                                detail: "\(T3ConnectRelayError.tunnelNotReadyMessage) Retrying automatically."
+                            )
                         } else {
                             self.emitConnection(
                                 .reconnecting,

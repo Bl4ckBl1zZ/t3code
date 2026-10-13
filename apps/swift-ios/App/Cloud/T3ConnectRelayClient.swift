@@ -6,6 +6,10 @@ public enum T3ConnectRelayError: LocalizedError, Sendable {
     case response(status: Int, message: String, traceID: String?)
     case unexpectedScope(requested: [String], granted: String)
     case environmentMismatch
+    /// The host is swapping in a new tunnel and its managed endpoint is not
+    /// ready yet. Nothing on this device changes when it is, so the
+    /// connection keeps retrying instead of treating the refusal as final.
+    case tunnelNotReady(traceID: String?)
 
     public var errorDescription: String? {
         switch self {
@@ -19,7 +23,26 @@ public enum T3ConnectRelayError: LocalizedError, Sendable {
             "T3 Connect granted \(granted) instead of \(requested.joined(separator: " "))."
         case .environmentMismatch:
             "T3 Connect returned credentials for a different environment."
+        case .tunnelNotReady:
+            Self.tunnelNotReadyMessage
         }
+    }
+
+    static let tunnelNotReadyMessage = "The environment's T3 Connect tunnel is still being set up."
+
+    /// Maps a non-2xx relay response. A connect refusal because the managed
+    /// tunnel is still being allocated is transient; every other refusal keeps
+    /// its status so 401/403 still read as a rejected credential.
+    static func from(status: Int, code: String?, reason: String?, message: String?, traceID: String?) -> Self {
+        if code == "environment_connect_not_authorized",
+           reason == "managed_endpoint_allocation_not_ready" {
+            return .tunnelNotReady(traceID: traceID)
+        }
+        return .response(
+            status: status,
+            message: message ?? reason ?? code ?? "T3 Connect request failed.",
+            traceID: traceID
+        )
     }
 }
 
@@ -386,9 +409,11 @@ public actor T3ConnectRelayClient {
         let (data, response) = try await transport.data(for: HTTPRequestPolicy.prepare(request))
         guard (200..<300).contains(response.statusCode) else {
             let body = try? JSONDecoder.t3.decode(RelayErrorBody.self, from: data)
-            throw T3ConnectRelayError.response(
+            throw T3ConnectRelayError.from(
                 status: response.statusCode,
-                message: body?.message ?? body?.reason ?? body?.code ?? "T3 Connect request failed.",
+                code: body?.code,
+                reason: body?.reason,
+                message: body?.message,
                 traceID: body?.traceId
             )
         }
