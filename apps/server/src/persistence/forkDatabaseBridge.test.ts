@@ -255,6 +255,7 @@ const HERMES_THREADS = [
   "thread-hermes",
   "thread-hermes-child",
   "thread-hermes-custom",
+  "thread-hermes-acp",
   "thread-deleted-hermes-parent",
   "thread-work",
   "thread-work-chat",
@@ -323,6 +324,15 @@ const seedForkData = Effect.gen(function* () {
     )
     VALUES ('provider-thread-hermes-custom', 'thread-hermes-custom', 'hermes_work', 'idle', ${NOW},
       '{"driver":"hermes","providerInstanceId":"hermes_work"}')
+  `;
+  // Hermes in Code, the fork's ACP driver, under a custom instance id.
+  yield* insertThread({ id: "thread-hermes-acp", instance: "hermes_code" });
+  yield* sql`
+    INSERT INTO orchestration_v2_projection_provider_sessions (
+      provider_session_id, thread_id, provider, status, updated_at, payload_json
+    )
+    VALUES ('provider-session-hermes-acp', 'thread-hermes-acp', 'hermes_code', 'stopped', ${NOW},
+      '{"driver":"hermesAcp","providerInstanceId":"hermes_code"}')
   `;
   // Links from a surviving thread to Hermes threads.
   yield* insertSubagent({

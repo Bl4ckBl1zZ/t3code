@@ -194,8 +194,8 @@ const hasColumn = (table: string, column: string) =>
  * a removed thread id. Project defaults that name Hermes are cleared. Git worktrees and files on
  * disk are not touched.
  *
- * A thread is a Hermes thread when its provider instance is `hermes` or any instance a stored
- * provider session or thread recorded with the `hermes` driver.
+ * A thread is a Hermes thread when its provider instance is `hermes`, `hermesAcp` (Hermes in
+ * Code), or any instance a stored provider session or thread recorded with either driver.
  */
 const removeWorkAndHermes = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -204,13 +204,15 @@ const removeWorkAndHermes = Effect.gen(function* () {
     INSERT OR IGNORE INTO fork_hermes_instances (instance_id)
     SELECT 'hermes'
     UNION
+    SELECT 'hermesAcp'
+    UNION
     SELECT json_extract(payload_json, '$.providerInstanceId')
     FROM orchestration_v2_projection_provider_sessions
-    WHERE json_extract(payload_json, '$.driver') = 'hermes'
+    WHERE json_extract(payload_json, '$.driver') IN ('hermes', 'hermesAcp')
     UNION
     SELECT json_extract(payload_json, '$.providerInstanceId')
     FROM orchestration_v2_projection_provider_threads
-    WHERE json_extract(payload_json, '$.driver') = 'hermes'
+    WHERE json_extract(payload_json, '$.driver') IN ('hermes', 'hermesAcp')
   `;
   yield* sql`CREATE TEMP TABLE fork_removed_threads (thread_id TEXT PRIMARY KEY, hermes INTEGER)`;
   yield* sql`
