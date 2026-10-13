@@ -1,3 +1,4 @@
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 import type { OrchestrationV2ProviderFailureClass } from "@t3tools/contracts";
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
@@ -48,6 +49,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   chatGptUsageLimit?: boolean;
 }) {
   if (!error) return null;
+  const presentedError = presentProviderError(error);
   const variant = errorClass === "usage_limit" ? "warning" : "error";
   return (
     <div className="pointer-events-auto mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
@@ -65,9 +67,11 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
             </div>
           ) : (
             <Tooltip>
-              <TooltipTrigger render={<div className="line-clamp-3" />}>{error}</TooltipTrigger>
+              <TooltipTrigger render={<div className="line-clamp-3" />}>
+                {presentedError}
+              </TooltipTrigger>
               <TooltipPopup side="top" className="whitespace-pre-wrap">
-                {error}
+                {presentedError}
               </TooltipPopup>
             </Tooltip>
           )}

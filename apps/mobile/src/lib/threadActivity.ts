@@ -1,3 +1,4 @@
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
@@ -688,7 +689,7 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "system_notice":
       return item.message || null;
     case "error":
-      return item.failure.message;
+      return presentProviderError(item.failure.message);
     case "compaction":
     case "handoff":
       return item.summary ?? null;
