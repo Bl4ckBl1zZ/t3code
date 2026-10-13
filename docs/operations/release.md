@@ -319,6 +319,9 @@ for an App Store record outside T3 Tools: `expo prebuild` → `xcodebuild archiv
   profile needs Push Notifications, Sign in with Apple, Associated Domains, and the App Group;
   the extensions need the App Group.
 - OTA updates stay off: no EAS project or updates URL is set.
+- The app replaces the fork's SwiftUI client under the same bundle id. On first launch it imports
+  the servers that client paired (`apps/mobile/modules/t3-swift-import`), once. T3 Connect
+  servers come back after signing in to T3 Connect again.
 - Secrets (production environment): `APPLE_DISTRIBUTION_P12_BASE64`,
   `APPLE_DISTRIBUTION_P12_PASSWORD`, `APPLE_MAIN_APPSTORE_PROFILE_BASE64`,
   `APPLE_WIDGETS_APPSTORE_PROFILE_BASE64`, `APPLE_SHARING_APPSTORE_PROFILE_BASE64`,
