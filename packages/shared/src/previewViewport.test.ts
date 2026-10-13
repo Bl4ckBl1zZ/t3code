@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { PREVIEW_VIEWPORT_PRESETS, resolvePreviewViewport } from "./previewViewport.ts";
+import {
+  PREVIEW_VIEWPORT_PRESETS,
+  resolvePreviewDevice,
+  resolvePreviewViewport,
+} from "./previewViewport.ts";
 
 describe("previewViewport", () => {
   it("resolves fill and exact freeform viewports", () => {
@@ -53,5 +57,21 @@ describe("previewViewport", () => {
       "Nest Hub",
       "Nest Hub Max",
     ]);
+  });
+
+  it("presents only device presets as a device", () => {
+    expect(
+      resolvePreviewDevice(resolvePreviewViewport({ mode: "preset", preset: "iphone-12-pro" })),
+    ).toEqual({ mobile: true, deviceScaleFactor: 3, userAgent: "iphone" });
+    // Touch laptops and smart displays keep the desktop site.
+    expect(
+      resolvePreviewDevice(resolvePreviewViewport({ mode: "preset", preset: "surface-pro-7" })),
+    ).toEqual({ mobile: false, deviceScaleFactor: 2, userAgent: null });
+    expect(resolvePreviewDevice({ _tag: "fill" })).toBeNull();
+    expect(resolvePreviewDevice({ _tag: "freeform", width: 390, height: 844 })).toBeNull();
+    // Presets saved before the current catalog only keep their size.
+    expect(
+      resolvePreviewDevice({ _tag: "preset", width: 393, height: 852, presetId: "iphone-15-pro" }),
+    ).toBeNull();
   });
 });

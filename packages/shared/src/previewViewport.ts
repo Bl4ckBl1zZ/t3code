@@ -5,6 +5,19 @@ import type {
 } from "@t3tools/contracts";
 import { PREVIEW_VIEWPORT_PRESET_IDS } from "@t3tools/contracts";
 
+/**
+ * How a device preset presents beyond its size, as Chrome DevTools' device
+ * mode does: touch input, the device's pixel ratio, mobile layout (viewport
+ * meta, overlay scrollbars), and its browser's user agent. A null `userAgent`
+ * keeps the browser's own, as touch laptops and smart displays get the
+ * desktop site.
+ */
+export interface PreviewDevice {
+  readonly mobile: boolean;
+  readonly deviceScaleFactor: number;
+  readonly userAgent: "iphone" | "ipad" | "android" | null;
+}
+
 export interface PreviewViewportPreset {
   readonly id: PreviewViewportPresetId;
   readonly label: string;
@@ -12,12 +25,35 @@ export interface PreviewViewportPreset {
   readonly detail: string;
   readonly width: number;
   readonly height: number;
+  readonly device: PreviewDevice;
 }
 
 type PreviewViewportPresetDefinition = Omit<PreviewViewportPreset, "id">;
 
+const iphone = (deviceScaleFactor: number): PreviewDevice => ({
+  mobile: true,
+  deviceScaleFactor,
+  userAgent: "iphone",
+});
+const ipad = (deviceScaleFactor: number): PreviewDevice => ({
+  mobile: true,
+  deviceScaleFactor,
+  userAgent: "ipad",
+});
+const android = (deviceScaleFactor: number): PreviewDevice => ({
+  mobile: true,
+  deviceScaleFactor,
+  userAgent: "android",
+});
+const touchDesktop = (deviceScaleFactor: number): PreviewDevice => ({
+  mobile: false,
+  deviceScaleFactor,
+  userAgent: null,
+});
+
 // Keep this in Chrome DevTools' default-device order. Dimensions are CSS
-// viewport sizes from Chromium's EmulatedDevices.ts standard catalog.
+// viewport sizes from Chromium's EmulatedDevices.ts standard catalog; scale
+// factors and browsers are the devices' own.
 const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
   "iphone-se": {
     label: "iPhone SE",
@@ -25,6 +61,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "375 × 667",
     width: 375,
     height: 667,
+    device: iphone(2),
   },
   "iphone-xr": {
     label: "iPhone XR",
@@ -32,6 +69,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "414 × 896",
     width: 414,
     height: 896,
+    device: iphone(2),
   },
   "iphone-12-pro": {
     label: "iPhone 12 Pro",
@@ -39,6 +77,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "390 × 844",
     width: 390,
     height: 844,
+    device: iphone(3),
   },
   "iphone-14-pro-max": {
     label: "iPhone 14 Pro Max",
@@ -46,6 +85,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "430 × 932",
     width: 430,
     height: 932,
+    device: iphone(3),
   },
   "pixel-7": {
     label: "Pixel 7",
@@ -53,6 +93,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "412 × 915",
     width: 412,
     height: 915,
+    device: android(2.625),
   },
   "samsung-galaxy-s8-plus": {
     label: "Samsung Galaxy S8+",
@@ -60,6 +101,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "360 × 740",
     width: 360,
     height: 740,
+    device: android(4),
   },
   "samsung-galaxy-s20-ultra": {
     label: "Samsung Galaxy S20 Ultra",
@@ -67,6 +109,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "412 × 915",
     width: 412,
     height: 915,
+    device: android(3.5),
   },
   "ipad-mini": {
     label: "iPad Mini",
@@ -74,6 +117,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "768 × 1024",
     width: 768,
     height: 1024,
+    device: ipad(2),
   },
   "ipad-air": {
     label: "iPad Air",
@@ -81,6 +125,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "820 × 1180",
     width: 820,
     height: 1180,
+    device: ipad(2),
   },
   "ipad-pro": {
     label: "iPad Pro",
@@ -88,6 +133,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "1024 × 1366",
     width: 1024,
     height: 1366,
+    device: ipad(2),
   },
   "surface-pro-7": {
     label: "Surface Pro 7",
@@ -95,6 +141,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "912 × 1368",
     width: 912,
     height: 1368,
+    device: touchDesktop(2),
   },
   "surface-duo": {
     label: "Surface Duo",
@@ -102,6 +149,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "540 × 720",
     width: 540,
     height: 720,
+    device: android(2.5),
   },
   "galaxy-z-fold-5": {
     label: "Galaxy Z Fold 5",
@@ -109,6 +157,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "344 × 882",
     width: 344,
     height: 882,
+    device: android(2.625),
   },
   "asus-zenbook-fold": {
     label: "Asus Zenbook Fold",
@@ -116,6 +165,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "853 × 1280",
     width: 853,
     height: 1280,
+    device: touchDesktop(2),
   },
   "samsung-galaxy-a51-71": {
     label: "Samsung Galaxy A51/71",
@@ -123,6 +173,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "412 × 914",
     width: 412,
     height: 914,
+    device: android(2.625),
   },
   "nest-hub": {
     label: "Nest Hub",
@@ -130,6 +181,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "1024 × 600",
     width: 1024,
     height: 600,
+    device: touchDesktop(2),
   },
   "nest-hub-max": {
     label: "Nest Hub Max",
@@ -137,6 +189,7 @@ const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
     detail: "1280 × 800",
     width: 1280,
     height: 800,
+    device: touchDesktop(2),
   },
 } as const satisfies Record<PreviewViewportPresetId, PreviewViewportPresetDefinition>;
 
@@ -172,4 +225,14 @@ export function resolvePreviewViewport(
     width: input.width,
     height: input.height,
   };
+}
+
+/**
+ * The device a viewport presents as: only presets have one, so fill and
+ * freeform sizes test CSS breakpoints in a plain desktop browser. Presets
+ * from before the current catalog have none either.
+ */
+export function resolvePreviewDevice(setting: PreviewViewportSetting): PreviewDevice | null {
+  if (setting._tag !== "preset") return null;
+  return PREVIEW_VIEWPORT_PRESETS.find((preset) => preset.id === setting.presetId)?.device ?? null;
 }

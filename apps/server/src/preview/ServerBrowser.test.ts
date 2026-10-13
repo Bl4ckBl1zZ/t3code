@@ -30,9 +30,13 @@ import * as Manager from "./Manager.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 
+const presentAsChrome = vi.hoisted(() => vi.fn(async () => {}));
+
 // Keep the manager, broker, ownership, refs, and viewer paths real; replace Chromium I/O only.
-vi.mock("./ServerBrowserContexts.ts", () => ({
-  presentAsChrome: async () => {},
+vi.mock("./ServerBrowserContexts.ts", async (importOriginal) => ({
+  presentAsChrome,
+  deviceIdentity: (await importOriginal<typeof import("./ServerBrowserContexts.ts")>())
+    .deviceIdentity,
   ServerBrowserContexts: class {
     private readonly onClose: ((context: BrowserContext) => void) | undefined;
     constructor(options: { onContextClose?: (context: BrowserContext) => void }) {
@@ -522,6 +526,90 @@ it.live("applies any client's viewport, appearance, and zoom to a headless tab",
         deviceScaleFactor: 2.5,
         mobile: false,
       });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a device preset presents the tab as that device until the tab leaves it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const page = contexts[0]!.page;
+      const session = contexts[0]!.sessions[0]!;
+      yield* broker.invoke({
+        scope,
+        tabId,
+        operation: "navigate",
+        input: { url: "http://localhost:5173/" },
+      });
+      session.send.mockClear();
+      presentAsChrome.mockClear();
+      yield* broker.invoke({
+        scope,
+        tabId,
+        operation: "resize",
+        input: { mode: "preset", preset: "iphone-12-pro" },
+      });
+      expect(session.send).toHaveBeenCalledWith("Emulation.setTouchEmulationEnabled", {
+        enabled: true,
+        maxTouchPoints: 5,
+      });
+      // Mobile layout at the preset's size; headless frames keep the render scale.
+      expect(session.send).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+        width: 390,
+        height: 844,
+        deviceScaleFactor: 2,
+        mobile: true,
+      });
+      expect(session.send).toHaveBeenCalledWith("Emulation.setUserAgentOverride", {
+        userAgent: expect.stringContaining("iPhone"),
+      });
+      // The site sees the new user agent only on its next request.
+      expect(page.reload).toHaveBeenCalledOnce();
+
+      // Another size of the same device keeps its identity without a reload.
+      yield* broker.invoke({
+        scope,
+        tabId,
+        operation: "resize",
+        input: { mode: "preset", preset: "iphone-12-pro", orientation: "landscape" },
+      });
+      expect(page.reload).toHaveBeenCalledOnce();
+
+      session.send.mockClear();
+      yield* broker.invoke({ scope, tabId, operation: "resize", input: { mode: "fill" } });
+      expect(session.send).toHaveBeenCalledWith("Emulation.setTouchEmulationEnabled", {
+        enabled: false,
+        maxTouchPoints: 1,
+      });
+      expect(presentAsChrome).toHaveBeenCalledOnce();
+      expect(page.reload).toHaveBeenCalledTimes(2);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a desktop-rendered tab takes the device's pixel ratio at the desktop's own size", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const manager = yield* Manager.PreviewManager;
+      yield* Effect.yieldNow;
+      desktopRendersNext = true;
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      const viewer = yield* browser.attachViewer(viewerInput(opened.tabId, true));
+      const session = desktopConnections[0]!.context.sessions[0]!;
+      yield* viewer.input({ type: "takeControl" });
+      yield* viewer.input({
+        type: "viewport",
+        setting: { _tag: "preset", width: 412, height: 915, presetId: "pixel-7" },
+      });
+      expect(session.send).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+        width: 0,
+        height: 0,
+        deviceScaleFactor: 2.625,
+        mobile: true,
+      });
+      expect(desktopConnections[0]!.context.page.setViewportSize).not.toHaveBeenCalled();
     }),
   ).pipe(Effect.provide(layer)),
 );
