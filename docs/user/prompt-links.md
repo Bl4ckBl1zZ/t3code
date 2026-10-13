@@ -6,6 +6,10 @@ media, or to put a one-click fix in a pull request comment.
 A link never runs anything. It opens a draft. You read the prompt, then press Send. A link cannot
 change your permission mode, branch, or worktree. Your own defaults apply.
 
+> [!NOTE]
+> This fork has no hosted web app for prompt links to open on, so it does not offer **Copy prompt
+> link**.
+
 ## Make a link
 
 Open the command palette and choose **Copy prompt link**. It copies the draft in the composer.

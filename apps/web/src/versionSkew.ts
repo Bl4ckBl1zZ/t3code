@@ -5,6 +5,11 @@ import type {
   ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import {
+  releaseSourcePublishesCli,
+  resolveReleaseSource,
+  type ReleaseSource,
+} from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 
@@ -103,6 +108,24 @@ export function resolveServerSelfUpdateCapability(
   serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
 ): ServerSelfUpdateCapability | null {
   return serverConfig?.environment.capabilities.serverSelfUpdate ?? null;
+}
+
+const BUILD_RELEASE_SOURCE = resolveReleaseSource({
+  repository: import.meta.env.VITE_T3CODE_RELEASE_REPOSITORY,
+});
+
+/**
+ * Whether this build may offer to update a server with this capability. A
+ * desktop-managed server installs from its own app's update feed. Every other
+ * path (the background service, npm and relaunch commands) installs the `t3`
+ * CLI, which only upstream publishes, so a build released elsewhere offers
+ * none of them rather than handing its users upstream's build.
+ */
+export function offersServerUpdate(
+  selfUpdate: ServerSelfUpdateCapability | null | undefined,
+  source: ReleaseSource = BUILD_RELEASE_SOURCE,
+): boolean {
+  return selfUpdate === "desktop-managed" || releaseSourcePublishesCli(source);
 }
 
 /** True when the desktop app supervising this server can be told to update

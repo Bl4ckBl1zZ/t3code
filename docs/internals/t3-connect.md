@@ -174,3 +174,7 @@ polls Clerk's token endpoint directly while the user approves a short code on
 Clerk's hosted device page; the hosted app plays no part and there is no
 redirect URI or PKCE. The grant must be enabled on the CLI OAuth application
 or the device endpoint returns an error before any prompt is shown.
+A build without a hosted app (`T3CODE_HOSTED_APP_URL=none`, see
+`resolveHostedAppUrl`) has no `/connect` page, so its CLI always takes the
+device grant; its web and mobile clients also offer no hosted pairing or prompt
+links.

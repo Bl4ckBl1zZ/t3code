@@ -7,10 +7,11 @@ notice.
 
 > [!NOTE]
 > In this fork, a server updates with the desktop app that hosts it. Fork
-> versions are not published to npm or as standalone `t3` releases, so
-> `t3 update`, `npx t3@<version>`, and **Copy update command** fetch official
-> T3 Code instead. Update the desktop app on that machine, or pull and rebuild a
-> server you [built from source](./install.md#build-a-server-from-source).
+> versions are not published to npm or as standalone `t3` releases, so the apps
+> offer updates only for servers hosted by a desktop app, `t3 update` points you
+> to this fork's releases page, and no update command is offered to copy. Update
+> the desktop app on that machine, or pull and rebuild a server you
+> [built from source](./install.md#build-a-server-from-source).
 
 ## Update everything at once
 

@@ -8,7 +8,8 @@ Events do not include prompts, responses, file contents, authentication tokens, 
 raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
 
 To disable collection, set `T3CODE_TELEMETRY_ENABLED=false` in the server's environment before
-starting it. This stops product events from being recorded or sent.
+starting it. This stops product events from being recorded or sent. Some builds, such as
+community forks, ship with collection off; set `T3CODE_TELEMETRY_ENABLED=true` to turn it on there.
 
 The desktop app reads the variable from your shell profile (for example `~/.zshrc`) on macOS and
 Linux, so export it there and restart the app. On Windows, set it as a user environment variable.

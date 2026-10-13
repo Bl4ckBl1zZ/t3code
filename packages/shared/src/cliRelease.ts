@@ -5,7 +5,60 @@
  * platform key, so a rename here is a release-breaking change.
  */
 
-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
+/** The repository that publishes the `t3` CLI: its npm package and release archives. */
+export const UPSTREAM_RELEASE_REPOSITORY = "pingdotgg/t3code";
+
+/**
+ * Where a build's own releases are published, baked in at build time from
+ * `T3CODE_RELEASE_REPOSITORY` and `T3CODE_RELEASE_TAG_PREFIX`. Unset, a build
+ * follows upstream's `v<version>` releases.
+ */
+export interface ReleaseSource {
+  /** GitHub `owner/name`. */
+  readonly repository: string;
+  /** Prefix before the version in release tags, such as `v` in `v1.2.3`. */
+  readonly tagPrefix: string;
+}
+
+export const UPSTREAM_RELEASE_SOURCE: ReleaseSource = {
+  repository: UPSTREAM_RELEASE_REPOSITORY,
+  tagPrefix: "v",
+};
+
+/** Reads build-time release settings; anything unset or malformed falls back to upstream. */
+export function resolveReleaseSource(input: {
+  readonly repository?: unknown;
+  readonly tagPrefix?: unknown;
+}): ReleaseSource {
+  const repository = typeof input.repository === "string" ? input.repository.trim() : "";
+  const tagPrefix = typeof input.tagPrefix === "string" ? input.tagPrefix.trim() : "";
+  return {
+    repository: /^[\w.-]+\/[\w.-]+$/.test(repository) ? repository : UPSTREAM_RELEASE_REPOSITORY,
+    tagPrefix: /^[\w.-]+$/.test(tagPrefix) ? tagPrefix : UPSTREAM_RELEASE_SOURCE.tagPrefix,
+  };
+}
+
+/**
+ * Only upstream publishes the `t3` CLI, so `t3 update`, npm commands, and
+ * release-archive downloads all install upstream's build. A build released
+ * from another repository (a fork shipping desktop apps only) must not offer
+ * them; its desktop apps update from their own feed.
+ */
+export function releaseSourcePublishesCli(source: ReleaseSource): boolean {
+  return source.repository === UPSTREAM_RELEASE_REPOSITORY;
+}
+
+export function releasesPageUrl(source: ReleaseSource): string {
+  return `https://github.com/${source.repository}/releases`;
+}
+
+/** Why this build cannot update the `t3` CLI, or null when it can. */
+export function cliSelfUpdateUnavailableReason(source: ReleaseSource): string | null {
+  return releaseSourcePublishesCli(source)
+    ? null
+    : `Self-update isn't available in this build of T3 Code. Download the latest release from ${releasesPageUrl(source)}.`;
+}
+
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 /** Overrides the download origin for mirrors and air-gapped installs. */
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
@@ -54,7 +107,7 @@ export function cliArchiveFileName(version: string, platformKey: CliArchivePlatf
   return `t3-${version}-${platformKey}.${platformKey.startsWith("win32") ? "zip" : "tar.gz"}`;
 }
 
-const CLI_RELEASE_DEFAULT_BASE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases/download`;
+const CLI_RELEASE_DEFAULT_BASE_URL = `https://github.com/${UPSTREAM_RELEASE_REPOSITORY}/releases/download`;
 
 /** Directory that `releases/download/<tag>/<asset>` lives under. */
 export function cliReleaseDownloadBaseUrl(
@@ -97,13 +150,16 @@ export function cliReleaseChannelOf(version: string): CliReleaseChannel {
  * until a channel match turns up; a busy nightly train can push the newest
  * preview or stable release past any single page.
  */
-export function cliReleaseIndexPageUrl(page: number): string {
-  return `https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/releases?per_page=100&page=${page}`;
+export function cliReleaseIndexPageUrl(
+  page: number,
+  source: ReleaseSource = UPSTREAM_RELEASE_SOURCE,
+): string {
+  return `https://api.github.com/repos/${source.repository}/releases?per_page=100&page=${page}`;
 }
 
 /**
  * Picks the newest version on a channel from the release index. Tags are
- * `v<version>`; the channel is decided by the same rule the runtime uses, so
+ * `<tagPrefix><version>` (`v` upstream); the channel is decided by the same rule the runtime uses, so
  * a preview tag never satisfies a nightly lookup and vice versa. Drafts are
  * skipped because their assets are not downloadable.
  */
@@ -113,10 +169,13 @@ export function newestCliReleaseVersion(
     readonly draft?: boolean | undefined;
   }>,
   channel: CliReleaseChannel,
+  tagPrefix: string = UPSTREAM_RELEASE_SOURCE.tagPrefix,
 ): string | undefined {
   for (const release of releases) {
-    if (release.draft) continue;
-    const version = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(release.tag_name)?.[1];
+    if (release.draft || !release.tag_name.startsWith(tagPrefix)) continue;
+    const version = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(
+      release.tag_name.slice(tagPrefix.length),
+    )?.[1];
     if (version === undefined) continue;
     if (cliReleaseChannelOf(version) === channel) return version;
   }

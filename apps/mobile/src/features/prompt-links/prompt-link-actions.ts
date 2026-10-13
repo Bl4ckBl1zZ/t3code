@@ -1,4 +1,6 @@
+import { resolveHostedAppUrl } from "@t3tools/shared/connectAuth";
 import { buildNewThreadLink, type LinkedPrompt } from "@t3tools/shared/promptLinks";
+import Constants from "expo-constants";
 import { Alert } from "react-native";
 
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
@@ -42,9 +44,23 @@ export async function applyLinkedPromptToThreadDraft(
   ]);
 }
 
+/**
+ * The hosted app prompt links open on, or null when this build has none; sharing is then
+ * hidden rather than handing out links to upstream's app.
+ */
+export const promptLinkOrigin = resolveHostedAppUrl(
+  typeof Constants.expoConfig?.extra?.hostedAppUrl === "string"
+    ? Constants.expoConfig.extra.hostedAppUrl
+    : undefined,
+);
+
 /** Copies a shareable link that opens a new task with this prompt. Used by sent user messages. */
-export async function copyPromptLink(prompt: string): Promise<void> {
-  if (!(await tryCopyTextWithHaptic(buildNewThreadLink({ prompt }), { target: "prompt link" }))) {
+export async function copyPromptLink(prompt: string, origin: string): Promise<void> {
+  if (
+    !(await tryCopyTextWithHaptic(buildNewThreadLink({ prompt, origin }), {
+      target: "prompt link",
+    }))
+  ) {
     Alert.alert("Could not copy", "Try again.");
   }
 }

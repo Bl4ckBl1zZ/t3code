@@ -61,6 +61,12 @@ jobs:
       # Deliberately not `https://${{ vars.RELAY_DOMAIN }}`: with the variable
       # unset that yields a truthy "https://".
       T3CODE_RELAY_URL: ${{ vars.RELAY_DOMAIN && format('https://{0}', vars.RELAY_DOMAIN) || '' }}
+      # No hosted web app, so the app offers no prompt links to upstream's.
+      T3CODE_HOSTED_APP_URL: none
+      # The server-update check reads this fork's `fork-v<version>` releases
+      # and offers desktop app updates only (the fork publishes no t3 CLI).
+      T3CODE_RELEASE_REPOSITORY: ${{ github.repository }}
+      T3CODE_RELEASE_TAG_PREFIX: fork-v
     steps:
       - name: Checkout
         uses: actions/checkout@v6

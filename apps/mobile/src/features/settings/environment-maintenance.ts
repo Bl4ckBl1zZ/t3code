@@ -9,6 +9,9 @@ import {
   cliReleaseChannelOf,
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
+  releaseSourcePublishesCli,
+  UPSTREAM_RELEASE_SOURCE,
+  type ReleaseSource,
 } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
@@ -21,10 +24,24 @@ export function canMaintainEnvironment(session: AuthSessionState | null, connect
   );
 }
 
+/**
+ * Whether this app checks and installs updates for the host. Only upstream
+ * publishes the `t3` CLI, so an app released elsewhere follows desktop-app
+ * hosts only, which install from their own app's update feed.
+ */
+export function tracksEnvironmentReleases(
+  capabilities: Pick<ExecutionEnvironmentCapabilities, "serverSelfUpdate">,
+  source: ReleaseSource = UPSTREAM_RELEASE_SOURCE,
+) {
+  return releaseSourcePublishesCli(source) || capabilities.serverSelfUpdate === "desktop-managed";
+}
+
 export function supportsEnvironmentUpdate(
   capabilities: Pick<ExecutionEnvironmentCapabilities, "serverSelfUpdate" | "desktopAppUpdate">,
+  source: ReleaseSource = UPSTREAM_RELEASE_SOURCE,
 ) {
   return (
+    tracksEnvironmentReleases(capabilities, source) &&
     capabilities.serverSelfUpdate !== undefined &&
     (capabilities.serverSelfUpdate !== "desktop-managed" || capabilities.desktopAppUpdate === true)
   );
@@ -54,13 +71,17 @@ const Releases = Schema.Array(
 const decodeReleases = Schema.decodeUnknownSync(Releases);
 
 /** Preserve the host's release channel and never offer a downgrade. */
-export async function findEnvironmentUpdate(currentVersion: string, signal: AbortSignal) {
+export async function findEnvironmentUpdate(
+  currentVersion: string,
+  signal: AbortSignal,
+  source: ReleaseSource = UPSTREAM_RELEASE_SOURCE,
+) {
   const channel = cliReleaseChannelOf(currentVersion);
   for (let page = 1; ; page++) {
-    const response = await fetch(cliReleaseIndexPageUrl(page), { signal });
+    const response = await fetch(cliReleaseIndexPageUrl(page, source), { signal });
     if (!response.ok) throw new Error(`Could not check releases (${response.status}). Try again.`);
     const releases = decodeReleases(await response.json());
-    const version = newestCliReleaseVersion(releases, channel);
+    const version = newestCliReleaseVersion(releases, channel, source.tagPrefix);
     if (version !== undefined) {
       return compareSemverVersions(version, currentVersion) > 0 ? version : null;
     }

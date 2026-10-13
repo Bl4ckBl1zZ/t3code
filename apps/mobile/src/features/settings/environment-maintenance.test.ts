@@ -7,6 +7,7 @@ import {
   canUpdateEnvironmentProvider,
   findEnvironmentUpdate,
   supportsEnvironmentUpdate,
+  tracksEnvironmentReleases,
 } from "./environment-maintenance";
 
 const provider = Schema.decodeUnknownSync(ServerProvider)({
@@ -191,6 +192,25 @@ describe("environment release checks", () => {
     );
     expect(fetchMock.mock.calls[1]?.[0]).toContain("page=2");
     expect(fetchMock.mock.calls[1]?.[1]).toEqual({ signal });
+  });
+
+  it("follows only desktop-app hosts, on the fork's own releases, in a fork build", async () => {
+    const fork = { repository: "owner/fork", tagPrefix: "fork-v" };
+    expect(tracksEnvironmentReleases({ serverSelfUpdate: "boot-service" }, fork)).toBe(false);
+    expect(supportsEnvironmentUpdate({ serverSelfUpdate: "boot-service" }, fork)).toBe(false);
+    expect(
+      supportsEnvironmentUpdate(
+        { serverSelfUpdate: "desktop-managed", desktopAppUpdate: true },
+        fork,
+      ),
+    ).toBe(true);
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json([{ tag_name: "v9.0.0" }, { tag_name: "fork-v0.1.401" }]));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await findEnvironmentUpdate("0.1.400", signal, fork)).toBe("0.1.401");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/repos/owner/fork/releases");
   });
 
   it("reports failed checks instead of claiming the server is current", async () => {

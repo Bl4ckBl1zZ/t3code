@@ -61,6 +61,19 @@ describe("collectServerUpdateTargets", () => {
       ["other-desktop", "0.0.50"],
     ]);
   });
+
+  it("updates only desktop-managed servers in a build released outside upstream", () => {
+    const targets = collectServerUpdateTargets(
+      [
+        machine("service", "0.1.400", "boot-service"),
+        machine("desktop", "0.1.400", "desktop-managed"),
+      ],
+      "0.1.401",
+      { repository: "owner/fork", tagPrefix: "fork-v" },
+    );
+
+    expect(targets.map((target) => target.serverLabel)).toEqual(["desktop"]);
+  });
 });
 
 describe("collectRestartingMachines", () => {
