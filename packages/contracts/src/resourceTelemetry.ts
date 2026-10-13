@@ -355,12 +355,26 @@ export const DesktopTelemetryCancelDesktopUpdate = Schema.Struct({
 });
 export type DesktopTelemetryCancelDesktopUpdate = typeof DesktopTelemetryCancelDesktopUpdate.Type;
 
+/**
+ * Server -> desktop main: whether agent work (an active or queued run, or a
+ * background command) is running on this server. Sent repeatedly only while
+ * the desktop holds a downloaded update with automatic install on; the
+ * desktop installs once every running backend has recently said idle.
+ */
+export const DesktopTelemetrySetAgentActivity = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("setAgentActivity"),
+  busy: Schema.Boolean,
+});
+export type DesktopTelemetrySetAgentActivity = typeof DesktopTelemetrySetAgentActivity.Type;
+
 export const DesktopTelemetryControlMessage = Schema.Union([
   DesktopTelemetrySetDiagnosticsDemand,
   DesktopTelemetrySetHostPowerIntervals,
   DesktopTelemetryRequestDesktopUpdate,
   DesktopTelemetryCommitDesktopUpdate,
   DesktopTelemetryCancelDesktopUpdate,
+  DesktopTelemetrySetAgentActivity,
 ]);
 export type DesktopTelemetryControlMessage = typeof DesktopTelemetryControlMessage.Type;
 

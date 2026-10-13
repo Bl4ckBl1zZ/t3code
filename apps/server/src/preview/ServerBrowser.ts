@@ -44,7 +44,11 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
-import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
+import {
+  resolvePreviewDevice,
+  resolvePreviewViewport,
+  type PreviewDevice,
+} from "@t3tools/shared/previewViewport";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -79,7 +83,7 @@ import * as PreviewManager from "./Manager.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
-import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { deviceIdentity, presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -322,6 +326,8 @@ interface ServerTab {
   } | null;
   dialog: Dialog | null;
   setting: PreviewViewportSetting;
+  /** The device identity the page presents, from its preset; null is a plain browser. */
+  device: PreviewDevice | null;
   colorScheme: PreviewAppearancePreference;
   zoomFactor: number;
   loading: boolean;
@@ -393,7 +399,11 @@ const pushBounded = <A>(
 const viewportSettingsEqual = (left: PreviewViewportSetting, right: PreviewViewportSetting) =>
   left._tag === right._tag &&
   (left._tag === "fill" ||
-    (right._tag !== "fill" && left.width === right.width && left.height === right.height));
+    (right._tag !== "fill" &&
+      left.width === right.width &&
+      left.height === right.height &&
+      // Same-size presets can be different devices.
+      (left._tag !== "preset" || right._tag !== "preset" || left.presetId === right.presetId)));
 
 const fixedViewportSize = (setting: PreviewViewportSetting) =>
   setting._tag === "fill" ? null : { width: setting.width, height: setting.height };
@@ -622,14 +632,16 @@ const make = Effect.gen(function* () {
 
   /**
    * Zooms a headless page as Chrome's zoom does: it lays out in fewer CSS
-   * pixels and draws each one larger, so frames keep their size. The desktop
-   * zooms the pages it renders itself.
+   * pixels and draws each one larger, so frames keep their size. A device
+   * preset also lays out in mobile mode. The desktop zooms the pages it
+   * renders itself.
    */
   const applyZoom = async (tab: ServerTab) => {
     if (tab.desktop) return;
     const size = tab.page.viewportSize();
     if (!size) return;
-    if (tab.zoomFactor === 1) {
+    const mobile = tab.device?.mobile ?? false;
+    if (tab.zoomFactor === 1 && !mobile) {
       // Playwright's own override carries the plain viewport.
       await tab.page.setViewportSize(size);
       return;
@@ -638,9 +650,59 @@ const make = Effect.gen(function* () {
     await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
       width: layout.width,
       height: layout.height,
+      // Headless tabs keep the render scale whatever the device's, so
+      // frames, captures, and pointer math stay as they are.
       deviceScaleFactor: RENDER_SCALE * tab.zoomFactor,
-      mobile: false,
+      mobile,
     });
+  };
+
+  /**
+   * Presents the page as its preset's device, as Chrome DevTools' device mode
+   * does: touch input, mobile layout, and the device browser's user agent; a
+   * desktop-rendered page also takes the device's pixel ratio. Leaving a
+   * preset restores the plain browser. Sites read the user agent when they
+   * serve a page, so a changed one reloads it. Best effort: a page that
+   * refuses keeps its size. Returns whether the identity changed.
+   */
+  const applyDevice = async (tab: ServerTab): Promise<boolean> => {
+    const device = resolvePreviewDevice(tab.setting);
+    const previous = tab.device;
+    if (device === previous) return false;
+    tab.device = device;
+    try {
+      await tab.cdp.send("Emulation.setTouchEmulationEnabled", {
+        enabled: device !== null,
+        maxTouchPoints: device === null ? 1 : 5,
+      });
+      if (tab.desktop) {
+        await (device === null
+          ? tab.cdp.send("Emulation.clearDeviceMetricsOverride")
+          : // Zero sizes leave the size to the desktop's own layout of the tab.
+            tab.cdp.send("Emulation.setDeviceMetricsOverride", {
+              width: 0,
+              height: 0,
+              deviceScaleFactor: device.deviceScaleFactor,
+              mobile: device.mobile,
+            }));
+      } else {
+        await applyZoom(tab);
+      }
+      const userAgent = device?.userAgent ?? null;
+      if (userAgent === (previous?.userAgent ?? null)) return true;
+      const identity =
+        userAgent === null
+          ? null
+          : deviceIdentity(userAgent, (await tab.cdp.send("Browser.getVersion")).userAgent);
+      if (identity) await tab.cdp.send("Emulation.setUserAgentOverride", identity);
+      // An empty user agent drops the override; the desktop page had none of its own.
+      else if (tab.desktop) await tab.cdp.send("Emulation.setUserAgentOverride", { userAgent: "" });
+      else await presentAsChrome(tab.cdp, host);
+      if (/^https?:/.test(tab.page.url())) await tab.page.reload({ waitUntil: "commit" });
+    } catch (cause) {
+      runFork(Effect.logWarning("server preview could not emulate a device", { cause }));
+    }
+    return true;
   };
 
   const broadcastViewport = (tab: ServerTab) => {
@@ -652,7 +714,10 @@ const make = Effect.gen(function* () {
   const applySetting = async (tab: ServerTab, setting: PreviewViewportSetting) => {
     tab.setting = setting;
     // The desktop lays its webview out at the published setting itself.
-    if (tab.desktop) return;
+    if (tab.desktop) {
+      await applyDevice(tab);
+      return;
+    }
     const size =
       fixedViewportSize(setting) ??
       [...tab.viewers]
@@ -661,7 +726,8 @@ const make = Effect.gen(function* () {
         .sort((left, right) => right.order - left.order)[0] ??
       UNATTACHED_FILL_VIEWPORT;
     await tab.page.setViewportSize({ width: size.width, height: size.height });
-    await applyZoom(tab);
+    // A new device applies its own metrics; otherwise the reset size needs them back.
+    if (!(await applyDevice(tab))) await applyZoom(tab);
     broadcastViewport(tab);
   };
 
@@ -795,6 +861,7 @@ const make = Effect.gen(function* () {
       fileChooser: null,
       dialog: null,
       setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
+      device: null,
       colorScheme: "system",
       zoomFactor: 1,
       loading: false,
@@ -811,6 +878,7 @@ const make = Effect.gen(function* () {
       await page.setViewportSize(fixedViewportSize(tab.setting) ?? UNATTACHED_FILL_VIEWPORT);
     }
     await applyRendering(tab, snapshot);
+    await applyDevice(tab);
     const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
       request.isNavigationRequest() && request.frame() === page.mainFrame();
     const navigationGenerations = new WeakMap<object, number>();

@@ -26,6 +26,8 @@ import { resolveDefaultDesktopUpdateChannel } from "../updates/updateChannels.ts
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
+  /** Opt-in: a downloaded update installs once no agent work is running. */
+  readonly autoUpdateEnabled: boolean;
   readonly localEnvironmentEnabled: boolean;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
@@ -75,6 +77,7 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
 } as const;
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  autoUpdateEnabled: false,
   localEnvironmentEnabled: true,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
@@ -97,6 +100,8 @@ const DesktopWindowBoundsDocument = Schema.Struct({
 });
 
 const DesktopSettingsDocument = Schema.Struct({
+  // Same key the T3 Code fork wrote, so a value saved there carries over.
+  autoUpdateEnabled: Schema.optionalKey(Schema.Boolean),
   localEnvironmentEnabled: Schema.optionalKey(Schema.Boolean),
   linuxPasswordStore: Schema.optionalKey(Schema.Unknown),
   mainWindowBounds: Schema.optionalKey(Schema.NullOr(DesktopWindowBoundsDocument)),
@@ -174,6 +179,9 @@ export class DesktopAppSettings extends Context.Service<
     readonly setUpdateChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setAutoUpdateEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setWslBackendEnabled: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
@@ -232,6 +240,7 @@ function normalizeDesktopSettingsDocument(
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
   return {
+    autoUpdateEnabled: parsed.autoUpdateEnabled === true,
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
@@ -255,6 +264,10 @@ function toDesktopSettingsDocument(
   defaults: DesktopSettings,
 ): DesktopSettingsDocument {
   const document: Mutable<DesktopSettingsDocument> = {};
+
+  if (settings.autoUpdateEnabled !== defaults.autoUpdateEnabled) {
+    document.autoUpdateEnabled = settings.autoUpdateEnabled;
+  }
 
   if (settings.localEnvironmentEnabled !== defaults.localEnvironmentEnabled) {
     document.localEnvironmentEnabled = settings.localEnvironmentEnabled;
@@ -353,6 +366,12 @@ function setUpdateChannel(
         updateChannel: requestedChannel,
         updateChannelConfiguredByUser: true,
       };
+}
+
+function setAutoUpdateEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.autoUpdateEnabled === enabled
+    ? settings
+    : { ...settings, autoUpdateEnabled: enabled };
 }
 
 function setWslBackendEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
@@ -562,6 +581,10 @@ export const make = Effect.gen(function* () {
       persist((settings) => setUpdateChannel(settings, channel)).pipe(
         Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
       ),
+    setAutoUpdateEnabled: (enabled) =>
+      persist((settings) => setAutoUpdateEnabled(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setAutoUpdateEnabled", { attributes: { enabled } }),
+      ),
     setWslBackendEnabled: (enabled) =>
       persist((settings) => setWslBackendEnabled(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setWslBackendEnabled", { attributes: { enabled } }),
@@ -617,6 +640,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
           update((settings) => setServerExposureMode(settings, mode)),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
+        setAutoUpdateEnabled: (enabled) =>
+          update((settings) => setAutoUpdateEnabled(settings, enabled)),
         setWslBackendEnabled: (enabled) =>
           update((settings) => setWslBackendEnabled(settings, enabled)),
         setWslDistro: (distro) => update((settings) => setWslDistro(settings, distro)),

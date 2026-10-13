@@ -4,7 +4,7 @@ import { INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
 import { chromium, type Browser, type BrowserContext, type BrowserType } from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { deviceIdentity, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 
 const launches = vi.hoisted(() => ({
   launch: vi.fn<BrowserType["launch"]>(),
@@ -240,5 +240,42 @@ describe("ServerBrowserContexts", () => {
     await pool.close();
     expect(browser.close).toHaveBeenCalledTimes(1);
     expect(browser.contexts[0]?.close).toHaveBeenCalled();
+  });
+});
+
+describe("deviceIdentity", () => {
+  const electron =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) t3code/1.0.0 Chrome/142.0.7444.59 Electron/44.4.5 Safari/537.36";
+
+  it("presents iPhones and iPads as Safari, which sends no client hints", () => {
+    expect(deviceIdentity("iphone", electron)).toEqual({
+      userAgent: expect.stringMatching(/\(iPhone; .* Mobile\/\S+ Safari\//),
+    });
+    expect(deviceIdentity("ipad", electron)?.userAgent).toContain("(iPad;");
+  });
+
+  it("presents Android devices as the Chrome version the page's browser runs", () => {
+    const identity = deviceIdentity("android", electron);
+    expect(identity?.userAgent).toBe(
+      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36",
+    );
+    expect(identity).toMatchObject({
+      userAgentMetadata: {
+        platform: "Android",
+        mobile: true,
+        brands: expect.arrayContaining([{ brand: "Google Chrome", version: "142" }]),
+        fullVersionList: expect.arrayContaining([
+          { brand: "Google Chrome", version: "142.0.7444.59" },
+        ]),
+      },
+    });
+    expect(deviceIdentity("android", "HeadlessChrome/131.0.6778.33")?.userAgent).toContain(
+      "Chrome/131.0.0.0 Mobile",
+    );
+  });
+
+  it("keeps the browser's own identity for touch desktops or an unknown browser", () => {
+    expect(deviceIdentity(null, electron)).toBeNull();
+    expect(deviceIdentity("android", "Mozilla/5.0 Firefox/130.0")).toBeNull();
   });
 });

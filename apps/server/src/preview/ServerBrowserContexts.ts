@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owns Playwright resources outside the Effect runtime.
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
+import type { PreviewDevice } from "@t3tools/shared/previewViewport";
 import { constVoid } from "effect/Function";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
@@ -30,6 +31,19 @@ const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
   win32: "Windows",
 };
 
+/** Chrome's GREASE brand and order for a major version, as the shell reports them. */
+const chromeBrands = (major: string, fullVersion: string) => {
+  const brands = (names: (version: string) => string) => [
+    { brand: "Chromium", version: names(major) },
+    { brand: "Google Chrome", version: names(major) },
+    { brand: "Not A(Brand", version: names("99") },
+  ];
+  return {
+    brands: brands((value) => value),
+    fullVersionList: brands((value) => (value === major ? fullVersion : `${value}.0.0.0`)),
+  };
+};
+
 /**
  * The headless shell's identity as the Chrome it is built from: its user agent
  * without `HeadlessChrome`, and client hints whose brands agree with it. Sites
@@ -43,18 +57,11 @@ const chromeIdentity = (
   const fullVersion = version?.[1];
   const major = version?.[2];
   if (!version || !fullVersion || !major) return null;
-  // Chrome's GREASE brand and order for this major version, as the shell reports them.
-  const brands = (names: (version: string) => string) => [
-    { brand: "Chromium", version: names(major) },
-    { brand: "Google Chrome", version: names(major) },
-    { brand: "Not A(Brand", version: names("99") },
-  ];
   return {
     // Chrome reduces its user agent to the major version.
     userAgent: headlessUserAgent.replace(version[0], `Chrome/${major}.0.0.0`),
     userAgentMetadata: {
-      brands: brands((value) => value),
-      fullVersionList: brands((value) => (value === major ? fullVersion : `${value}.0.0.0`)),
+      ...chromeBrands(major, fullVersion),
       platform: UA_PLATFORMS[host.platform] ?? "Unknown",
       platformVersion: host.platform === "linux" ? host.release : "",
       architecture: host.arch.startsWith("arm") ? "arm" : "x86",
@@ -77,6 +84,40 @@ export const presentAsChrome = async (
   const { userAgent } = await cdp.send("Browser.getVersion");
   const identity = chromeIdentity(userAgent, { ...host, release: NodeOS.release() });
   if (identity) await cdp.send("Emulation.setUserAgentOverride", identity);
+};
+
+// Safari freezes the OS version in its user agent and sends no client hints.
+const IPHONE_USER_AGENT =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
+const IPAD_USER_AGENT =
+  "Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
+
+/**
+ * A device preset's browser: Safari on an iPhone or iPad, or Chrome on
+ * Android at the version the page's own browser runs, in Chrome's reduced
+ * Android form. Null when the preset keeps the browser's own identity.
+ */
+export const deviceIdentity = (userAgent: PreviewDevice["userAgent"], browserUserAgent: string) => {
+  if (userAgent === "iphone") return { userAgent: IPHONE_USER_AGENT };
+  if (userAgent === "ipad") return { userAgent: IPAD_USER_AGENT };
+  if (userAgent !== "android") return null;
+  const version = /Chrome\/((\d+)[\d.]*)/.exec(browserUserAgent);
+  const fullVersion = version?.[1];
+  const major = version?.[2];
+  if (!fullVersion || !major) return null;
+  return {
+    userAgent: `Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Mobile Safari/537.36`,
+    userAgentMetadata: {
+      ...chromeBrands(major, fullVersion),
+      platform: "Android",
+      platformVersion: "10.0.0",
+      architecture: "",
+      bitness: "",
+      model: "K",
+      mobile: true,
+      wow64: false,
+    },
+  };
 };
 
 /** Persistent human profiles keep their storage; isolated agents share a browser, never a context. */

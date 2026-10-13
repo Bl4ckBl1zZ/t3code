@@ -284,6 +284,9 @@ export interface DesktopUpdateState {
   message: string | null;
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
+  /** Opt-in: downloads install on their own once no agent work is running.
+      Absent from desktop builds that predate the setting. */
+  autoUpdateEnabled?: boolean;
 }
 
 export interface DesktopUpdateReleaseNote {
@@ -315,6 +318,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   message: Schema.NullOr(Schema.String),
   errorContext: Schema.NullOr(Schema.Literals(["check", "download", "install"])),
   canRetry: Schema.Boolean,
+  autoUpdateEnabled: Schema.optionalKey(Schema.Boolean),
 });
 
 /** The desktop app's `t3` command on PATH, managed from Settings. */
@@ -1235,6 +1239,8 @@ export interface DesktopBridge {
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
+  /** Optional while older desktop shells can host a newer web client. */
+  setAutoUpdateEnabled?: (enabled: boolean) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;

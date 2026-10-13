@@ -75,6 +75,7 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
           updateRequests: Stream.empty,
           updateCommits: Stream.empty,
           updateCancellations: Stream.empty,
+          agentActivity: Stream.empty,
         }),
         DesktopBrowserHost.layer,
         Layer.succeed(DesktopBackendConfiguration.DesktopBackendConfiguration, {
