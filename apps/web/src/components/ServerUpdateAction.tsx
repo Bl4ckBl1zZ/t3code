@@ -40,7 +40,9 @@ export function serverUpdateStageLabel(stage: ServerUpdateStage): string {
   return UPDATE_STAGE_LABELS[stage];
 }
 
-function canUpdateServer(result: AsyncResult.AsyncResult<AuthSessionState, unknown>): boolean {
+export function canUpdateServer(
+  result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
+): boolean {
   if (result._tag !== "Success" || !result.value.authenticated) return false;
   // Self-update bridges authorization protocol changes: a server that predates
   // environment:maintain still updates under orchestration:operate.
@@ -49,6 +51,55 @@ function canUpdateServer(result: AsyncResult.AsyncResult<AuthSessionState, unkno
 
 function updateFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Server update failed.";
+}
+
+export interface ServerUpdateTarget {
+  readonly environmentId: EnvironmentId;
+  readonly serverLabel: string;
+  readonly selfUpdate: ServerSelfUpdateCapability | null;
+  readonly installation?: ServerInstallation | undefined;
+  readonly desktopAppUpdate?: boolean;
+  readonly targetVersion: string;
+}
+
+/** Updates one server and waits until it is back on the target version.
+    Reports its own success or failure toast; never rejects. Thread
+    continuation follows the server's own setting (see client-runtime). */
+export function useServerUpdate() {
+  const updateServer = useAtomCommand(serverEnvironment.updateServer, { reportFailure: false });
+  return async (target: ServerUpdateTarget, failureTitle = "Server update failed") => {
+    const { environmentId, serverLabel, selfUpdate, targetVersion } = target;
+    if (
+      !canUpdateServer(appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId))) ||
+      pendingUpdateEnvironmentIds.has(environmentId)
+    ) {
+      return;
+    }
+    pendingUpdateEnvironmentIds.add(environmentId);
+    try {
+      const result = await updateServer({ environmentId, input: { targetVersion } });
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) return;
+        throw squashAtomCommandFailure(result);
+      }
+      toastManager.add({
+        type: "success",
+        title: `${serverLabel} updated`,
+        description:
+          selfUpdate === "desktop-managed"
+            ? `Desktop app relaunched on ${result.value.targetVersion}.`
+            : `Reconnected on t3@${result.value.targetVersion}.`,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: failureTitle,
+        description: updateFailureMessage(error),
+      });
+    } finally {
+      pendingUpdateEnvironmentIds.delete(environmentId);
+    }
+  };
 }
 
 /**
@@ -116,9 +167,7 @@ export function ServerUpdateAction({
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
   const canUpdate = canUpdateServer(useAtomValue(sessionStateAtom));
-  const updateServer = useAtomCommand(serverEnvironment.updateServer, {
-    reportFailure: false,
-  });
+  const updateServer = useServerUpdate();
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
     target: installation?.kind === "npm-global" ? "update command" : "relaunch command",
     onCopy: ({ command }) => {
@@ -160,39 +209,7 @@ export function ServerUpdateAction({
         return;
       }
     }
-    if (
-      !canUpdateServer(appAtomRegistry.get(sessionStateAtom)) ||
-      pendingUpdateEnvironmentIds.has(environmentId)
-    ) {
-      return;
-    }
-    pendingUpdateEnvironmentIds.add(environmentId);
-    try {
-      const result = await updateServer({
-        environmentId,
-        input: { targetVersion },
-      });
-      if (result._tag === "Failure") {
-        if (isAtomCommandInterrupted(result)) {
-          return;
-        }
-        toastManager.add({
-          type: "error",
-          title: "Server update failed",
-          description: updateFailureMessage(squashAtomCommandFailure(result)),
-        });
-        return;
-      }
-      toastManager.add({
-        type: "success",
-        title: `${serverLabel} updated`,
-        description: isDesktopAppUpdate
-          ? `Desktop app relaunched on ${result.value.targetVersion}.`
-          : `Reconnected on t3@${result.value.targetVersion}.`,
-      });
-    } finally {
-      pendingUpdateEnvironmentIds.delete(environmentId);
-    }
+    await updateServer({ environmentId, serverLabel, selfUpdate, targetVersion });
   };
 
   if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {
