@@ -11,6 +11,10 @@ import {
   resolveSubagentMetadata,
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
+import {
+  formatSubagentUsage,
+  type SubagentUsage,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import { getModelSelectionStringOptionValue, resolveSelectableModel } from "@t3tools/shared/model";
 import { getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
 import type { ReactNode } from "react";
@@ -20,7 +24,9 @@ import {
   CircleDashedIcon,
   CircleXIcon,
   FolderIcon,
+  GaugeIcon,
   GitBranchIcon,
+  ListTreeIcon,
   TerminalIcon,
 } from "lucide-react";
 import { ThreadHoverCard } from "../ThreadHoverCard";
@@ -50,9 +56,18 @@ export function SubagentTooltipContent(props: {
   status: OrchestrationV2TurnItemStatus;
   result?: string | null | undefined;
   progress?: string | null | undefined;
+  /** Tokens and tool uses the provider reported for this agent or workflow. */
+  usage?: SubagentUsage | null | undefined;
+  /** A workflow's current phase; see currentWorkflowPhase. */
+  workflowPhase?: {
+    readonly position: number;
+    readonly count: number;
+    readonly title: string;
+  } | null;
 }) {
   const { modelLabel, workspace: metadata } = resolveSubagentMetadata(props);
   const preview = subagentDetailPreview(props);
+  const usage = formatSubagentUsage(props.usage ?? null);
   const model = props.model?.trim();
   const modelSlug = props.provider
     ? resolveSelectableModel(props.provider.driver, model, props.provider.models)
@@ -180,6 +195,21 @@ export function SubagentTooltipContent(props: {
           </div>
         );
       })}
+      {props.workflowPhase ? (
+        <div className="flex min-w-0 items-center gap-2">
+          <ListTreeIcon aria-hidden className="size-3 shrink-0" />
+          <span className="shrink-0 tabular-nums">
+            Phase {props.workflowPhase.position}/{props.workflowPhase.count}
+          </span>
+          <span className="min-w-0 truncate text-foreground/75">{props.workflowPhase.title}</span>
+        </div>
+      ) : null}
+      {usage ? (
+        <div className="flex min-w-0 items-center gap-2">
+          <GaugeIcon aria-hidden className="size-3 shrink-0" />
+          <span className="min-w-0 truncate tabular-nums">{usage}</span>
+        </div>
+      ) : null}
       {preview ? (
         <div className="flex min-w-0 items-center gap-2">
           <TerminalIcon aria-hidden className="size-3 shrink-0" />

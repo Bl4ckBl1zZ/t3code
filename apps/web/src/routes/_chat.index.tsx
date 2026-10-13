@@ -12,7 +12,7 @@ import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
-import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useNewThreadHandler, useRememberedNewThreadProject } from "../hooks/useHandleNewThread";
 import {
   useAllEnvironmentShellsBootstrapped,
   useProjects,
@@ -35,9 +35,10 @@ function ChatIndexRouteView() {
 }
 
 /**
- * Landing on the index route drops straight into a draft thread for the most
- * recently active project, so the first screen is a prompt instead of a dead
- * end. Falls back to an add-project hero when no project exists yet.
+ * Landing on the index route drops straight into a draft thread for the
+ * project the user last started a thread in (else the most recently active
+ * one), so the first screen is a prompt instead of a dead end. Falls back to an
+ * add-project hero when no project exists yet.
  */
 function IndexDraftLanding() {
   const projects = useProjects();
@@ -51,32 +52,35 @@ function IndexDraftLanding() {
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
-  const mostRecentProject = useMemo(
+  const rememberedProject = useRememberedNewThreadProject(projects);
+  const landingProject = useMemo(
     () =>
       bootstrapped
-        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
+        ? (rememberedProject ??
+          sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ??
+          null)
         : null,
-    [bootstrapped, projects, threads],
+    [bootstrapped, projects, rememberedProject, threads],
   );
 
   useEffect(() => {
     // Starting a draft after the user has left would replace the page they picked.
-    if (mostRecentProject === null || startingRef.current || !isStillOnIndex()) {
+    if (landingProject === null || startingRef.current || !isStillOnIndex()) {
       return;
     }
     startingRef.current = true;
-    void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
+    void handleNewThread(scopeProjectRef(landingProject.environmentId, landingProject.id), {
       replace: true,
     }).catch(() => {
       startingRef.current = false;
       setStartState((state) => ({ ...state, failed: true }));
     });
-  }, [handleNewThread, mostRecentProject, startState.retryRequest]);
+  }, [handleNewThread, landingProject, startState.retryRequest]);
 
   if (!bootstrapped) {
     return null;
   }
-  if (mostRecentProject !== null) {
+  if (landingProject !== null) {
     return startState.failed ? (
       <DraftStartError
         onRetry={() => {

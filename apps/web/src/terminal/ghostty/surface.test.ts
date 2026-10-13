@@ -11,6 +11,7 @@ import {
   isTerminalAltGraphText,
   isTerminalCompositionCommitInput,
   isTerminalCompositionKey,
+  isTerminalCopyAllShortcut,
   isTerminalCopyShortcut,
   isTerminalPasteShortcut,
   loadTerminalFontFamily,
@@ -1028,6 +1029,33 @@ describe("isTerminalCopyShortcut", () => {
       ),
     ).toBe(false);
     expect(isTerminalCopyShortcut(event({ key: "Insert", ctrlKey: true }), "MacIntel")).toBe(false);
+  });
+});
+
+describe("isTerminalCopyAllShortcut", () => {
+  const event = (overrides: Partial<Parameters<typeof isTerminalCopyAllShortcut>[0]> = {}) => ({
+    ctrlKey: false,
+    key: "c",
+    metaKey: false,
+    shiftKey: false,
+    ...overrides,
+  });
+
+  it("copies the scrollback with Cmd+C on macOS", () => {
+    expect(isTerminalCopyAllShortcut(event({ metaKey: true }), "MacIntel")).toBe(true);
+    expect(isTerminalCopyAllShortcut(event({ ctrlKey: true }), "MacIntel")).toBe(false);
+  });
+
+  it("leaves a plain Ctrl+C to the shell elsewhere", () => {
+    expect(isTerminalCopyAllShortcut(event({ ctrlKey: true }), "Linux x86_64")).toBe(false);
+    expect(isTerminalCopyAllShortcut(event({ ctrlKey: true }), "Win32")).toBe(false);
+  });
+
+  it("copies the scrollback with the copy-only chords elsewhere", () => {
+    expect(
+      isTerminalCopyAllShortcut(event({ ctrlKey: true, shiftKey: true }), "Linux x86_64"),
+    ).toBe(true);
+    expect(isTerminalCopyAllShortcut(event({ key: "Insert", ctrlKey: true }), "Win32")).toBe(true);
   });
 });
 

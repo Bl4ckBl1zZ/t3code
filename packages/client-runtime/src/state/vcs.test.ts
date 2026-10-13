@@ -347,6 +347,59 @@ describe("cached VCS refs", () => {
     ),
   );
 
+  it.effect("runs a burst of working-tree refreshes as one call plus one trailing call", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const releaseFirst = Promise.withResolvers<void>();
+        const client = {
+          [WS_METHODS.vcsRefreshLocalStatus]: () =>
+            Ref.updateAndGet(calls, (count) => count + 1).pipe(
+              Effect.flatMap((count) =>
+                count === 1 ? Effect.promise(() => releaseFirst.promise) : Effect.void,
+              ),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: yield* SubscriptionRef.make(CONNECTED_CONNECTION_STATE),
+          session: yield* SubscriptionRef.make(Option.some(session(client))),
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+          run: (_environmentId, effect) =>
+            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+        const runtime = Atom.runtime(
+          Layer.merge(
+            Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+            Layer.succeed(Persistence.EnvironmentCacheStore, cacheWithRefs(Option.none())),
+          ),
+        );
+        const atoms = createVcsEnvironmentAtoms(runtime);
+        const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
+          Effect.sync(() => registry.dispose()),
+        );
+        const refresh = () =>
+          atoms.refreshLocalStatus.run(registry, {
+            environmentId: TARGET.environmentId,
+            input: { cwd: "/repo" },
+          });
+
+        const first = refresh();
+        const burst = [refresh(), refresh(), refresh()];
+        releaseFirst.resolve();
+        const results = yield* Effect.promise(() => Promise.all([first, ...burst]));
+
+        expect(results.every(AsyncResult.isSuccess)).toBe(true);
+        expect(yield* Ref.get(calls)).toBe(2);
+      }),
+    ),
+  );
+
   it.effect("suppresses persisted snapshots after an environment-wide clear fails", () =>
     Effect.scoped(
       Effect.gen(function* () {

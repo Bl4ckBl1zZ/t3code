@@ -181,7 +181,9 @@ vi.mock("../state/server", () => ({
 vi.mock("../threadRoutes", () => ({ resolveThreadRouteTarget: () => null }));
 vi.mock("../uiStateStore", () => ({
   legacyProjectCwdPreferenceKey: () => "remote-project",
-  useUiStateStore: () => [],
+  useUiStateStore: Object.assign(() => [], {
+    getState: () => ({ setLastNewThreadProjectKey: () => undefined }),
+  }),
 }));
 vi.mock("./useSettings", () => ({ useClientSettings: () => ({}) }));
 

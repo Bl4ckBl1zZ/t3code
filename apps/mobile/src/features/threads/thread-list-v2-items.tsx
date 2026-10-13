@@ -1,3 +1,4 @@
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
@@ -1071,7 +1072,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             )}
             numberOfLines={1}
           >
-            {thread.runtime.lastError}
+            {presentProviderError(thread.runtime.lastError)}
           </Text>
         ) : thread.branch || props.environmentLabel ? (
           /* "branch · machine" share one truncating line. The machine sits

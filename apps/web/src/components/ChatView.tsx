@@ -25,6 +25,8 @@ import {
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { filesChangedAfterCheckpoint } from "@t3tools/client-runtime/state/thread-checkpoints";
+import { MiddleTruncate } from "./ui/middle-truncate";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import {
   latestExecutedRun,
@@ -426,6 +428,7 @@ import { useProjectClone } from "../state/projectClones";
 import { projectCloneDisplayName, projectCloneProgressSummary } from "@t3tools/contracts";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readEnvironmentSupportsLocalVcsStatusRefresh,
   resolveThreadDetailRef,
   useEnvironmentSupportsServerBrowser,
   useProject,
@@ -630,6 +633,7 @@ const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
 // (unread flips on run completions, which bypass the throttle), so one
 // watermark per interval is plenty.
 const VISIT_DISPATCH_THROTTLE_MS = 10_000;
+const MAX_REVERT_DIALOG_FILES = 8;
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 function useDraftHeroLayoutTransition(
@@ -4152,10 +4156,23 @@ export default function ChatView(props: ChatViewProps) {
           input: { cwd: gitStatusCwd },
         }),
   );
+  // Re-subscribing replays the server's cached status, so after an agent edit
+  // ask the server to recompute the working tree; the result arrives through
+  // the status subscription. Older servers only offer the re-subscribe.
+  const refreshLocalVcsStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
+    reportFailure: false,
+  });
+  const refreshGitStatusAfterMutation = useCallback(() => {
+    if (gitStatusCwd === null || !readEnvironmentSupportsLocalVcsStatusRefresh(environmentId)) {
+      gitStatusQuery.refresh();
+      return;
+    }
+    void refreshLocalVcsStatus({ environmentId, input: { cwd: gitStatusCwd } });
+  }, [environmentId, gitStatusCwd, gitStatusQuery.refresh, refreshLocalVcsStatus]);
   useWorkspaceMutationRefresh({
     enabled: gitStatusCwd !== null,
     mutationId: workspaceMutationId,
-    refresh: gitStatusQuery.refresh,
+    refresh: refreshGitStatusAfterMutation,
     resourceKey: `git-status:${activeThreadKey ?? ""}:${gitStatusCwd ?? ""}`,
   });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -8476,6 +8493,14 @@ export default function ChatView(props: ChatViewProps) {
   if (pendingRevert && pendingRevert.routeThreadKey !== routeThreadKey) {
     setPendingRevert(null);
   }
+  // What "Revert files too" puts back, so the choice is made knowing it.
+  const pendingRevertFiles = useMemo(
+    () =>
+      pendingRevert === null
+        ? []
+        : filesChangedAfterCheckpoint(turnDiffSummaries, pendingRevert.turnCount),
+    [pendingRevert, turnDiffSummaries],
+  );
 
   const onRevertToTurnCount = useCallback(
     async (turnCount: number, messageId: MessageId, restoreFiles?: boolean) => {
@@ -8643,12 +8668,39 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
+      const checkpoint = turnDiffSummaries.find(
+        (summary) => summary.checkpointId === input.checkpointId,
+      );
+      const restoredFiles = checkpoint
+        ? filesChangedAfterCheckpoint(
+            turnDiffSummaries.filter((summary) => summary.scopeId === input.scopeId),
+            checkpoint.checkpointTurnCount,
+          )
+        : [];
+      const restoredFilesNotice =
+        restoredFiles.length === 0
+          ? []
+          : [
+              `Restores ${restoredFiles.length} ${restoredFiles.length === 1 ? "file" : "files"} changed after it:`,
+              ...restoredFiles.slice(0, MAX_REVERT_DIALOG_FILES),
+              ...(restoredFiles.length > MAX_REVERT_DIALOG_FILES
+                ? [`and ${restoredFiles.length - MAX_REVERT_DIALOG_FILES} more`]
+                : []),
+            ];
       const localApi = readLocalApi();
       const confirmed =
         localApi == null
-          ? window.confirm("Roll back this thread to the selected checkpoint?")
+          ? window.confirm(
+              ["Roll back this thread to the selected checkpoint?", ...restoredFilesNotice].join(
+                "\n",
+              ),
+            )
           : await localApi.dialogs.confirm(
-              "Roll back this thread to the selected checkpoint?\nThis action cannot be undone.",
+              [
+                "Roll back this thread to the selected checkpoint?",
+                ...restoredFilesNotice,
+                "This action cannot be undone.",
+              ].join("\n"),
             );
       if (!confirmed) return;
 
@@ -8688,6 +8740,7 @@ export default function ChatView(props: ChatViewProps) {
       phase,
       revertThreadCheckpoint,
       setThreadError,
+      turnDiffSummaries,
     ],
   );
 
@@ -12200,9 +12253,31 @@ export default function ChatView(props: ChatViewProps) {
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>Edit from here?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Rewind chat to before this message. Your prompt and attachments return to the
-              composer.
+            <AlertDialogDescription render={<div />} className="space-y-2">
+              <p>
+                Rewind chat to before this message. Your prompt and attachments return to the
+                composer.
+              </p>
+              {pendingRevertFiles.length > 0 ? (
+                <>
+                  <p>
+                    Revert files too restores {pendingRevertFiles.length}{" "}
+                    {pendingRevertFiles.length === 1 ? "file" : "files"} changed after this point:
+                  </p>
+                  <ul className="space-y-0.5 font-mono text-xs text-foreground/80">
+                    {pendingRevertFiles.slice(0, MAX_REVERT_DIALOG_FILES).map((path) => (
+                      <li key={path} className="flex min-w-0">
+                        <MiddleTruncate value={path} />
+                      </li>
+                    ))}
+                    {pendingRevertFiles.length > MAX_REVERT_DIALOG_FILES ? (
+                      <li className="font-sans text-muted-foreground">
+                        and {pendingRevertFiles.length - MAX_REVERT_DIALOG_FILES} more
+                      </li>
+                    ) : null}
+                  </ul>
+                </>
+              ) : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

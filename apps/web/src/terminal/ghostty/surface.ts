@@ -344,6 +344,19 @@ export function isTerminalCopyShortcut(
 }
 
 /**
+ * Copy shortcuts that never mean anything to the shell: Cmd+C on macOS,
+ * Ctrl+Shift+C and Ctrl+Insert elsewhere. With no selection these copy the
+ * whole scrollback. A plain Ctrl+C without a selection stays SIGINT.
+ */
+export function isTerminalCopyAllShortcut(
+  event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
+  platform = navigator.platform,
+) {
+  if (!isTerminalCopyShortcut(event, platform)) return false;
+  return isMacPlatform(platform) || event.shiftKey || event.key.toLowerCase() === "insert";
+}
+
+/**
  * Canvas terminals have no DOM selection. Native copy and Electron's Edit
  * menu `role: "copy"` both read the focused textarea, so an empty IME field
  * writes blankness to the clipboard. Park the Ghostty selection there first.
@@ -982,6 +995,17 @@ export class GhosttyTerminalSurface {
     return this.core.selectionText();
   }
 
+  /**
+   * The active screen's entire history as text. The select-all is transient:
+   * it is cleared before the next frame, so it never renders.
+   */
+  private scrollbackText(): string {
+    if (this.core.selectAll() === null) return "";
+    const text = this.core.selectionText();
+    this.core.clearSelection();
+    return text;
+  }
+
   /** Select the active screen's entire history, including rows outside the viewport. */
   selectAll(): void {
     this.clearPrimedCopy();
@@ -1146,14 +1170,21 @@ export class GhosttyTerminalSurface {
         return;
       }
     }
-    if (isTerminalCopyShortcut(event) && this.hasSelection()) {
+    const selection = !isTerminalCopyShortcut(event)
+      ? ""
+      : this.hasSelection()
+        ? this.getSelection()
+        : isTerminalCopyAllShortcut(event)
+          ? this.scrollbackText()
+          : "";
+    if (selection.length > 0) {
       // A plain Ctrl+C/Cmd+C fires the browser's native copy event, caught in
       // onCopyEvent; not preventing the default keeps that path alive. WebKit
       // omits the keyboard copy event without a DOM selection, so race the
       // clipboard write against it the same way paste races its read. Ctrl+Shift+C
       // and Ctrl+Insert have no native copy event (Chrome binds the former to
-      // inspect), so synthesize one with execCommand("copy").
-      const selection = this.getSelection();
+      // inspect), so synthesize one with execCommand("copy"). Without a
+      // selection the primed textarea carries the scrollback to onCopyEvent.
       this.primeCopy(selection);
       if (event.shiftKey || event.key.toLowerCase() === "insert") {
         event.preventDefault();

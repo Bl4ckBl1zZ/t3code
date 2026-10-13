@@ -10,6 +10,7 @@ import type {
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
+import { formatTokens } from "@t3tools/shared/usageFormat";
 
 export type RuntimeSubagentStatus =
   | "pending"
@@ -317,4 +318,30 @@ export function deriveWorkflowGroups(
 
     return { workflow, phases, unphasedMembers };
   });
+}
+
+/** "12.3K tokens · 8 tool uses", or null when the agent reported no usage. */
+export function formatSubagentUsage(usage: SubagentUsage | null): string | null {
+  if (usage === null) return null;
+  const tokens = `${formatTokens(usage.totalTokens)} tokens`;
+  return usage.toolUses === undefined
+    ? tokens
+    : `${tokens} · ${usage.toolUses} ${usage.toolUses === 1 ? "tool use" : "tool uses"}`;
+}
+
+/**
+ * Where a workflow is: its latest phase with a live member, else the latest
+ * phase it reached. Null before any member starts. `count` is the phases known
+ * so far; a dynamic plan can still grow.
+ */
+export function currentWorkflowPhase(
+  group: SubagentWorkflowGroup,
+): { readonly position: number; readonly count: number; readonly title: string } | null {
+  const running = group.phases.findLastIndex((phase) => phase.state === "running");
+  const index =
+    running >= 0 ? running : group.phases.findLastIndex((phase) => phase.state === "done");
+  const phase = group.phases[index];
+  return phase === undefined
+    ? null
+    : { position: index + 1, count: group.phases.length, title: phase.title };
 }

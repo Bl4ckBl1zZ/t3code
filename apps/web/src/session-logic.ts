@@ -1,3 +1,4 @@
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import {
   type AssetResource,
@@ -400,7 +401,7 @@ export function providerErrorPresentation(
         item.failure.class === "usage_limit"
           ? "Usage limit reached"
           : item.title?.trim() || "Provider error",
-      detail: item.failure.message,
+      detail: presentProviderError(item.failure.message),
     };
   }
   const progress =
@@ -423,7 +424,7 @@ export function providerErrorPresentation(
       : "";
   return {
     label,
-    detail: `${item.failure.message}${retryDelay}`,
+    detail: `${presentProviderError(item.failure.message)}${retryDelay}`,
   };
 }
 

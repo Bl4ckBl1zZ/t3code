@@ -1,3 +1,4 @@
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 import { SubagentStatusDot } from "./SubagentStatusDot";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
 import {
@@ -922,9 +923,10 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
     const label = warning
       ? `Usage limit reached.${resetTime ? ` Retry after ${resetTime}.` : ""}`
       : row.summary;
+    const failureMessage = presentProviderError(failureItem.failure.message);
     return (
       <WorkLogPressable
-        accessibilityLabel={warning ? label : `${row.summary}: ${failureItem.failure.message}`}
+        accessibilityLabel={warning ? label : `${row.summary}: ${failureMessage}`}
         accessibilityHint="Long press to copy."
         onLongPress={() => props.onCopyRow(row.id, row.getCopyText())}
       >
@@ -965,7 +967,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
           </View>
           {!warning ? (
             <Text selectable className="ml-7 text-sm text-foreground">
-              {failureItem.failure.message}
+              {failureMessage}
             </Text>
           ) : null}
           {failureItem.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE &&

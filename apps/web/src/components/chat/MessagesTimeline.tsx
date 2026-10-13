@@ -1,3 +1,4 @@
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
@@ -5549,7 +5550,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       >
         {!warning ? (
           <p className="ms-7 whitespace-pre-wrap break-words py-1 text-sm leading-relaxed text-foreground/80">
-            {failureItem.failure.message}
+            {presentProviderError(failureItem.failure.message)}
           </p>
         ) : null}
         {retryRunId !== null && onRetryWorkspacePreparation ? (

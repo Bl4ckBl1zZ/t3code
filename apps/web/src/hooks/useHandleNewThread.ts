@@ -134,6 +134,12 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
+      // Every new-thread surface funnels through here, so this is where the
+      // choice is remembered for surfaces that open a thread without naming a
+      // project. Unknown refs are skipped so a removed project never sticks.
+      if (project) {
+        useUiStateStore.getState().setLastNewThreadProjectKey(scopedProjectKey(projectRef));
+      }
       // The resolver applies project overrides and, until the server has
       // folded them, the aggregate's own legacy fields.
       const projectSettings = resolveProjectSettings(
@@ -449,6 +455,31 @@ export function useNewThreadHandler() {
   );
 }
 
+/**
+ * The project the user last started a thread in, among `projects`. Null when
+ * nothing is remembered or that project is gone, so callers fall back to their
+ * own default.
+ */
+export function useRememberedNewThreadProject<
+  Project extends {
+    readonly environmentId: ScopedProjectRef["environmentId"];
+    readonly id: ScopedProjectRef["projectId"];
+  },
+>(projects: ReadonlyArray<Project>): Project | null {
+  const lastProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
+  return useMemo(
+    () =>
+      lastProjectKey === null
+        ? null
+        : (projects.find(
+            (project) =>
+              scopedProjectKey(scopeProjectRef(project.environmentId, project.id)) ===
+              lastProjectKey,
+          ) ?? null),
+    [lastProjectKey, projects],
+  );
+}
+
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const routeTarget = useParams({
@@ -479,12 +510,15 @@ export function useHandleNewThread() {
     });
   }, [projectOrder, projects]);
   const handleNewThread = useNewThreadHandler();
+  // The last project a thread was started in is a fresher signal of where the
+  // user works than their sidebar drag order.
+  const defaultProject = useRememberedNewThreadProject(projects) ?? orderedProjects[0];
 
   return {
     activeDraftThread,
     activeThread,
-    defaultProjectRef: orderedProjects[0]
-      ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
+    defaultProjectRef: defaultProject
+      ? scopeProjectRef(defaultProject.environmentId, defaultProject.id)
       : null,
     handleNewThread,
     routeDraftId,

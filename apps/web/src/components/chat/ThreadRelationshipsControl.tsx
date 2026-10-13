@@ -7,6 +7,7 @@ import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  currentWorkflowPhase,
   deriveWorkflowGroups,
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
@@ -515,6 +516,8 @@ export function ThreadRelationshipsPanel(props: {
                   status={agent.status}
                   result={agent.result}
                   progress={agent.progress}
+                  usage={agent.usage}
+                  workflowPhase={workflowGroup ? currentWorkflowPhase(workflowGroup) : null}
                   parentThread={currentThread ?? undefined}
                   childThread={node?.thread ?? undefined}
                   parentProject={currentProject}

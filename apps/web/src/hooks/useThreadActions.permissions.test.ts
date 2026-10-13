@@ -111,7 +111,10 @@ vi.mock("../state/entities", () => ({
       .map((thread) => ({ environmentId, threadId: thread.id })),
   readProject: () => ({ workspaceRoot: "/project" }),
 }));
-vi.mock("../components/Sidebar.logic", () => ({
+vi.mock("../components/Sidebar.logic", async (importOriginal) => ({
+  deleteSelectedThreadEntries: (
+    await importOriginal<typeof import("../components/Sidebar.logic")>()
+  ).deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete: () => null,
   pinOrderKeyBetween: () => "a",
 }));

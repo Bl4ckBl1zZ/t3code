@@ -195,7 +195,6 @@ import {
   filterSidebarV2VisibleThreads,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
-  deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
@@ -2461,6 +2460,7 @@ export default function Sidebar() {
     markThreadUnread,
     archiveThread,
     deleteThread,
+    deleteThreads,
   } = useThreadActions();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -4555,16 +4555,13 @@ export default function Sidebar() {
         )
       )
         return;
-      const { deletedThreadKeys, firstFailure } = await deleteSelectedThreadEntries({
-        entries: threadKeys.map((threadKey) => ({ threadKey })),
-        delete: async ({ threadKey }, deletedThreadKeys) => {
+      // Rows deleted elsewhere while the dialog was open are skipped.
+      const { deletedThreadKeys, firstFailure } = await deleteThreads(
+        threadKeys.flatMap((threadKey) => {
           const thread = threadByKeyRef.current.get(threadKey);
-          if (!thread) return null;
-          return deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
-            deletedThreadKeys,
-          });
-        },
-      });
+          return thread ? [scopeThreadRef(thread.environmentId, thread.id)] : [];
+        }),
+      );
       if (firstFailure !== null) {
         const firstError = squashAtomCommandFailure(firstFailure);
         toastManager.add(
@@ -4586,7 +4583,7 @@ export default function Sidebar() {
       attemptUnpin,
       clearSelection,
       confirmThreadDelete,
-      deleteThread,
+      deleteThreads,
       markThreadUnread,
       performSnooze,
       removeFromSelection,
