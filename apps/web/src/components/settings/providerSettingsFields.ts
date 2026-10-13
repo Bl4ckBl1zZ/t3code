@@ -1,10 +1,11 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type {
-  ProviderSettingsFormAnnotation,
-  ProviderSettingsFormControl,
-  ProviderSettingsFormOption,
-  ProviderSettingsFormSchemaAnnotation,
+import {
+  isSecretSetting,
+  type ProviderSettingsFormAnnotation,
+  type ProviderSettingsFormControl,
+  type ProviderSettingsFormOption,
+  type ProviderSettingsFormSchemaAnnotation,
 } from "@t3tools/contracts";
 import type { ProviderSettingsDefinition } from "./providerSettingsDefinitions.ts";
 
@@ -17,6 +18,8 @@ export interface ProviderSettingsFieldModel {
   readonly placeholder?: string | undefined;
   readonly clearWhenEmpty: "omit" | "persist";
   readonly defaultBooleanValue?: boolean | undefined;
+  /** The server keeps the value in its secret store and sends clients only a marker. */
+  readonly secret?: boolean | undefined;
 }
 
 function titleizeFieldKey(key: string): string {
@@ -114,6 +117,7 @@ export function deriveProviderSettingsFields(
               : {}),
           ...(formAnnotation.options ? { options: formAnnotation.options } : {}),
           clearWhenEmpty: formAnnotation.clearWhenEmpty ?? "omit",
+          ...(isSecretSetting(fieldSchema) ? { secret: true } : {}),
           ...(formAnnotation.control === "switch"
             ? { defaultBooleanValue: readFieldBooleanDefault(fieldSchema) }
             : {}),
