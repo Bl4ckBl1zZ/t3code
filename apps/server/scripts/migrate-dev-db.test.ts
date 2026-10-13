@@ -201,6 +201,49 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 
+  it.effect("copies a state.sqlite whose slice leaves a child row without its parent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-fk-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-fk-dest-" });
+      // An install that never started a V2 server, as a fork install has, has only state.sqlite.
+      const source = path.join(sourceDir, "userdata", "state.sqlite");
+      yield* fs.rename(yield* createFixtureSource(sourceDir), source);
+      // Like the fork's Hermes bindings: a kept thread's row points at a hidden thread's row.
+      yield* withDatabase(
+        source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`CREATE TABLE fixture_bindings (
+            binding_id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            parent_binding_id TEXT REFERENCES fixture_bindings (binding_id))`;
+          yield* sql`INSERT INTO fixture_bindings VALUES
+            ('binding-settled', 'settled-thread', NULL),
+            ('binding-stopped', 'stopped-thread', 'binding-settled')`;
+        }),
+      );
+
+      const result = yield* runMigrateDevDb(
+        { baseDir: destDir, projects: 5, threadsPerProject: 10 },
+        { sharedHome: sourceDir },
+      );
+
+      const bindings = yield* withDatabase(
+        result.databasePath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          return yield* sql<{ binding_id: string }>`SELECT binding_id FROM fixture_bindings`;
+        }),
+      );
+      assert.deepStrictEqual(
+        bindings.map((row) => row.binding_id),
+        ["binding-stopped"],
+      );
+    }),
+  );
+
   it.effect("fails loudly on a migration slot collision", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
