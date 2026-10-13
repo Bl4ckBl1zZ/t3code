@@ -2118,6 +2118,110 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("carries a Hermes fork settings file over and drops what this build lacks", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const legacyProject = ProjectId.make("project-legacy");
+      const hermesOnlyProject = ProjectId.make("project-hermes");
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        JSON.stringify({
+          enableLegacyTokenStreaming: false,
+          autoDeleteSettledAfterDays: 2,
+          enableHermes: true,
+          enableRemoteHermes: true,
+          hermesProactiveDefaultApplied: true,
+          providerModelPreferencesMigrated: true,
+          projectFileBackfillApplied: true,
+          projectPullRequestMergeMethodOverrides: { [legacyProject]: "squash" },
+          projectRemoveAgentCreditsOnMergeOverrides: { [legacyProject]: true },
+          projectProviderInstanceOverrides: {
+            [legacyProject]: { codex: { enabled: false }, hermes: { enabled: true } },
+            [hermesOnlyProject]: { hermes: { enabled: true } },
+          },
+          providers: { hermes: { enabled: true } },
+          providerInstances: {
+            hermes: {
+              driver: "hermes",
+              enabled: true,
+              config: { endpoint: "ws://127.0.0.1:9119" },
+            },
+            hermes_code: { driver: "hermesAcp", config: {} },
+            claudeAgent: { driver: "claudeAgent", enabled: true, config: {} },
+          },
+          providerModelPreferences: {
+            hermes: { hiddenModels: [], modelOrder: [] },
+            claudeAgent: { hiddenModels: ["claude-haiku"], modelOrder: [] },
+          },
+          favorites: [
+            { provider: "hermes", model: "hermes-default" },
+            { provider: "claudeAgent", model: "claude-opus" },
+          ],
+          defaultModelSelection: { instanceId: "hermes", model: "hermes-default" },
+          textGenerationModelSelection: { instanceId: "hermes_code", model: "hermes-default" },
+        }),
+      );
+
+      const settings = yield* serverSettings.getSettings;
+
+      // The fork's buffered default delivered each message whole.
+      assert.equal(settings.responseStreamingMode, "turn");
+      assert.deepEqual<ServerSettings["projectSettingsOverrides"]>(
+        settings.projectSettingsOverrides,
+        {
+          [legacyProject]: {
+            providerInstances: { [ProviderInstanceId.make("codex")]: { enabled: false } },
+            pullRequestMergeMethod: "squash",
+            removeAgentCreditsOnMerge: true,
+          },
+        },
+      );
+      assert.deepEqual(Object.keys(settings.providerInstances), ["claudeAgent"]);
+      assert.deepEqual(Object.keys(settings.providerModelPreferences ?? {}), ["claudeAgent"]);
+      assert.deepEqual(
+        settings.favorites?.map((favorite) => favorite.provider),
+        [ProviderInstanceId.make("claudeAgent")],
+      );
+      assert.isNull(settings.defaultModelSelection);
+      assert.notEqual(settings.textGenerationModelSelection.instanceId, "hermes_code");
+
+      // Rewritten once: the fork's keys are gone and the folded values persist.
+      const persisted = JSON.parse(yield* fileSystem.readFileString(serverConfig.settingsPath));
+      for (const key of [
+        "enableLegacyTokenStreaming",
+        "autoDeleteSettledAfterDays",
+        "enableHermes",
+        "enableRemoteHermes",
+        "hermesProactiveDefaultApplied",
+        "providerModelPreferencesMigrated",
+        "projectFileBackfillApplied",
+        "projectPullRequestMergeMethodOverrides",
+        "projectRemoveAgentCreditsOnMergeOverrides",
+        "projectProviderInstanceOverrides",
+        "providers",
+      ]) {
+        assert.notProperty(persisted, key);
+      }
+      assert.equal(persisted.responseStreamingMode, "turn");
+      assert.deepEqual(Object.keys(persisted.providerInstances), ["claudeAgent"]);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect("keeps a saved response streaming mode over the fork's token switch", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        JSON.stringify({ enableLegacyTokenStreaming: true, responseStreamingMode: "turn" }),
+      );
+      assert.equal((yield* serverSettings.getSettings).responseStreamingMode, "turn");
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("leaves an unreadable settings.json untouched instead of folding over it", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

@@ -14,6 +14,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ModelSelection,
   ProjectId,
+  ProjectProviderInstanceOverride,
   ProjectScript,
   ProjectSettingsOverrides,
   type ProviderInstanceConfig,
@@ -22,6 +23,7 @@ import {
   isProviderDriverKind,
   ProviderDriverKind,
   ProviderInstanceId,
+  PullRequestMergeMethod,
   resolveProviderInstanceEnabled,
   ResponseStreamingMode,
   ServerSettings,
@@ -329,6 +331,13 @@ const LegacyProviderSettingsJson = fromLenientJson(
     // Retired for `sourceControlHosts`; read only by `migrateLegacySourceControlSettings`.
     bitbucket: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
     github: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+    // Written by the Hermes fork; read only by `foldLegacyProjectSettings` and
+    // `migrateForkSettings`. Unknown so a malformed value cannot fail the file.
+    enableLegacyTokenStreaming: Schema.optionalKey(Schema.Unknown),
+    responseStreamingMode: Schema.optionalKey(Schema.Unknown),
+    projectProviderInstanceOverrides: Schema.optionalKey(Schema.Unknown),
+    projectPullRequestMergeMethodOverrides: Schema.optionalKey(Schema.Unknown),
+    projectRemoveAgentCreditsOnMergeOverrides: Schema.optionalKey(Schema.Unknown),
   }),
 );
 const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
@@ -540,6 +549,23 @@ const decodeModelSelectionJson = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.NullOr(ModelSelection)),
 );
 
+const decodeProjectProviderInstanceOverrides = Schema.decodeUnknownOption(
+  Schema.Record(ProviderInstanceId, ProjectProviderInstanceOverride),
+);
+const decodePullRequestMergeMethod = Schema.decodeUnknownOption(PullRequestMergeMethod);
+
+/** The settings keys only the Hermes fork wrote, as read raw from settings.json. */
+interface ForkSettings {
+  readonly enableLegacyTokenStreaming?: unknown;
+  readonly responseStreamingMode?: unknown;
+  readonly projectProviderInstanceOverrides?: unknown;
+  readonly projectPullRequestMergeMethodOverrides?: unknown;
+  readonly projectRemoveAgentCreditsOnMergeOverrides?: unknown;
+}
+
+const recordEntries = (value: unknown): Array<[string, unknown]> =>
+  value !== null && typeof value === "object" && !Array.isArray(value) ? Object.entries(value) : [];
+
 interface LegacyProjectSettingsRow {
   readonly projectId: string;
   readonly defaultModelSelection: string | null;
@@ -550,22 +576,30 @@ interface LegacyProjectSettingsRow {
 
 /**
  * One-time fold of the legacy per-project fields into `projectSettingsOverrides`:
- * the three `project*Overrides` maps and the settings columns on the project
- * aggregate. Keys already present in the generic record win. Marked with
+ * the three `project*Overrides` maps, the Hermes fork's provider, merge method
+ * and agent-credit maps, and the settings columns on the project aggregate.
+ * Keys already present in the generic record win. Marked with
  * `projectSettingsFolded` so a later reset in the UI survives restarts.
  */
 function foldLegacyProjectSettings(
   settings: ServerSettings,
   rows: ReadonlyArray<LegacyProjectSettingsRow>,
+  fork: ForkSettings = {},
 ): ServerSettings {
   if (settings.projectSettingsFolded) return settings;
+  const forkProviderInstances = recordEntries(fork.projectProviderInstanceOverrides);
+  const forkMergeMethods = recordEntries(fork.projectPullRequestMergeMethodOverrides);
+  const forkRemoveAgentCredits = recordEntries(fork.projectRemoveAgentCreditsOnMergeOverrides);
   // Nothing to fold yet (fresh install): leave the marker off so the file
   // stays sparse, and check again on the next load.
   if (
     rows.length === 0 &&
     Object.keys(settings.projectAgentBrowserAccessOverrides).length === 0 &&
     Object.keys(settings.projectAutoPullOverrides).length === 0 &&
-    Object.keys(settings.projectScriptOverrides).length === 0
+    Object.keys(settings.projectScriptOverrides).length === 0 &&
+    forkProviderInstances.length === 0 &&
+    forkMergeMethods.length === 0 &&
+    forkRemoveAgentCredits.length === 0
   ) {
     return settings;
   }
@@ -595,6 +629,22 @@ function foldLegacyProjectSettings(
     if (value === null) resetScripts.add(projectId);
     else set(projectId, "defaultProjectScripts", value);
   }
+  for (const [projectId, value] of forkProviderInstances) {
+    const overrides = decodeProjectProviderInstanceOverrides(value);
+    if (Option.isSome(overrides) && Object.keys(overrides.value).length > 0) {
+      set(projectId, "providerInstances", overrides.value);
+    }
+  }
+  for (const [projectId, value] of forkMergeMethods) {
+    set(
+      projectId,
+      "pullRequestMergeMethod",
+      Option.getOrUndefined(decodePullRequestMergeMethod(value)),
+    );
+  }
+  for (const [projectId, value] of forkRemoveAgentCredits) {
+    if (typeof value === "boolean") set(projectId, "removeAgentCreditsOnMerge", value);
+  }
   for (const row of rows) {
     const model = decodeModelSelectionJson(row.defaultModelSelection ?? "null");
     if (Option.isSome(model) && model.value !== null) {
@@ -618,6 +668,102 @@ function foldLegacyProjectSettings(
     projectSettingsFolded: true,
     ...deriveLegacyProjectOverrides({ projectSettingsOverrides }),
   };
+}
+
+// Hermes left with T3 Work and T3 Chat; this build has neither driver.
+const HERMES_DRIVERS: ReadonlySet<string> = new Set(["hermes", "hermesAcp"]);
+const PROJECT_MODEL_SELECTION_KEYS = [
+  "defaultModelSelection",
+  "textGenerationModelSelection",
+  "sourceControlWriterModelSelection",
+  "reviewGuideModelSelection",
+] as const;
+
+/**
+ * Carries a Hermes fork settings file into this build's shape. The fork's
+ * token-streaming switch becomes `responseStreamingMode`: off delivered each
+ * assistant message whole, which is `turn`, and token delivery is retired for
+ * `paragraph`. Hermes instances go, together with the model preferences,
+ * favorites and model selections that point at them. Returns `settings`
+ * itself when nothing applies, so other files are never rewritten.
+ */
+function migrateForkSettings(settings: ServerSettings, fork: ForkSettings): ServerSettings {
+  let changed = false;
+  let responseStreamingMode = settings.responseStreamingMode;
+  if (
+    fork.responseStreamingMode === undefined &&
+    typeof fork.enableLegacyTokenStreaming === "boolean"
+  ) {
+    const mode = fork.enableLegacyTokenStreaming ? "paragraph" : "turn";
+    if (mode !== responseStreamingMode) {
+      responseStreamingMode = mode;
+      changed = true;
+    }
+  }
+
+  // An unconfigured default slot keeps the driver's name as its instance id.
+  const hermesIds = new Set<string>(
+    [...HERMES_DRIVERS].filter((driver) => !Object.hasOwn(settings.providerInstances, driver)),
+  );
+  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+    if (HERMES_DRIVERS.has(instance.driver)) hermesIds.add(instanceId);
+  }
+  const withoutHermes = <R extends Readonly<Record<string, unknown>>>(record: R): R => {
+    const kept = Object.entries(record).filter(([instanceId]) => !hermesIds.has(instanceId));
+    if (kept.length === Object.keys(record).length) return record;
+    changed = true;
+    return Object.fromEntries(kept) as R;
+  };
+  const isHermes = (selection: ModelSelection | null | undefined) =>
+    selection != null && hermesIds.has(selection.instanceId);
+  const clearHermes = (selection: ModelSelection | null) => {
+    if (!isHermes(selection)) return selection;
+    changed = true;
+    return null;
+  };
+
+  const favorites = settings.favorites?.filter((favorite) => !hermesIds.has(favorite.provider));
+  if (favorites !== undefined && favorites.length !== settings.favorites?.length) changed = true;
+  let textGenerationModelSelection = settings.textGenerationModelSelection;
+  if (isHermes(textGenerationModelSelection)) {
+    textGenerationModelSelection = DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
+    changed = true;
+  }
+  const projectSettingsOverrides: Record<string, ProjectSettingsOverrides> = {};
+  for (const [projectId, overrides] of Object.entries(settings.projectSettingsOverrides)) {
+    const entry: Record<string, unknown> = { ...overrides };
+    // A project default on a removed instance inherits instead.
+    for (const key of PROJECT_MODEL_SELECTION_KEYS) {
+      if (isHermes(overrides[key])) {
+        delete entry[key];
+        changed = true;
+      }
+    }
+    if (overrides.providerInstances !== undefined) {
+      const providerInstances = withoutHermes(overrides.providerInstances);
+      if (Object.keys(providerInstances).length === 0) delete entry.providerInstances;
+      else entry.providerInstances = providerInstances;
+    }
+    if (Object.keys(entry).length > 0) {
+      projectSettingsOverrides[projectId] = entry as ProjectSettingsOverrides;
+    }
+  }
+  const next: ServerSettings = {
+    ...settings,
+    responseStreamingMode,
+    providerInstances: withoutHermes(settings.providerInstances),
+    providerModelPreferences:
+      settings.providerModelPreferences === null
+        ? null
+        : withoutHermes(settings.providerModelPreferences),
+    favorites: favorites ?? null,
+    defaultModelSelection: clearHermes(settings.defaultModelSelection),
+    textGenerationModelSelection,
+    sourceControlWriterModelSelection: clearHermes(settings.sourceControlWriterModelSelection),
+    reviewGuideModelSelection: clearHermes(settings.reviewGuideModelSelection),
+    projectSettingsOverrides,
+  };
+  return changed ? next : settings;
 }
 
 const make = Effect.gen(function* () {
@@ -720,6 +866,7 @@ const make = Effect.gen(function* () {
     let settings = DEFAULT_SERVER_SETTINGS;
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
+    let forkSettings: ForkSettings = {};
     // A file that failed to decode must stay on disk for the user to repair;
     // the fold below only writes when it started from the file's real contents.
     let settingsFileTrusted = true;
@@ -729,6 +876,7 @@ const make = Effect.gen(function* () {
       const decoded = decodeServerSettingsJsonExit(raw);
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
+        forkSettings = legacySettings.value;
         legacyProviders = legacySettings.value.providers;
         legacySourceControl = {
           bitbucket: legacySettings.value.bitbucket,
@@ -807,7 +955,10 @@ const make = Effect.gen(function* () {
         : migrateLegacyProviderSettings(settings, legacyProviders, providerHistory),
     );
     const folded = settingsFileTrusted
-      ? foldLegacyProjectSettings(loaded, legacyProjectRows)
+      ? migrateForkSettings(
+          foldLegacyProjectSettings(loaded, legacyProjectRows, forkSettings),
+          forkSettings,
+        )
       : loaded;
     // Copied, not moved: the old entry is removed only after the new file is written. A token
     // that cannot be read or copied leaves the retired keys in place, so the migration runs again
