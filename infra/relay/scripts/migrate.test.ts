@@ -10,6 +10,8 @@ import {
   RELAY_MIGRATIONS_FOLDER,
   RELAY_MIGRATIONS_SCHEMA,
   RELAY_MIGRATIONS_TABLE,
+  FORK_BACKUP_SCHEMA,
+  forkBackupSql,
   forkMigrationJournalReconcileSql,
 } from "./migrate.ts";
 
@@ -42,6 +44,7 @@ const migrateFolder = ({ db }: Database, migrationsFolder: string) =>
 
 // What scripts/migrate.ts runs against production.
 const migrateRelay = async (database: Database) => {
+  await database.client.exec(forkBackupSql());
   await database.client.exec(forkMigrationJournalReconcileSql());
   await migrateFolder(database, RELAY_MIGRATIONS_FOLDER);
 };
@@ -131,6 +134,46 @@ describe("relay migrations on a fork-migrated database", () => {
     expect(await journalNames(forked)).toEqual(
       [...localNames, "20260731110708_add_voice_input"].toSorted(),
     );
+  });
+
+  it("backs up a fork database once before upgrading it, and never a fresh one", async () => {
+    const forked = await forkMigratedDatabase();
+    await forked.client.exec(`
+      INSERT INTO relay_voice_input_settings (user_id, settings_json, created_at, updated_at)
+      VALUES ('user', '{"language":"de"}', 't0', 't0');
+    `);
+    const forkJournal = await journalNames(forked);
+
+    await migrateRelay(forked);
+    await forked.client.exec(`DELETE FROM relay_voice_input_settings`);
+    await migrateRelay(forked);
+
+    const backupTables = (
+      await rows(
+        forked,
+        `SELECT tablename FROM pg_tables WHERE schemaname = '${FORK_BACKUP_SCHEMA}' ORDER BY 1`,
+      )
+    ).map((row) => row.tablename);
+    expect(backupTables).toContain(FORK_ONLY_TABLE);
+    expect(backupTables).toContain(RELAY_MIGRATIONS_TABLE);
+    expect(
+      await rows(forked, `SELECT user_id FROM "${FORK_BACKUP_SCHEMA}".relay_voice_input_settings`),
+    ).toEqual([{ user_id: "user" }]);
+    expect(
+      (
+        await rows(
+          forked,
+          `SELECT name FROM "${FORK_BACKUP_SCHEMA}"."${RELAY_MIGRATIONS_TABLE}" ORDER BY name`,
+        )
+      ).map((row) => row.name),
+    ).toEqual(forkJournal);
+
+    const fresh = await openDatabase();
+    await migrateRelay(fresh);
+    await migrateRelay(fresh);
+    expect(
+      await rows(fresh, `SELECT 1 FROM pg_namespace WHERE nspname = '${FORK_BACKUP_SCHEMA}'`),
+    ).toEqual([]);
   });
 
   it("keeps existing rows and accepts thread ids longer than 191 characters", async () => {

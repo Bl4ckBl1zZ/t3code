@@ -174,7 +174,6 @@ jobs:
           done
 
       - name: Install cloudflared
-        if: ${{ !inputs.dry_run }}
         shell: bash
         run: |
           set -euo pipefail
@@ -186,8 +185,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes cloudflared
 
+      # A dry run only lists applied and pending migrations. The first real run on
+      # the fork's database copies every table into the relay_backup_fork schema first.
       - name: Migrate production relay database
-        if: ${{ !inputs.dry_run }}
         shell: bash
         env:
           DATABASE_MIGRATION_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
@@ -217,7 +217,7 @@ jobs:
             sleep 1
           done
 
-          vp run --filter t3code-relay migrate
+          node infra/relay/scripts/migrate.ts ${{ inputs.dry_run && '--check' || '' }}
 
       - name: Deploy production relay stage
         run: vp run --filter t3code-relay deploy --stage prod --yes --no-input ${{ inputs.force && '--force' || '' }} ${{ inputs.dry_run && '--dry-run' || '' }}

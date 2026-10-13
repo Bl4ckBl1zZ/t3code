@@ -528,7 +528,8 @@ jobs:
     needs: [version, build_macos, build_windows]
     # A failed Windows leg must not withhold a working macOS release, so gate
     # on macOS only and publish whatever Windows artifacts exist.
-    if: ${{ !cancelled() && needs.build_macos.result == 'success' }}
+    # Builds from any other branch only validate; releases come from main.
+    if: ${{ !cancelled() && needs.build_macos.result == 'success' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
