@@ -3,7 +3,11 @@ import * as NodeUtil from "node:util";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
-import { type OrchestrationV2DomainEvent, ScheduledTaskError } from "@t3tools/contracts";
+import {
+  type OrchestrationV2DomainEvent,
+  ScheduledTaskError,
+  ScheduledTaskId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -418,6 +422,70 @@ it.effect("deletes the tasks bound to a thread when the thread is deleted", () =
         Stream.runHead,
       );
       assert.deepEqual(yield* taskIds, ["bound-live", "unbound"]);
+    }).pipe(Effect.scoped);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("records a run as failed when its workspace preparation fails", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-09-09T12:00:00.000Z";
+    for (const id of ["fails-after-launch", "fails-during-launch"]) {
+      yield* insertRow(sql, { id, next: null, enabled: 1, status: "never" }, now);
+    }
+    yield* TestClock.setTime(Date.parse(now));
+    // Preparation runs after `launch` returns; it can also fail before.
+    const reportLater = yield* Ref.make<ReadonlyArray<Effect.Effect<void>>>([]);
+
+    yield* Effect.gen(function* () {
+      const context = yield* Layer.build(
+        Layer.provideMerge(
+          ScheduledTaskService.layer,
+          Layer.mergeAll(
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+              launch: (input) => {
+                const report = input.onPreparationFailure?.("Workspace preparation failed.");
+                if (report === undefined) return Effect.die("no preparation callback");
+                return (
+                  input.initialMessage?.scheduledTaskId === "fails-during-launch"
+                    ? report
+                    : Ref.update(reportLater, (reports) => [...reports, report])
+                ).pipe(Effect.as({} as ThreadLaunchService.ThreadLaunchResult));
+              },
+            }),
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              streamDomainEvents: Stream.never,
+            }),
+            Layer.mock(SecretRequests.SecretRequests)({}),
+            NodeCrypto.layer,
+            Scheduler.layer,
+          ),
+        ),
+      );
+      const service = Context.get(context, ScheduledTaskService.ScheduledTaskService);
+      const lastRun = (id: string) =>
+        service.list().pipe(
+          Effect.map(({ tasks }) => {
+            const task = tasks.find((candidate) => candidate.id === id);
+            return [task?.lastRunStatus, task?.lastRunError, task?.runCount];
+          }),
+        );
+
+      yield* service.runNow({ id: ScheduledTaskId.make("fails-after-launch") });
+      assert.deepEqual(yield* lastRun("fails-after-launch"), ["succeeded", null, 1]);
+      yield* Effect.all(yield* Ref.get(reportLater), { discard: true });
+      assert.deepEqual(yield* lastRun("fails-after-launch"), [
+        "failed",
+        "Workspace preparation failed.",
+        1,
+      ]);
+
+      yield* service.runNow({ id: ScheduledTaskId.make("fails-during-launch") });
+      assert.deepEqual(yield* lastRun("fails-during-launch"), [
+        "failed",
+        "Workspace preparation failed.",
+        1,
+      ]);
     }).pipe(Effect.scoped);
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

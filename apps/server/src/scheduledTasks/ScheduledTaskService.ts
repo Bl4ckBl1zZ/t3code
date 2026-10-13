@@ -663,8 +663,12 @@ export const layer = Layer.effect(
         UPDATE scheduled_tasks
         SET updated_at = ${input.completedAtIso},
             next_run_at = ${input.nextRunAtIso},
-            last_run_status = ${input.status},
-            last_run_error = ${input.error},
+            -- A preparation failure can be reported before the launch returns.
+            last_run_status = CASE
+              WHEN ${input.status} = 'succeeded' AND last_run_error IS NOT NULL THEN 'failed'
+              ELSE ${input.status}
+            END,
+            last_run_error = COALESCE(${input.error}, last_run_error),
             run_count = run_count + 1
         WHERE task_id = ${input.id}
           AND last_run_status = 'running'
@@ -672,6 +676,39 @@ export const layer = Layer.effect(
       `.pipe(
         Effect.mapError((cause) =>
           taskError("Could not record schedule task run.", { taskId: input.id, cause }),
+        ),
+      );
+
+    // Workspace preparation continues after `launch` returns, so a launched
+    // run can still fail once this fire was recorded. Guarded on the run's
+    // start time so a later fire is never touched; a failure reported while
+    // the run is still recording is kept by markCompleted.
+    const markPreparationFailed = (input: {
+      readonly id: ScheduledTaskId;
+      readonly startedAtIso: string;
+      readonly error: string;
+    }) =>
+      Effect.gen(function* () {
+        const now = yield* localNow;
+        yield* sql`
+          UPDATE scheduled_tasks
+          SET updated_at = ${iso(now)},
+              last_run_status = CASE
+                WHEN last_run_status = 'succeeded' THEN 'failed'
+                ELSE last_run_status
+              END,
+              last_run_error = ${input.error}
+          WHERE task_id = ${input.id}
+            AND last_run_at = ${input.startedAtIso}
+            AND last_run_status IN ('running', 'succeeded')
+        `;
+        yield* notifyChanged;
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not record schedule task preparation failure", {
+            taskId: input.id,
+            cause,
+          }),
         ),
       );
 
@@ -812,6 +849,8 @@ export const layer = Layer.effect(
                   },
                   createdBy: active.createdBy,
                   creationSource: active.creationSource,
+                  onPreparationFailure: (error) =>
+                    markPreparationFailed({ id: active.id, startedAtIso, error }),
                 }),
               )
             : yield* Effect.exit(
