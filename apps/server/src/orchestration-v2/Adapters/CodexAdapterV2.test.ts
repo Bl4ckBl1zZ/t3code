@@ -773,6 +773,73 @@ describe("CodexAdapterV2 process spawning", () => {
 });
 
 describe("CodexAdapterV2 dynamic tool projection", () => {
+  it("keeps a failed Sky MCP call in Computer Use when its error has no metadata", () => {
+    const projection = projectCodexDynamicToolItem({
+      type: "mcpToolCall",
+      id: "failed-sky-js",
+      server: "node_repl",
+      tool: "js",
+      status: "failed",
+      arguments: {
+        title: "Restrict the breakpoint to Git actions",
+        code: "await sky.type_text({app:'T3 Code (Nightly)',text:'debug(ga.run)'});",
+      },
+      result: { content: [{ type: "text", text: "Illegal Unicode escape sequence" }] },
+    });
+    assert.equal(projection.title, "Restrict the breakpoint to Git actions");
+    assert.equal(projection.toolSurface, "computer");
+    assert.deepEqual(projection.toolSource, {
+      key: "computer-use",
+      name: "Computer Use",
+      kind: "computer",
+    });
+  });
+
+  it.each(["inProgress", "completed", "failed"] as const)(
+    "preserves a bare js action's title and computer surface when %s without result metadata",
+    (status) => {
+      const projection = projectCodexDynamicToolItem({
+        type: "dynamicToolCall",
+        id: "bare-js",
+        tool: "js",
+        status,
+        arguments: { code: "await sky.get_app_state(app);", title: "Read the desktop window" },
+        contentItems: [],
+        success: status !== "failed",
+      });
+      assert.equal(projection.title, "Read the desktop window");
+      assert.equal(projection.toolSurface, "computer");
+    },
+  );
+
+  it.each(["cua_repl", "node_repl"])(
+    "uses the %s call title and falls back to a readable action name",
+    (server) => {
+      const call = {
+        type: "mcpToolCall" as const,
+        id: "inspect",
+        server,
+        tool: "js",
+        status: "completed" as const,
+        arguments: {
+          code: "await game.getAXStateAndScreenshot();",
+          title: "Inspect Saga music screen",
+        },
+        result: { content: [] },
+      };
+      assert.equal(projectCodexDynamicToolItem(call).title, "Inspect Saga music screen");
+      assert.equal(
+        projectCodexDynamicToolItem({ ...call, arguments: { title: "  " } }).title,
+        server === "cua_repl" ? "Computer use" : "Run JavaScript",
+      );
+      assert.equal(
+        projectCodexDynamicToolItem({ ...call, server: "weather", arguments: { title: "  " } })
+          .title,
+        "js",
+      );
+    },
+  );
+
   it.each(["inProgress", "completed", "failed"] as const)(
     "presents ordinary MCP calls when %s",
     (status) => {

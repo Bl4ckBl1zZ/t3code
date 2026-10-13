@@ -2703,6 +2703,36 @@ describe("V2 historical tool summaries", () => {
       ]),
     ).toBe("Used Chrome integration and linked 1 pull request");
   });
+  it.each([
+    [["Foo", "Foo"], "Used Foo integration and ran 1 command"],
+    [["Foo", "Bar", "Foo"], "Used Foo and Bar integrations and ran 1 command"],
+  ] as const)(
+    "uses the displayed source names for integration plurality: %j",
+    (names, expected) => {
+      expect(
+        resolveHistoricalWorkSummary([
+          ...names.map((name, index) =>
+            entry({ toolSource: { key: `integration-${index}`, name, kind: "integration" } }),
+          ),
+          entry({ itemType: "command_execution", command: "pnpm test" }),
+        ]),
+      ).toBe(expected);
+    },
+  );
+  it("names Computer Use once when native-app and fallback sources share its label", () => {
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({
+          toolSource: {
+            key: "native-app:com.t3tools.t3code",
+            name: "Computer Use",
+            kind: "computer",
+          },
+        }),
+        entry({ toolSource: { key: "computer-use", name: "Computer Use", kind: "computer" } }),
+      ]),
+    ).toBe("Used Computer Use");
+  });
   it("counts code and web searches separately", () => {
     expect(
       resolveHistoricalWorkSummary([

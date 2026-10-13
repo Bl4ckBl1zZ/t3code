@@ -11,7 +11,7 @@ import { useAssetUrlState } from "../../assets/assetUrls";
 import type { ToolActivityIcon } from "@t3tools/contracts";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/userMessage";
-import { MonitorIcon } from "lucide-react";
+import { Code2Icon, MonitorIcon } from "lucide-react";
 import { GitPullRequestIcon } from "lucide-react";
 import {
   WorkGroupHistoryState,
@@ -63,6 +63,7 @@ import { liveThoughtLine } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { parseDelegatedTaskWakeMessage } from "@t3tools/shared/delegatedTaskWake";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
+import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
 
 import {
   createContext,
@@ -3513,6 +3514,7 @@ function formatWorkingTimerNow(startIso: string): string {
 type WorkEntryIconName =
   | "pull-request"
   | "computer"
+  | "code"
   | "hammer"
   | "bot"
   | "check"
@@ -3530,6 +3532,8 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
   switch (name) {
     case "computer":
       return <MonitorIcon className={className} aria-hidden />;
+    case "code":
+      return <Code2Icon className={className} aria-hidden />;
     case "pull-request":
       return <GitPullRequestIcon className={className} aria-hidden />;
     case "hammer":
@@ -3729,6 +3733,7 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (presentation?.logo === "pull-request") return "pull-request";
   if (presentation?.logo === "browser" || workEntry.toolSurface === "browser") return "globe";
   if (workEntry.toolSurface === "computer") return "computer";
+  if (item?.type === "dynamic_tool" && isJavaScriptReplTool(item.toolName)) return "code";
   if (workEntry.itemType === "user_input_request") {
     return "message-circle";
   }

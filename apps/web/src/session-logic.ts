@@ -21,6 +21,8 @@ import { resolveOrchestrationV2ItemAttempt } from "@t3tools/shared/orchestration
 import {
   classifyToolActivity,
   collectToolFilePaths,
+  COMPUTER_USE_TOOL_SOURCE,
+  dynamicToolSurface,
   dynamicToolTitle,
   formatReadToolLabel,
   formatSearchToolLabel,
@@ -559,8 +561,20 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         data: { toolName: item.toolName ?? undefined, input: item.input },
       });
       const [readPath] = collectToolFilePaths({ input: item.input });
-      // Items stored before the server titled skill calls carry no title.
-      const toolTitle = title ?? dynamicToolTitle(item.toolName, item.input) ?? null;
+      // Items stored before the server titled skill and REPL calls carry no
+      // title, or the raw REPL tool name.
+      const toolTitle = dynamicToolTitle(item.toolName, item.input, title) ?? title ?? null;
+      // A computer-use REPL call stored before its result metadata existed
+      // (failed or interrupted) still presents as Computer Use.
+      const toolSurface =
+        item.toolSurface ??
+        (item.toolSource?.kind === "computer" || item.toolSource?.kind === "browser"
+          ? item.toolSource.kind
+          : dynamicToolSurface(item.toolName, item.input));
+      const toolSource =
+        toolSurface === "computer" && item.toolSource?.kind !== "computer"
+          ? COMPUTER_USE_TOOL_SOURCE
+          : item.toolSource;
       return {
         ...common,
         label:
@@ -573,9 +587,9 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
               ? (formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call")
               : (item.toolName ?? "Tool call")),
         toolTitle: toolTitle ?? item.toolName ?? "Tool",
-        ...(item.toolSurface ? { toolSurface: item.toolSurface } : {}),
+        ...(toolSurface ? { toolSurface } : {}),
         ...(item.toolIcon ? { toolIcon: item.toolIcon } : {}),
-        ...(item.toolSource ? { toolSource: item.toolSource } : {}),
+        ...(toolSource ? { toolSource } : {}),
         toolData: { input: item.input, output: item.output },
       };
     }

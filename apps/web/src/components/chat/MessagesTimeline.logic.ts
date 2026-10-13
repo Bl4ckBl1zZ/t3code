@@ -223,13 +223,14 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
   });
   if (sources.size > 0) {
     const values = [...sources.values()];
-    const names = values.map((source) => source.name);
+    // Distinct sources can share a label (a native app and the Computer Use fallback).
+    const names = [...new Set(values.map((source) => source.name))];
     const joined =
       names.length < 3
         ? names.join(" and ")
         : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
     const suffix = values.every((source) => source.kind === "integration")
-      ? values.length === 1
+      ? names.length === 1
         ? " integration"
         : " integrations"
       : "";
