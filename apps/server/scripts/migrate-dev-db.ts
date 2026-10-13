@@ -150,7 +150,7 @@ export class MigrateDevDbPhaseError extends Schema.TaggedError<MigrateDevDbPhase
 export interface RunMigrateDevDbInput {
   /** Isolated .t3 directory. Defaults to `<worktree>/.t3` of the cwd. */
   readonly baseDir?: string | undefined;
-  /** Source database. Defaults to `~/.t3/userdata/statev2.sqlite`. */
+  /** Source database. Defaults to `~/.t3/userdata/statev2.sqlite`, else its `state.sqlite`. */
   readonly source?: string | undefined;
   readonly projects: number;
   readonly threadsPerProject: number;
@@ -171,6 +171,19 @@ const removeDatabaseFiles = Effect.fn("removeDatabaseFiles")(function* (database
   for (const suffix of ["", "-wal", "-shm"]) {
     yield* fs.remove(`${databasePath}${suffix}`).pipe(Effect.orElseSucceed(() => undefined));
   }
+});
+
+/**
+ * The real V2 database, or, before the first V2 server start has copied it, the
+ * `state.sqlite` that start would copy (a fork install, for one). Migrations
+ * upgrade either.
+ */
+const defaultSourcePath = Effect.fn("defaultDevDbSourcePath")(function* (sharedHome: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const v2Path = path.join(sharedHome, "userdata", "statev2.sqlite");
+  const v1Path = path.join(sharedHome, "userdata", "state.sqlite");
+  return (yield* fs.exists(v2Path)) || !(yield* fs.exists(v1Path)) ? v2Path : v1Path;
 });
 
 /** The slice of server-runtime.json this script cares about. */
@@ -288,6 +301,10 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
   const threadIdNullable = new Map(threadColumns.map((row) => [row.name, row.notnull === 0]));
   const tables = schema.filter((entry) => entry.type === "table");
   const filtered = tables.some((table) => table.name === "orchestration_v2_projection_threads");
+  // A row copy, not an edit: tables arrive in schema order, and the slice can leave a child of a
+  // hidden thread's row behind (fork Hermes bindings point at their parents). The migrate phase
+  // turns enforcement back on, as server boot does.
+  yield* sql.unsafe("PRAGMA foreign_keys = OFF").unprepared;
 
   yield* sql.withTransaction(
     Effect.gen(function* () {
@@ -480,9 +497,7 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const path = yield* Path.Path;
 
   const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
-  const sourcePath = path.resolve(
-    input.source ?? path.join(sharedHome, "userdata", "statev2.sqlite"),
-  );
+  const sourcePath = path.resolve(input.source ?? (yield* defaultSourcePath(sharedHome)));
 
   const baseDir =
     input.baseDir !== undefined
@@ -639,7 +654,9 @@ export const migrateDevDbCommand = Command.make(
     ),
     source: Flag.String("source").pipe(
       Flag.optional,
-      Flag.withDescription("Source database. Defaults to ~/.t3/userdata/statev2.sqlite."),
+      Flag.withDescription(
+        "Source database. Defaults to ~/.t3/userdata/statev2.sqlite, or state.sqlite before the first V2 start.",
+      ),
     ),
   },
   ({ projects, threadsPerProject, baseDir, source }) =>
