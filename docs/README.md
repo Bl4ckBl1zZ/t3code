@@ -4,6 +4,7 @@
 
 - [Install T3 Code](./user/install.md)
 - [Messages and context](./user/composer.md)
+- [Voice input](./user/voice-input.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
 - [Terminal history](./user/terminal.md)
@@ -62,4 +63,5 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
 - [Relay observability](./operations/relay-observability.md)
+- [Relay voice input](./operations/relay-voice-input.md)
 - [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)
