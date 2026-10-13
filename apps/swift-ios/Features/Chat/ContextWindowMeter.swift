@@ -49,7 +49,8 @@ enum ContextWindowFormat {
         switch value {
         case ..<1_000: return "\(max(0, value))"
         case ..<10_000: return trimmed(number / 1_000, "k")
-        case ..<1_000_000: return "\(Int((number / 1_000).rounded()))k"
+        // Anything from 999,500 rounds to 1000k, so it belongs to the next unit.
+        case ..<999_500: return "\(Int((number / 1_000).rounded()))k"
         default: return trimmed(number / 1_000_000, "m")
         }
     }

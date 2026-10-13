@@ -216,6 +216,12 @@ final class ComposerRequestsParityTests: XCTestCase {
         XCTAssertEqual(ContextWindowFormat.tokens(4_000), "4k")
         XCTAssertEqual(ContextWindowFormat.tokens(84_400), "84k")
         XCTAssertEqual(ContextWindowFormat.tokens(1_250_000), "1.3m")
+        // 999,500 and up rounds to 1000k, so it reads in the next unit.
+        XCTAssertEqual(ContextWindowFormat.tokens(999_499), "999k")
+        XCTAssertEqual(ContextWindowFormat.tokens(999_500), "1m")
+        XCTAssertEqual(ContextWindowFormat.tokens(999_999), "1m")
+        XCTAssertEqual(ContextWindowFormat.tokens(1_000_000), "1m")
+        XCTAssertEqual(ContextWindowFormat.tokens(1_100_000), "1.1m")
         XCTAssertEqual(ContextWindowFormat.percentage(4.24), "4.2%")
         XCTAssertEqual(ContextWindowFormat.percentage(4.0), "4%")
         XCTAssertEqual(ContextWindowFormat.percentage(42.4), "42%")
