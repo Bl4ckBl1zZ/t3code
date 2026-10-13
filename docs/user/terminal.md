@@ -12,7 +12,9 @@ without leaving terminal input. Ctrl+Shift+Home and Ctrl+Shift+End jump to the
 start and latest output; use Cmd instead of Ctrl on macOS. Full-screen terminal
 programs keep these navigation keys.
 
-To copy all retained output, choose Select all in the terminal's context menu,
-then copy. Cmd+A on macOS and Ctrl+Shift+A elsewhere select the same output.
-Ctrl+A still moves to the beginning of shell input on Windows and Linux.
+To copy all retained output, press Cmd+C on macOS, or Ctrl+Shift+C elsewhere,
+with nothing selected. You can also choose Select all in the terminal's context
+menu, then copy. Cmd+A on macOS and Ctrl+Shift+A elsewhere select the same
+output. Ctrl+A still moves to the beginning of shell input, and Ctrl+C without a
+selection still interrupts the running program, on Windows and Linux.
 Jump to latest in the context menu returns to the current output.
