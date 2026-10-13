@@ -72,6 +72,7 @@ import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
+import * as ProjectTeardownScriptRunner from "./project/ProjectTeardownScriptRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -362,7 +363,15 @@ const layerGit = Layer.empty.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
 );
 
+// Every worktree removal (GitWorkflowService and storage cleanup) runs the
+// project's teardown script first.
+const layerProjectTeardownScriptRunner = ProjectTeardownScriptRunner.layer.pipe(
+  Layer.provide(RuntimeLayer.layerProjectService),
+  Layer.provide(ProcessRunner.layer),
+);
+
 const layerGitWorkflow = GitWorkflowService.layer.pipe(
+  Layer.provideMerge(layerProjectTeardownScriptRunner),
   Layer.provideMerge(layerVcsDriverRegistry),
   Layer.provideMerge(layerGit),
 );

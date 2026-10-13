@@ -138,6 +138,16 @@ such as another drive, set **Settings → Storage → Worktree location** to an 
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
 are, and cleanup covers both the default folder and the custom one.
 
+## Worktree teardown
+
+To stop containers, free ports or release other resources a worktree started, turn on **Run in
+the thread's worktree before it is deleted** for one of the project's actions, or set
+`"runOnWorktreeDelete": true` on a `t3.json` script. It runs in the worktree each time T3 Code
+deletes one: when you delete a thread or several threads with their worktree, when storage
+cleanup removes it, and when an agent's worktree handoff or a thread launch is rolled back. It
+runs without a terminal and is stopped after two minutes. A failing script never keeps the
+worktree: deleting a thread shows a warning, and the storage cleanup results note the failure.
+
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected

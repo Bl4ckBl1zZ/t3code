@@ -181,6 +181,23 @@ export const VcsRemoveWorktreeInput = Schema.Struct({
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
 
+/** A project teardown script that did not finish cleanly before its worktree was removed. */
+export const WorktreeTeardownFailure = Schema.Struct({
+  scriptName: TrimmedNonEmptyStringSchema,
+  /** Null when the script was stopped by the timeout or never started. */
+  exitCode: Schema.NullOr(Schema.Int),
+  timedOut: Schema.Boolean,
+  /** Last lines of the script's output, for the failure notice. */
+  detail: Schema.String,
+});
+export type WorktreeTeardownFailure = typeof WorktreeTeardownFailure.Type;
+
+export const VcsRemoveWorktreeResult = Schema.Struct({
+  /** Set when the project's teardown script failed; the worktree was removed anyway. */
+  teardownFailure: Schema.optional(WorktreeTeardownFailure),
+});
+export type VcsRemoveWorktreeResult = typeof VcsRemoveWorktreeResult.Type;
+
 export const VcsCreateRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,

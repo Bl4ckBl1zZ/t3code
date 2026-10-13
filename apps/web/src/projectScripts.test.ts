@@ -28,6 +28,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeCreate: false,
         waitForSetup: false,
         runOnSettle: false,
+        runOnWorktreeDelete: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
       }),
@@ -51,6 +52,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeCreate: false,
         waitForSetup: false,
         runOnSettle: false,
+        runOnWorktreeDelete: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -71,6 +73,7 @@ describe("projectScripts helpers", () => {
       previewUrl: null,
       autoOpenPreview: false,
       runOnSettle: false,
+      runOnWorktreeDelete: false,
     } as const;
     expect(
       buildProjectScript("setup", { ...input, runOnWorktreeCreate: true, waitForSetup: true }),
@@ -170,6 +173,7 @@ describe("projectScripts helpers", () => {
       waitForSetup: false,
       previewUrl: null,
       autoOpenPreview: false,
+      runOnWorktreeDelete: false,
     } as const;
     const holder = {
       id: "holder",
@@ -189,6 +193,22 @@ describe("projectScripts helpers", () => {
     expect(
       releaseClaimedRoles(holder, { ...input, runOnWorktreeCreate: false, runOnSettle: false }),
     ).toBe(holder);
+    expect(
+      releaseClaimedRoles(
+        { ...holder, runOnWorktreeDelete: true },
+        { ...input, runOnWorktreeCreate: false, runOnSettle: false, runOnWorktreeDelete: true },
+      ),
+    ).toMatchObject({ runOnWorktreeCreate: true, runOnSettle: true, runOnWorktreeDelete: false });
+  });
+
+  it("never picks a teardown-only script as the primary action", () => {
+    const base = { command: "true", icon: "play" as const, runOnWorktreeCreate: false };
+    expect(
+      primaryProjectScript([
+        { ...base, id: "down", name: "Down", runOnWorktreeDelete: true },
+        { ...base, id: "dev", name: "Dev" },
+      ])?.id,
+    ).toBe("dev");
   });
 
   it("builds default runtime env for scripts", () => {

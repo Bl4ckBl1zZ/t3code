@@ -16,6 +16,7 @@ import {
   type WorktreeKeepWhen,
 } from "@t3tools/contracts";
 import * as ServerConfig from "./config.ts";
+import * as ProjectTeardownScriptRunner from "./project/ProjectTeardownScriptRunner.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -251,7 +252,19 @@ const cleanupFixture = Effect.gen(function* () {
   let editBeforeRemoval = false;
   let openSessionCwd: string | null = null;
   let fullStatusCalls = 0;
+  let teardownFailure: import("@t3tools/contracts").WorktreeTeardownFailure | null = null;
+  const teardownRuns: Array<{ worktreePath: string; existed: boolean }> = [];
   const context = yield* Layer.build(StorageCleanup.layer).pipe(
+    Effect.provideService(ProjectTeardownScriptRunner.ProjectTeardownScriptRunner, {
+      runBeforeRemoval: (input) =>
+        fs.exists(input.worktreePath).pipe(
+          Effect.orDie,
+          Effect.map((existed) => {
+            teardownRuns.push({ worktreePath: input.worktreePath, existed });
+            return teardownFailure;
+          }),
+        ),
+    }),
     Effect.provideService(GitVcsDriver.GitVcsDriver, {
       ...git,
       execute: (input) =>
@@ -343,6 +356,10 @@ const cleanupFixture = Effect.gen(function* () {
       openSessionCwd = cwd;
     },
     fullStatusCalls: () => fullStatusCalls,
+    teardownRuns,
+    failTeardown: (failure: import("@t3tools/contracts").WorktreeTeardownFailure) => {
+      teardownFailure = failure;
+    },
   };
 });
 const cleanupTestLayer = GitVcsDriver.layer.pipe(
@@ -362,6 +379,29 @@ const runCleanupTest = <A, E>(
 ) => effect.pipe(Effect.provide(cleanupTestLayer), Effect.scoped);
 
 describe("storage cleanup reports and local file policies", () => {
+  it.live(
+    "runs the teardown script first and reports its failure without keeping the worktree",
+    () =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const { service, fs, worktree, teardownRuns, failTeardown } = yield* cleanupFixture;
+          failTeardown({
+            scriptName: "Stop services",
+            exitCode: 3,
+            timedOut: false,
+            detail: "boom",
+          });
+          const report = yield* service.runNow;
+          expect(teardownRuns).toHaveLength(1);
+          expect(teardownRuns[0]?.existed).toBe(true);
+          expect(report.entries[0]).toMatchObject({
+            outcome: "removed",
+            reason: expect.stringContaining('teardown script "Stop services" failed (exit 3)'),
+          });
+          expect(yield* fs.exists(worktree)).toBe(false);
+        }),
+      ),
+  );
   it.live("measures nested regular files without following symlinks", () =>
     runCleanupTest(
       Effect.gen(function* () {

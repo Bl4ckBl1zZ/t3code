@@ -600,6 +600,21 @@ export function useThreadActions() {
               }),
             ),
           );
+      const teardownFailure =
+        removeResult._tag === "Success" ? removeResult.value?.teardownFailure : undefined;
+      if (teardownFailure) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: `Teardown script "${teardownFailure.scriptName}" ${
+              teardownFailure.timedOut ? "timed out" : "failed"
+            }`,
+            description: `The worktree was deleted anyway.${
+              teardownFailure.detail ? ` ${teardownFailure.detail}` : ""
+            }`,
+          }),
+        );
+      }
       const refreshResult =
         removeResult._tag === "Success"
           ? await refreshVcsStatus({
