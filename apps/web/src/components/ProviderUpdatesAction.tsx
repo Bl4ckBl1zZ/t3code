@@ -15,23 +15,21 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 /**
- * Updates every outdated provider on every connected machine at once, then
- * reports the results in one toast. Each server queues updates that share an
- * installer, so sending them all together is safe. The server still checks
- * permissions: a session that cannot operate a machine gets a failure line for
- * it. `includeDriver` limits it to the providers the hosting panel lists.
- * Renders nothing when no machine has a one-click update.
+ * Every outdated provider with a one-click update on every connected machine,
+ * plus a function that updates them all and reports the results in one toast.
+ * Each server queues updates that share an installer, so sending them all
+ * together is safe. The server still checks permissions: a session that
+ * cannot operate a machine gets a failure line for it. `includeDriver` limits
+ * it to the providers a settings panel lists. The returned promise settles
+ * when every update has finished.
  */
-export function ProviderUpdatesAction(props: {
-  readonly includeDriver?: ((driver: ProviderDriverKind) => boolean) | undefined;
-}) {
-  const { includeDriver } = props;
+export function useProviderUpdates(
+  includeDriver?: ((driver: ProviderDriverKind) => boolean) | undefined,
+) {
   const { environments } = useEnvironments();
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
     reportFailure: false,
   });
-  const pending = useRef(false);
-  const [isPending, setIsPending] = useState(false);
   const machines = useMemo(
     () =>
       environments.flatMap((environment) => {
@@ -50,6 +48,45 @@ export function ProviderUpdatesAction(props: {
       }),
     [environments, includeDriver],
   );
+
+  const updateAll = async () => {
+    const runs = await Promise.all(
+      machines.flatMap(({ environmentId, label, candidates }) =>
+        candidates.map(
+          async (candidate): Promise<ProviderUpdateRun> => ({
+            machineLabel: label,
+            driver: candidate.driver,
+            instanceId: candidate.instanceId,
+            result: await updateProvider({
+              environmentId,
+              input: { provider: candidate.driver, instanceId: candidate.instanceId },
+            }),
+          }),
+        ),
+      ),
+    );
+    const view = getProviderUpdateRunToastView(runs);
+    if (view) {
+      toastManager.add(
+        stackedThreadToast({
+          ...view,
+          description: <span className="whitespace-pre-line">{view.description}</span>,
+        }),
+      );
+    }
+  };
+
+  return { machines, updateAll };
+}
+
+/** Provider settings button for {@link useProviderUpdates}. Renders nothing
+    when no machine has a one-click update. */
+export function ProviderUpdatesAction(props: {
+  readonly includeDriver?: ((driver: ProviderDriverKind) => boolean) | undefined;
+}) {
+  const { machines, updateAll } = useProviderUpdates(props.includeDriver);
+  const pending = useRef(false);
+  const [isPending, setIsPending] = useState(false);
   // Candidates leave the list as soon as their servers report them queued, so
   // keep the button while the run is in flight.
   if (machines.length === 0 && !isPending) {
@@ -61,30 +98,7 @@ export function ProviderUpdatesAction(props: {
     pending.current = true;
     setIsPending(true);
     try {
-      const runs = await Promise.all(
-        machines.flatMap(({ environmentId, label, candidates }) =>
-          candidates.map(
-            async (candidate): Promise<ProviderUpdateRun> => ({
-              machineLabel: label,
-              driver: candidate.driver,
-              instanceId: candidate.instanceId,
-              result: await updateProvider({
-                environmentId,
-                input: { provider: candidate.driver, instanceId: candidate.instanceId },
-              }),
-            }),
-          ),
-        ),
-      );
-      const view = getProviderUpdateRunToastView(runs);
-      if (view) {
-        toastManager.add(
-          stackedThreadToast({
-            ...view,
-            description: <span className="whitespace-pre-line">{view.description}</span>,
-          }),
-        );
-      }
+      await updateAll();
     } finally {
       pending.current = false;
       setIsPending(false);

@@ -199,23 +199,39 @@ export const executorLayer: Layer.Layer<
                     }),
                 ),
               );
-          case "provider-turn.interrupt":
+          case "provider-turn.interrupt": {
+            const request = effect.request;
             return providerTurnControl
               .interrupt({
                 threadId: effect.threadId,
-                providerSessionId: effect.request.providerSessionId,
-                providerThreadId: effect.request.providerThreadId,
-                providerTurnId: effect.request.providerTurnId,
-                ...(effect.request.subagent === undefined
+                providerSessionId: request.providerSessionId,
+                providerThreadId: request.providerThreadId,
+                providerTurnId: request.providerTurnId,
+                ...(request.subagent === undefined
                   ? {}
-                  : { subagent: effect.request.subagent }),
+                  : {
+                      subagent: {
+                        ...request.subagent,
+                        requestedAt: DateTime.makeUnsafe(effect.createdAt),
+                      },
+                    }),
               })
               .pipe(
+                Effect.tapError((cause) =>
+                  request.subagent === undefined
+                    ? Effect.void
+                    : Effect.logWarning("orchestration-v2.subagent-stop-failed", {
+                        effectId: effect.id,
+                        cause,
+                      }),
+                ),
                 // The adapter has already lost the native turn: nothing is
                 // left to interrupt, and the settle still ends what it showed.
+                // A subagent Stop never infers an outcome, so it retries instead.
                 Effect.catch((cause) =>
+                  request.subagent === undefined &&
                   isNonRetryableProviderTurnControlFailure(
-                    effect.request.type,
+                    request.type,
                     Cause.pretty(Cause.fail(cause)),
                   )
                     ? Effect.void
@@ -226,27 +242,38 @@ export const executorLayer: Layer.Layer<
                 // work no process will report on, so the Stop ends it too.
                 // One Stop can interrupt several provider threads, so the
                 // settle is keyed by effect, not by the Stop command.
-                // Stopping one subagent leaves its owner's turn running.
-                Effect.andThen(
-                  effect.request.subagent !== undefined
+                // A targeted subagent Stop leaves its owner's turn running and
+                // repairs only an outcome the provider actually confirmed.
+                Effect.andThen((outcome) =>
+                  request.subagent !== undefined && outcome === undefined
                     ? Effect.void
                     : backgroundWorkSettle.settle({
                         type: "thread.background-work.settle",
                         commandId: CommandId.make(`${effect.id}:background-work-settled`),
+                        ...(request.subagent === undefined || outcome === undefined
+                          ? {}
+                          : {
+                              subagent: {
+                                id: request.subagent.id,
+                                stoppedAt: DateTime.makeUnsafe(effect.createdAt),
+                                outcome,
+                              },
+                            }),
                         threadId: effect.threadId,
-                        providerThreadId: effect.request.providerThreadId,
-                        providerTurnId: effect.request.providerTurnId,
+                        providerThreadId: request.providerThreadId,
+                        providerTurnId: request.providerTurnId,
                       }),
                 ),
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationEffectExecutionError({
                       effectId: effect.id,
-                      effectType: effect.request.type,
+                      effectType: request.type,
                       cause,
                     }),
                 ),
               );
+          }
           case "provider-turn.steer":
             return providerTurnControl
               .steer({

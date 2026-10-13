@@ -65,8 +65,10 @@ function prettyJsonText(text: string): string {
 }
 
 /** Formats a tool input or output for display: text blocks as text, the rest as JSON. */
-export function formatToolValue(value: unknown): string | null {
+export function formatToolValue(value: unknown, hasImagePreview = false): string | null {
   if (value === undefined || value === null) return null;
+  // Claude Read returns one structured image; lists may contain other images.
+  if (hasImagePreview && isRecord(value) && value.type === "image") return null;
   const text = textFromBlocks(value, 0);
   if (text !== null) return text.trim() ? prettyJsonText(text) : null;
   let json: string | undefined;
@@ -129,7 +131,9 @@ export function turnItemOutputText(item: OrchestrationV2TurnItem): string | null
     case "command_execution":
       return item.output?.trim() ? commandOutputText(item.output) || null : null;
     case "dynamic_tool":
-      return item.outputOmitted === true ? null : formatToolValue(item.output);
+      return item.outputOmitted === true
+        ? null
+        : formatToolValue(item.output, item.viewedImagePath !== undefined);
     default:
       return null;
   }

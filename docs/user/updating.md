@@ -3,6 +3,21 @@
 The T3 Code web or desktop app and the server it connects to work best when they use the same
 version. If they do not match, T3 Code shows a warning with the right update option for that server.
 
+## Update Everything at Once
+
+The update button at the bottom of the sidebar updates every connected machine in one step. It
+updates outdated providers, then servers that are behind, then the desktop app you are using, which
+restarts last. Servers move to the version your desktop app is installing, or to your web app's
+version. A background service stays on its current release channel. A remote desktop app installs
+the latest release from its own channel. Hover the button to see what it will update.
+
+Server updates appear only after that version is published to npm. Remote desktop apps do not wait
+for npm. Servers that need a manual update are not included. Use the warning or **Settings →
+Connections** for those.
+
+The confirmation counts the running threads that the restarts will interrupt, and how many can
+resume afterwards. See **Continue threads after restarts** below.
+
 ## Where to Find the Update
 
 You may see the warning in either of these places:

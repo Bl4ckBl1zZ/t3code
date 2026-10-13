@@ -9,6 +9,7 @@ import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
+import { SecretInput } from "./SecretInput";
 import { Textarea } from "../ui/textarea";
 import type { ProviderClientDefinition } from "./providerDriverMeta";
 
@@ -179,7 +180,17 @@ function ProviderSettingsFieldRow({
     <FieldFrame variant={variant}>
       <label htmlFor={inputId} className={cn(variant === "card" && "block")}>
         {label}
-        {variant === "card" ? (
+        {variant === "card" && field.secret ? (
+          // A saved secret arrives as a marker: show only whether one is set.
+          <SecretInput
+            id={inputId}
+            className="mt-1.5"
+            configured={readProviderConfigString(value, field.key).length > 0}
+            value=""
+            onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
+            placeholder={field.placeholder}
+          />
+        ) : variant === "card" ? (
           <DraftInput
             id={inputId}
             className="mt-1.5"
@@ -189,6 +200,15 @@ function ProviderSettingsFieldRow({
             onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
             placeholder={field.placeholder}
             spellCheck={false}
+          />
+        ) : field.secret ? (
+          <SecretInput
+            id={inputId}
+            value={readProviderConfigString(value, field.key)}
+            onChange={(event) =>
+              onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
+            }
+            placeholder={field.placeholder}
           />
         ) : (
           <Input

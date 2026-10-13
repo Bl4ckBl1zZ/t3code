@@ -30,6 +30,11 @@ import { AgentScope } from "@t3tools/shared/AgentScope";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import {
+  COMPUTER_USE_TOOL_SOURCE,
+  dynamicToolSurface,
+  dynamicToolTitle,
+} from "@t3tools/shared/toolActivity";
 import type {
   ChatAttachment,
   OrchestrationV2AppThread,
@@ -495,14 +500,22 @@ export function projectCodexDynamicToolItem(
       : [trimText(item.namespace), item.tool].filter(Boolean).join(".");
   const presentation = item.type === "mcpToolCall" ? codexMcpToolPresentation(item) : {};
   const title =
-    item.type === "mcpToolCall"
-      ? (codexMcpIntentTitle(item, presentation) ?? presentation.title)
-      : undefined;
+    (item.type === "mcpToolCall" ? codexMcpIntentTitle(item, presentation) : undefined) ??
+    dynamicToolTitle(toolName, item.arguments, presentation.title) ??
+    presentation.title;
+  // A computer-use REPL call that fails or is still running has no result metadata yet.
+  const toolSurface = presentation.toolSurface ?? dynamicToolSurface(toolName, item.arguments);
+  const toolSource =
+    toolSurface === "computer" && presentation.toolSource?.kind !== "computer"
+      ? COMPUTER_USE_TOOL_SOURCE
+      : presentation.toolSource;
   const projection: CodexDynamicToolProjection = {
     toolName,
     input: item.arguments,
     status: codexItemStatus(item.status).turnItem,
     ...presentation,
+    ...(toolSurface ? { toolSurface } : {}),
+    ...(toolSource ? { toolSource } : {}),
     ...(title ? { title } : {}),
   };
   return output === undefined ? projection : { ...projection, output };

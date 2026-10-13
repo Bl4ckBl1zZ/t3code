@@ -19,6 +19,7 @@ import {
   turnItemOutputImages,
   turnItemOutputText,
 } from "@t3tools/client-runtime/work-log/item-detail";
+import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
 import * as DateTime from "effect/DateTime";
 import { ChevronRightIcon, ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
 import { memo, Suspense, use, useMemo, type ReactNode } from "react";
@@ -110,13 +111,22 @@ function DataField(props: { readonly label: string; readonly children: ReactNode
   );
 }
 
-function JsonTokens({ text }: { readonly text: string }) {
+function SyntaxTokens({
+  text,
+  language,
+}: {
+  readonly text: string;
+  readonly language: "json" | "typescript";
+}) {
   const { resolvedTheme } = useTheme();
-  const highlighter = use(getSyntaxHighlighterPromise("json"));
+  const highlighter = use(getSyntaxHighlighterPromise(language));
   const { tokens } = useMemo(
     () =>
-      highlighter.codeToTokens(text, { lang: "json", theme: resolveDiffThemeName(resolvedTheme) }),
-    [highlighter, text, resolvedTheme],
+      highlighter.codeToTokens(text, {
+        lang: language,
+        theme: resolveDiffThemeName(resolvedTheme),
+      }),
+    [highlighter, text, language, resolvedTheme],
   );
   return tokens.flatMap((line, lineIndex) => [
     lineIndex > 0 ? "\n" : "",
@@ -131,9 +141,11 @@ function JsonTokens({ text }: { readonly text: string }) {
 function StructuredValue({
   value,
   highlightJson = false,
+  language,
 }: {
   readonly value: unknown;
   readonly highlightJson?: boolean;
+  readonly language?: "typescript";
 }) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   const isJson = useMemo(() => {
@@ -148,10 +160,10 @@ function StructuredValue({
   if (!text) return null;
   return (
     <pre className={TERMINAL_BLOCK_CLASS_NAME}>
-      {isJson ? (
+      {language || isJson ? (
         <RenderErrorBoundary fallback={text}>
           <Suspense fallback={text}>
-            <JsonTokens text={text} />
+            <SyntaxTokens text={text} language={language ?? "json"} />
           </Suspense>
         </RenderErrorBoundary>
       ) : (
@@ -159,6 +171,17 @@ function StructuredValue({
       )}
     </pre>
   );
+}
+
+/** The code a JavaScript REPL call ran; its `title` already heads the row. */
+function javaScriptReplCode(item: {
+  readonly toolName: string | null;
+  readonly input: unknown;
+}): string | null {
+  if (!isJavaScriptReplTool(item.toolName)) return null;
+  const input = item.input;
+  if (typeof input !== "object" || input === null || !("code" in input)) return null;
+  return typeof input.code === "string" && input.code.trim() ? input.code : null;
 }
 
 interface FetchedOutput {
@@ -259,6 +282,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
   const duration = durationLabel(item.startedAt, item.completedAt);
   const latestAttempt = support.attempts.at(-1) ?? null;
   const runtimeRequest = support.runtimeRequest;
+  const replCode = item.type === "dynamic_tool" ? javaScriptReplCode(item) : null;
 
   return (
     <div className="space-y-2 text-xs" data-v2-item-inspector={item.type}>
@@ -365,7 +389,14 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
 
       {item.type === "dynamic_tool" ? (
         <div className="grid gap-2 sm:grid-cols-2">
-          {formatToolValue(item.input) ? (
+          {replCode !== null ? (
+            <div>
+              <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
+                Code
+              </p>
+              <StructuredValue value={replCode} language="typescript" />
+            </div>
+          ) : formatToolValue(item.input) ? (
             <div>
               <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
                 Input

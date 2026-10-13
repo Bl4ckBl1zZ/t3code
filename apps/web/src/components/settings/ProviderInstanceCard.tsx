@@ -44,6 +44,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsibleContent } from "../ui/collapsible";
 import { DraftInput } from "../ui/draft-input";
+import { SecretInput } from "./SecretInput";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ScrollArea } from "../ui/scroll-area";
 import { Switch } from "../ui/switch";
@@ -191,13 +192,22 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map((entry) => ({
-    slug: entry.slug,
-    name: entry.name,
-    isCustom: true,
-    capabilities:
-      entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
-  }));
+  const serverSlugs = new Set(serverModels.map((model) => model.slug));
+  // A custom entry with a built-in slug only renames that built-in on the
+  // server, so the built-in row already shows it.
+  const customModels = input.customModels.flatMap((entry) =>
+    serverSlugs.has(entry.slug)
+      ? []
+      : [
+          {
+            slug: entry.slug,
+            name: entry.name,
+            isCustom: true,
+            capabilities:
+              entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
+          },
+        ],
+  );
   return [...serverModels, ...customModels];
 }
 
@@ -330,19 +340,24 @@ function ProviderEnvironmentSection(props: {
                     />
                   </TableCell>
                   <TableCell>
-                    <DraftInput
-                      value={variable.valueRedacted ? "" : variable.value}
-                      onCommit={(value) => updateVariable(variable.id, { value })}
-                      type={variable.sensitive ? "password" : undefined}
-                      autoComplete="off"
-                      placeholder={
-                        variable.valueRedacted
-                          ? "Stored secret - enter a new value to replace"
-                          : "Value"
-                      }
-                      spellCheck={false}
-                      aria-label={`Environment variable value ${index + 1}`}
-                    />
+                    {variable.sensitive ? (
+                      <SecretInput
+                        value={variable.valueRedacted ? "" : variable.value}
+                        onCommit={(value) => updateVariable(variable.id, { value })}
+                        placeholder="Value"
+                        configured={variable.valueRedacted === true}
+                        aria-label={`Environment variable value ${index + 1}`}
+                      />
+                    ) : (
+                      <DraftInput
+                        value={variable.valueRedacted ? "" : variable.value}
+                        onCommit={(value) => updateVariable(variable.id, { value })}
+                        autoComplete="off"
+                        placeholder="Value"
+                        spellCheck={false}
+                        aria-label={`Environment variable value ${index + 1}`}
+                      />
+                    )}
                   </TableCell>
                   <TableCell className="w-20">
                     <div className="flex h-8 items-center justify-center">
@@ -397,24 +412,31 @@ function ProviderEnvironmentFieldRow(props: {
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
-  const placeholder = props.variable?.valueRedacted
-    ? "Stored secret - enter a new value to replace"
-    : props.field.placeholder;
 
   return (
     <label htmlFor={inputId} className="block">
       <span className="text-xs font-medium text-foreground">{props.field.label}</span>
       <div className="mt-1.5 flex min-w-0 items-center gap-2">
-        <DraftInput
-          id={inputId}
-          className="min-w-0 flex-1"
-          type={props.field.sensitive === false ? undefined : "password"}
-          autoComplete="off"
-          value={value}
-          onCommit={(next) => props.onCommit(props.field, next)}
-          placeholder={placeholder}
-          spellCheck={false}
-        />
+        {props.field.sensitive === false ? (
+          <DraftInput
+            id={inputId}
+            className="min-w-0 flex-1"
+            autoComplete="off"
+            value={value}
+            onCommit={(next) => props.onCommit(props.field, next)}
+            placeholder={props.field.placeholder}
+            spellCheck={false}
+          />
+        ) : (
+          <SecretInput
+            id={inputId}
+            className="min-w-0 flex-1"
+            value={value}
+            onCommit={(next) => props.onCommit(props.field, next)}
+            placeholder={props.field.placeholder}
+            configured={props.variable?.valueRedacted === true}
+          />
+        )}
         {props.variable ? (
           <Button
             type="button"

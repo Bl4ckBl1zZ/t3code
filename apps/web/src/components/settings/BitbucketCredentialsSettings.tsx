@@ -8,6 +8,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { SecretInput } from "./SecretInput";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
 type CredentialMethod = "access-token" | "api-token";
@@ -56,12 +57,10 @@ function TokenInput({
   readonly onDraftChange: (draft: string) => void;
 }) {
   return (
-    <Input
+    <SecretInput
       id={id}
-      type="password"
-      autoComplete="off"
       size="sm"
-      placeholder={isSaved ? "Stored secret, enter a new value to replace" : "Not set"}
+      configured={isSaved}
       value={draft}
       onChange={(event) => onDraftChange(event.target.value)}
     />

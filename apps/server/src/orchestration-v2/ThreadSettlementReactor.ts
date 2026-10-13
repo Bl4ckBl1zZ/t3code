@@ -123,7 +123,15 @@ export const make = Effect.gen(function* () {
     }
     if (thread.branch === null || cwd === null || project === undefined) return null;
     const candidate = yield* git.branchPullRequest({ cwd, branch: thread.branch });
-    return candidate !== null && pullRequestMatchesProject(candidate, project) ? candidate : null;
+    if (candidate === null || !pullRequestMatchesProject(candidate, project)) return null;
+    if (candidate.state === "open" || !(yield* wouldSettle(thread, candidate))) return candidate;
+    // A remembered terminal answer can predate a change made outside T3, and
+    // settling can remove the worktree. Confirm it against fresh git state.
+    const confirmed = yield* git.branchPullRequest(
+      { cwd, branch: thread.branch },
+      { freshGitState: true },
+    );
+    return confirmed !== null && pullRequestMatchesProject(confirmed, project) ? confirmed : null;
   });
 
   // Candidates come from the thread table alone, and each one's shell is read on its own below,

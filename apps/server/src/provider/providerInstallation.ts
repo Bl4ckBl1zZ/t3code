@@ -109,18 +109,19 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
   const remove = Effect.fn("ProviderInstallation.remove")(function* (input: ProviderSetupInput) {
     yield* requireInstance(input.instanceId, "remove-install", true);
     const entries = yield* readEntries(input.instanceId, "remove-install");
-    const protectedPaths = yield* Effect.forEach(Object.values(entries), (entry) => {
-      if (!hasBinaryPath(entry.config) || !entry.config.binaryPath.trim()) {
-        return Effect.succeed([]);
-      }
-      const binaryPath = entry.config.binaryPath.trim();
-      return resolveCommandPath(binaryPath, {
-        env: mergeProviderInstanceEnvironment(entry.environment),
-      }).pipe(
-        Effect.map((resolved) => [binaryPath, resolved]),
-        Effect.catch(() => Effect.succeed([binaryPath])),
-      );
-    });
+    const protectedPaths = yield* Effect.forEach(
+      Object.values(entries),
+      Effect.fnUntraced(function* (entry) {
+        if (!hasBinaryPath(entry.config) || !entry.config.binaryPath.trim()) {
+          return [];
+        }
+        const binaryPath = entry.config.binaryPath.trim();
+        const resolved = yield* resolveCommandPath(binaryPath, {
+          env: mergeProviderInstanceEnvironment(entry.environment),
+        });
+        return resolved === null ? [binaryPath] : [binaryPath, resolved];
+      }),
+    );
     yield* installation
       .remove(protectedPaths.flat())
       .pipe(Effect.mapError(failure(input.instanceId)));

@@ -17,8 +17,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
   type ProviderInstanceConfig,
-  type ProviderInstanceEnvironmentVariable,
-  type UsageLimitSourceConfig,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
@@ -55,6 +53,7 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 
 export {
   resolveReviewGuideModelSelection,
@@ -132,94 +131,12 @@ const normalizeServerSettings = (
     ),
   );
 
-function providerEnvironmentSecretName(input: {
-  readonly instanceId: string;
-  readonly name: string;
-}): string {
-  return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
-}
-
-/**
- * On disk a hub key or Bitbucket token is replaced by this marker and the
- * real value lives in the secret store, mirroring provider environment
- * secrets. A client that sends the marker back means "keep what you have".
- */
-const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
-
-export function usageLimitSourceSecretName(sourceId: string): string {
-  return `usage-limit-source-${Buffer.from(sourceId, "utf8").toString("base64url")}`;
-}
-
-const BITBUCKET_SECRET_NAMES = {
-  accessToken: "bitbucket-access-token",
-  apiToken: "bitbucket-api-token",
-} as const;
-const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
-
-/** Hosts are case-insensitive; a patch can arrive before decoding lowercased its keys. */
-function gitHubTokenSecretName(host: string): string {
-  return `github-token-${Buffer.from(host.trim().toLowerCase(), "utf8").toString("base64url")}`;
-}
-
-const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : "");
-
-function redactProviderEnvironmentVariable(
-  variable: ProviderInstanceEnvironmentVariable,
-): ProviderInstanceEnvironmentVariable {
-  if (!variable.sensitive) {
-    const { valueRedacted: _omit, ...rest } = variable;
-    return rest;
-  }
-  return {
-    ...variable,
-    value: "",
-    ...(variable.value.length > 0 || variable.valueRedacted ? { valueRedacted: true } : {}),
-  };
-}
-
 export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
-  const providerInstances = Object.fromEntries(
-    Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
-      instanceId,
-      instance.environment
-        ? {
-            ...instance,
-            environment: instance.environment.map(redactProviderEnvironmentVariable),
-          }
-        : instance,
-    ]),
+  return mapSettingsSecrets(settings, (secret) =>
+    secret.sensitive
+      ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
+      : { value: secret.value, redacted: false },
   );
-  // The hub key is a bearer secret; clients only need to know one is set.
-  const usageLimitSources = Object.fromEntries(
-    Object.entries(settings.usageLimitSources).map(([id, source]) => [
-      id,
-      {
-        ...source,
-        managementKey: redactSecret(source.managementKey),
-      },
-    ]),
-  );
-  const bitbucket = {
-    ...settings.bitbucket,
-    accessToken: redactSecret(settings.bitbucket.accessToken),
-    apiToken: redactSecret(settings.bitbucket.apiToken),
-  };
-  // A saved GitHub token is the account's whole credential; clients only learn that one is set.
-  const github =
-    settings.github === undefined
-      ? {}
-      : {
-          github: {
-            ...settings.github,
-            tokens: Object.fromEntries(
-              Object.entries(settings.github.tokens).map(([host, token]) => [
-                host,
-                redactSecret(token),
-              ]),
-            ),
-          },
-        };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket, ...github };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -499,55 +416,36 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Moves Bitbucket and GitHub tokens hand-edited into settings.json into the secret store as they load,
-   * so plaintext does not stay on disk. If the store is unavailable, the token keeps working
-   * from the file and the move is retried on the next load.
+   * Migrate plaintext schema-declared credentials on load. Failed moves stay usable from
+   * the file and are retried next time; client redaction does not depend on migration.
    */
-  const moveInlineBitbucketTokens = (settings: ServerSettings) =>
+  const moveInlineSettingsSecrets = (settings: ServerSettings) =>
     Effect.gen(function* () {
-      const bitbucket = { ...settings.bitbucket };
-      let moved = false;
-      for (const field of BITBUCKET_SECRET_FIELDS) {
-        const value = bitbucket[field];
-        if (value.length === 0 || value === SECRET_REDACTED) continue;
+      const pending: SettingsSecret[] = [];
+      mapSettingsSecrets(settings, (secret) => {
+        if (secret.kind === "field" && !secret.redacted && secret.value.length > 0) {
+          pending.push(secret);
+        }
+        return secret;
+      });
+      const moved = new Set<string>();
+      for (const secret of pending) {
         const stored = yield* secretStore
-          .set(BITBUCKET_SECRET_NAMES[field], textEncoder.encode(value))
+          .set(secret.secretName, textEncoder.encode(secret.value))
           .pipe(
             Effect.as(true),
             Effect.catch(() =>
-              Effect.logWarning("failed to move a Bitbucket token into the secret store", {
-                field,
-              }).pipe(Effect.as(false)),
+              Effect.logWarning("failed to move a settings secret into the secret store").pipe(
+                Effect.as(false),
+              ),
             ),
           );
-        if (!stored) continue;
-        bitbucket[field] = SECRET_REDACTED;
-        moved = true;
+        if (stored) moved.add(secret.secretName);
       }
-      const tokens = { ...settings.github?.tokens };
-      for (const [host, value] of Object.entries(tokens)) {
-        if (value.length === 0 || value === SECRET_REDACTED) continue;
-        const stored = yield* secretStore
-          .set(gitHubTokenSecretName(host), textEncoder.encode(value))
-          .pipe(
-            Effect.as(true),
-            Effect.catch(() =>
-              Effect.logWarning("failed to move a GitHub token into the secret store", {
-                host,
-              }).pipe(Effect.as(false)),
-            ),
-          );
-        if (!stored) continue;
-        tokens[host] = SECRET_REDACTED;
-        moved = true;
-      }
-      return moved
-        ? {
-            ...settings,
-            bitbucket,
-            ...(settings.github === undefined ? {} : { github: { ...settings.github, tokens } }),
-          }
-        : settings;
+      if (moved.size === 0) return settings;
+      return mapSettingsSecrets(settings, (secret) =>
+        moved.has(secret.secretName) ? { value: "", redacted: true } : secret,
+      );
     });
 
   const loadSettingsFromDisk = Effect.gen(function* () {
@@ -609,7 +507,7 @@ const make = Effect.gen(function* () {
       restoreUsedProviders(settings, persisted, providerHistory),
     );
     // Only rewrite a file that decoded cleanly; an untrusted one stays for the user to repair.
-    const migrated = settingsFileTrusted ? yield* moveInlineBitbucketTokens(loaded) : loaded;
+    const migrated = settingsFileTrusted ? yield* moveInlineSettingsSecrets(loaded) : loaded;
     if (migrated !== loaded) {
       yield* writeSettingsAtomically(migrated);
     }
@@ -627,97 +525,41 @@ const make = Effect.gen(function* () {
 
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
 
-  const materializeProviderEnvironmentSecrets = (
+  const materializeSettingsSecrets = (
     settings: ServerSettings,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     Effect.gen(function* () {
-      const providerInstances: Record<string, ProviderInstanceConfig> = {
-        ...settings.providerInstances,
-      };
-      for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-        if (!instance.environment) continue;
-        const environment: ProviderInstanceEnvironmentVariable[] = [];
-        for (const variable of instance.environment) {
-          if (!variable.sensitive || !variable.valueRedacted) {
-            environment.push(variable);
-            continue;
-          }
-          const secret = yield* secretStore
-            .get(providerEnvironmentSecretName({ instanceId, name: variable.name }))
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({
-                    settingsPath,
-                    operation: "read-secret",
-                    providerInstanceId: instanceId,
-                    environmentVariable: variable.name,
-                    cause,
-                  }),
-              ),
-            );
-          environment.push({
-            ...variable,
-            value: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
-          });
-        }
-        providerInstances[instanceId] = {
-          ...instance,
-          environment,
-        } satisfies ProviderInstanceConfig;
+      const storedSecrets = new Map<string, string>();
+      const pending = new Map<string, SettingsSecret>();
+      mapSettingsSecrets(settings, (secret) => {
+        if (secret.sensitive && secret.redacted) pending.set(secret.secretName, secret);
+        return secret;
+      });
+      for (const secret of pending.values()) {
+        const value = yield* secretStore.get(secret.secretName).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "read-secret",
+                providerInstanceId: secret.providerInstanceId,
+                environmentVariable: secret.environmentVariable,
+                cause,
+              }),
+          ),
+        );
+        storedSecrets.set(
+          secret.secretName,
+          Option.isSome(value) ? textDecoder.decode(value.value) : "",
+        );
       }
-      const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
-      for (const [sourceId, source] of Object.entries(settings.usageLimitSources)) {
-        if (source.managementKey !== SECRET_REDACTED) {
-          usageLimitSources[sourceId] = source;
-          continue;
-        }
-        const secret = yield* secretStore
-          .get(usageLimitSourceSecretName(sourceId))
-          .pipe(
-            Effect.mapError(
-              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
-            ),
-          );
-        usageLimitSources[sourceId] = {
-          ...source,
-          managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
-        };
-      }
-      const bitbucket = { ...settings.bitbucket };
-      for (const field of BITBUCKET_SECRET_FIELDS) {
-        if (bitbucket[field] !== SECRET_REDACTED) continue;
-        const secret = yield* secretStore
-          .get(BITBUCKET_SECRET_NAMES[field])
-          .pipe(
-            Effect.mapError(
-              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
-            ),
-          );
-        bitbucket[field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
-      }
-      const tokens: Record<string, string> = {};
-      for (const [host, value] of Object.entries(settings.github?.tokens ?? {})) {
-        if (value !== SECRET_REDACTED) {
-          tokens[host] = value;
-          continue;
-        }
-        const secret = yield* secretStore
-          .get(gitHubTokenSecretName(host))
-          .pipe(
-            Effect.mapError(
-              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
-            ),
-          );
-        tokens[host] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
-      }
-      return {
-        ...settings,
-        providerInstances: providerInstances as ServerSettings["providerInstances"],
-        usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-        bitbucket,
-        ...(settings.github === undefined ? {} : { github: { ...settings.github, tokens } }),
-      };
+      return mapSettingsSecrets(settings, (secret) => ({
+        value:
+          secret.sensitive && secret.redacted
+            ? (storedSecrets.get(secret.secretName) ?? "")
+            : secret.value,
+        redacted: secret.sensitive && secret.kind === "environment" && secret.redacted,
+      }));
     });
 
   // Secrets are read once per settings object; the cache hands out a new object on
@@ -733,7 +575,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const { generation, entry } = yield* Ref.get(materializedSettingsRef);
       if (entry?.source === settings) return entry.settings;
-      const materialized = yield* materializeProviderEnvironmentSecrets(settings);
+      const materialized = yield* materializeSettingsSecrets(settings);
       yield* Ref.update(materializedSettingsRef, (current) =>
         current.generation === generation
           ? { generation, entry: { source: settings, settings: materialized } }
@@ -747,7 +589,7 @@ const make = Effect.gen(function* () {
       Stream.mapEffect((settings) =>
         materializeSettings(settings).pipe(
           Effect.catch((error: ServerSettingsError) =>
-            Effect.logWarning("failed to materialize provider environment secrets", {
+            Effect.logWarning("failed to materialize settings secrets", {
               operation: error.operation,
               providerInstanceId: error.providerInstanceId,
               environmentVariable: error.environmentVariable,
@@ -768,192 +610,66 @@ const make = Effect.gen(function* () {
     | { readonly kind: "remove"; readonly operation: "remove-secret" | "remove-stale-secret" }
   );
 
-  const persistProviderEnvironmentSecrets = (current: ServerSettings, next: ServerSettings) =>
+  const persistSettingsSecrets = (current: ServerSettings, next: ServerSettings) =>
     Effect.sync(() => {
-      const providerInstances: Record<string, ProviderInstanceConfig> = {
-        ...next.providerInstances,
-      };
+      const previous = new Map<string, SettingsSecret>();
+      mapSettingsSecrets(current, (secret) => {
+        // Duplicate environment names follow the provider's last-value-wins behavior.
+        previous.set(secret.secretName, secret);
+        return secret;
+      });
       const changes: SecretChange[] = [];
-
-      const nextSecretKeys = new Set<string>();
-      for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
-        if (!instance.environment) continue;
-        const environment: ProviderInstanceEnvironmentVariable[] = [];
-        for (const variable of instance.environment) {
-          const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-          if (!variable.sensitive) {
-            changes.push({
-              kind: "remove",
-              secretName,
-              operation: "remove-secret",
-              providerInstanceId: instanceId,
-              environmentVariable: variable.name,
-            });
-            environment.push(redactProviderEnvironmentVariable(variable));
-            continue;
-          }
-
-          nextSecretKeys.add(secretName);
-          // Match the provider environment's last-value-wins behavior for duplicate names.
-          const previous = variable.valueRedacted
-            ? current.providerInstances[ProviderInstanceId.make(instanceId)]?.environment?.findLast(
-                (entry) => entry.name === variable.name,
-              )
-            : undefined;
-          const inlineValue =
-            previous?.sensitive && !previous.valueRedacted && previous.value.length > 0
-              ? previous.value
-              : undefined;
-          const value = inlineValue ?? variable.value;
-          if (!variable.valueRedacted || inlineValue !== undefined) {
-            if (value.length > 0) {
-              changes.push({
-                kind: "write",
-                secretName,
-                value: textEncoder.encode(value),
-                providerInstanceId: instanceId,
-                environmentVariable: variable.name,
-              });
-              environment.push({ ...variable, value: "", valueRedacted: true });
-            } else {
-              changes.push({
-                kind: "remove",
-                secretName,
-                operation: "remove-secret",
-                providerInstanceId: instanceId,
-                environmentVariable: variable.name,
-              });
-              const { valueRedacted: _omit, ...rest } = variable;
-              environment.push(rest);
-            }
-            continue;
-          }
-
-          environment.push(redactProviderEnvironmentVariable(variable));
+      const nextSecretNames = new Set<string>();
+      const settings = mapSettingsSecrets(next, (secret) => {
+        const metadata = {
+          secretName: secret.secretName,
+          ...(secret.providerInstanceId !== undefined
+            ? { providerInstanceId: secret.providerInstanceId }
+            : {}),
+          ...(secret.environmentVariable !== undefined
+            ? { environmentVariable: secret.environmentVariable }
+            : {}),
+        };
+        if (!secret.sensitive) {
+          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+          return { value: secret.value, redacted: false };
         }
-        providerInstances[instanceId] = {
-          ...instance,
-          environment,
-        } satisfies ProviderInstanceConfig;
-      }
-
-      for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
-        for (const variable of instance.environment ?? []) {
-          if (!variable.sensitive) continue;
-          const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-          if (nextSecretKeys.has(secretName)) continue;
-          changes.push({
-            kind: "remove",
-            secretName,
-            operation: "remove-stale-secret",
-            providerInstanceId: instanceId,
-            environmentVariable: variable.name,
-          });
+        // The marker keeps what is saved; a hand-edited plaintext value moves into the store.
+        const old = previous.get(secret.secretName);
+        const inlineValue =
+          old?.sensitive && !old.redacted && old.value.length > 0 ? old.value : undefined;
+        const value = secret.redacted ? inlineValue : secret.value;
+        if (value === undefined) {
+          nextSecretNames.add(secret.secretName);
+          return { value: "", redacted: true };
         }
-      }
-
-      const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
-      for (const [sourceId, submitted] of Object.entries(next.usageLimitSources)) {
-        const previousKey =
-          current.usageLimitSources[sourceId as keyof typeof current.usageLimitSources]
-            ?.managementKey;
-        const source =
-          submitted.managementKey === SECRET_REDACTED &&
-          previousKey &&
-          previousKey !== SECRET_REDACTED
-            ? { ...submitted, managementKey: previousKey }
-            : submitted;
-        const secretName = usageLimitSourceSecretName(sourceId);
-        if (source.managementKey === SECRET_REDACTED) {
-          usageLimitSources[sourceId] = source;
-          continue;
+        if (value.length === 0) {
+          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+          return { value: "", redacted: false };
         }
-        if (source.managementKey.length === 0) {
-          changes.push({ kind: "remove", secretName, operation: "remove-secret" });
-          usageLimitSources[sourceId] = source;
-          continue;
-        }
-        changes.push({
-          kind: "write",
-          secretName,
-          value: textEncoder.encode(source.managementKey),
-        });
-        usageLimitSources[sourceId] = { ...source, managementKey: SECRET_REDACTED };
-      }
-      for (const sourceId of Object.keys(current.usageLimitSources)) {
-        if (sourceId in next.usageLimitSources) continue;
+        nextSecretNames.add(secret.secretName);
+        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(value) });
+        return { value: "", redacted: true };
+      });
+      for (const secret of previous.values()) {
+        if (!secret.sensitive || nextSecretNames.has(secret.secretName)) continue;
+        if (changes.some((change) => change.secretName === secret.secretName)) continue;
         changes.push({
           kind: "remove",
-          secretName: usageLimitSourceSecretName(sourceId),
+          secretName: secret.secretName,
           operation: "remove-stale-secret",
+          ...(secret.providerInstanceId !== undefined
+            ? { providerInstanceId: secret.providerInstanceId }
+            : {}),
+          ...(secret.environmentVariable !== undefined
+            ? { environmentVariable: secret.environmentVariable }
+            : {}),
         });
       }
-
-      const bitbucket = { ...next.bitbucket };
-      for (const field of BITBUCKET_SECRET_FIELDS) {
-        let value = bitbucket[field];
-        if (value === SECRET_REDACTED) {
-          // The marker keeps what is saved. A plaintext value hand-edited into settings.json
-          // is not in the secret store yet, so move it there instead of dropping it.
-          const inline = current.bitbucket[field];
-          if (inline === SECRET_REDACTED || inline.length === 0) continue;
-          value = inline;
-        }
-        const secretName = BITBUCKET_SECRET_NAMES[field];
-        if (value.length === 0) {
-          changes.push({ kind: "remove", secretName, operation: "remove-secret" });
-          continue;
-        }
-        changes.push({ kind: "write", secretName, value: textEncoder.encode(value) });
-        bitbucket[field] = SECRET_REDACTED;
-      }
-
-      const tokens: Record<string, string> = {};
-      for (const [rawHost, raw] of Object.entries(next.github?.tokens ?? {})) {
-        const host = rawHost.trim().toLowerCase();
-        let value = raw;
-        if (value === SECRET_REDACTED) {
-          // The marker keeps what is saved; a hand-edited plaintext token moves into the store.
-          const inline = current.github?.tokens[host];
-          if (inline === undefined || inline === SECRET_REDACTED || inline.length === 0) {
-            tokens[host] = SECRET_REDACTED;
-            continue;
-          }
-          value = inline;
-        }
-        const secretName = gitHubTokenSecretName(host);
-        if (value.length === 0) {
-          changes.push({ kind: "remove", secretName, operation: "remove-secret" });
-          continue;
-        }
-        changes.push({ kind: "write", secretName, value: textEncoder.encode(value) });
-        tokens[host] = SECRET_REDACTED;
-      }
-      const nextHosts = new Set(
-        Object.keys(next.github?.tokens ?? {}).map((host) => host.trim().toLowerCase()),
-      );
-      for (const host of Object.keys(current.github?.tokens ?? {})) {
-        if (nextHosts.has(host.trim().toLowerCase())) continue;
-        changes.push({
-          kind: "remove",
-          secretName: gitHubTokenSecretName(host),
-          operation: "remove-stale-secret",
-        });
-      }
-
-      return {
-        settings: {
-          ...next,
-          providerInstances: providerInstances as ServerSettings["providerInstances"],
-          usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-          bitbucket,
-          ...(next.github === undefined ? {} : { github: { ...next.github, tokens } }),
-        },
-        changes,
-      };
+      return { settings, changes };
     });
 
-  const rollbackProviderEnvironmentSecretWrites = (
+  const rollbackSettingsSecretWrites = (
     writes: ReadonlyArray<{
       readonly secretName: string;
       readonly previousValue: Option.Option<Uint8Array>;
@@ -969,7 +685,7 @@ const make = Effect.gen(function* () {
           : secretStore.remove(write.secretName)
         ).pipe(
           Effect.catch((cause) =>
-            Effect.logWarning("failed to roll back provider environment secret", {
+            Effect.logWarning("failed to roll back settings secret", {
               providerInstanceId: write.providerInstanceId,
               environmentVariable: write.environmentVariable,
               cause,
@@ -979,14 +695,14 @@ const make = Effect.gen(function* () {
       { discard: true },
     );
 
-  const applyProviderEnvironmentSecretChanges = (changes: ReadonlyArray<SecretChange>) => {
+  const applySettingsSecretChanges = (changes: ReadonlyArray<SecretChange>) => {
     const applied: Array<{
       readonly secretName: string;
       readonly previousValue: Option.Option<Uint8Array>;
       readonly providerInstanceId?: string;
       readonly environmentVariable?: string;
     }> = [];
-    const rollback = Effect.suspend(() => rollbackProviderEnvironmentSecretWrites(applied));
+    const rollback = Effect.suspend(() => rollbackSettingsSecretWrites(applied));
     return Effect.forEach(
       changes,
       (change) =>
@@ -1036,16 +752,12 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
         const updated = applyServerSettingsPatch(current, patch);
-        const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
+        const persisted = yield* persistSettingsSecrets(current, updated);
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>
           Effect.gen(function* () {
-            const rollbackSecretChanges = yield* applyProviderEnvironmentSecretChanges(
-              persisted.changes,
-            );
-            const materializedExit = yield* Effect.exit(
-              materializeProviderEnvironmentSecrets(next),
-            );
+            const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
+            const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
             if (Exit.isFailure(materializedExit)) {
               yield* rollbackSecretChanges;
               return yield* Effect.failCause(materializedExit.cause);

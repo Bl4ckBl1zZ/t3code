@@ -908,4 +908,51 @@ describe("read and search tool labels", () => {
       }),
     ).toBe("Skill: full-send");
   });
+
+  it.each(["cua_repl.js", "node_repl.js", "js"])(
+    "shows the %s action title for a retained tool item",
+    (toolName) => {
+      expect(
+        labelOf({
+          ...base,
+          id: TurnItemId.make("repl-inspect"),
+          ordinal: 0,
+          type: "dynamic_tool",
+          toolName,
+          input: {
+            code: "await game.getAXStateAndScreenshot();",
+            title: "Inspect Saga music screen",
+          },
+        }),
+      ).toBe("Inspect Saga music screen");
+    },
+  );
+
+  it("recovers the failed Sky call stored as a generic js integration", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...base,
+      id: TurnItemId.make("failed-sky"),
+      ordinal: 0,
+      type: "dynamic_tool",
+      status: "failed",
+      title: "js",
+      toolName: "node_repl.js",
+      toolSource: { key: "mcp:node_repl", name: "node repl", kind: "integration" },
+      input: {
+        title: "Restrict the breakpoint to Git actions",
+        code: "await sky.type_text({app:'T3 Code (Nightly)',text:'debug(ga.run)'});",
+      },
+    };
+    const [entry] = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        { position: 0, visibility: "local", sourceThreadId: threadId, sourceItemId: item.id, item },
+      ],
+      optimisticMessages: [],
+    });
+    expect(entry?.kind === "work" && entry.entry).toMatchObject({
+      label: "Restrict the breakpoint to Git actions",
+      toolSurface: "computer",
+      toolSource: { key: "computer-use", name: "Computer Use", kind: "computer" },
+    });
+  });
 });

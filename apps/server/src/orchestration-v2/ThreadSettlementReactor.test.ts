@@ -298,8 +298,65 @@ it.effect("settles a merged branch PR opened on the checkout's fork", () =>
     const reactor = yield* make.pipe(Effect.provide(layer));
     yield* reactor.requestSweep;
     yield* reactor.drain;
-    expect(branch).toHaveBeenCalledTimes(1);
+    // The remembered merged answer is confirmed against fresh git state before settling.
+    expect(branch).toHaveBeenCalledTimes(2);
+    expect(branch).toHaveBeenLastCalledWith(
+      { cwd: "/repo", branch: "feature" },
+      { freshGitState: true },
+    );
     expect(h.dispatch).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not settle on a remembered merge that fresh git state no longer finds", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("2 days");
+    const thread = fixture({ branch: "feature" });
+    const project = {
+      id: thread.projectId,
+      workspaceRoot: "/repo",
+      updatedAt: "1970-01-01T00:00:00Z",
+      repositoryIdentity: {
+        canonicalKey: "github.com/org/repo",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "git@github.com:org/repo.git",
+        },
+        displayName: "org/repo",
+        provider: "github",
+      },
+    } as unknown as Project;
+    const pullRequest = (state: "open" | "merged") =>
+      ({
+        number: 390,
+        title: "Feature",
+        url: "https://github.com/org/repo/pull/390",
+        baseBranch: "main",
+        headBranch: "feature",
+        state,
+        repositoryKey: "github.com/org/repo",
+        updatedAt: "1970-01-02T00:00:00.000Z",
+        mergedAt: state === "merged" ? "1970-01-02T00:00:00.000Z" : null,
+        closedAt: null,
+      }) as unknown as GitBranchPullRequest;
+    // The branch was retargeted outside T3 after the merged answer was remembered.
+    const branch = vi.fn((_input: unknown, options?: { readonly freshGitState?: boolean }) =>
+      Effect.succeed(options?.freshGitState ? pullRequest("open") : pullRequest("merged")),
+    );
+    const h = harness(thread);
+    const layer = Layer.mergeAll(
+      h.layer,
+      Layer.mock(ProjectService)({
+        snapshot: Effect.succeed({ projects: [project], updatedAt: project.updatedAt }),
+      }),
+      Layer.mock(GitManager)({ branchPullRequest: branch }),
+    );
+    const reactor = yield* make.pipe(Effect.provide(layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(branch).toHaveBeenCalledTimes(2);
+    expect(h.dispatch).not.toHaveBeenCalled();
   }).pipe(Effect.scoped),
 );
 

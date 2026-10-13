@@ -9,6 +9,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -19,6 +20,7 @@ import { AttachmentMaterialization } from "../attachments/AttachmentMaterializat
 import { appendSnapShotContext } from "../attachments/snapShotContext.ts";
 import { appendUploadedFilesBlock } from "../attachments/uploadPaths.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import type { ProviderAdapterV2SubagentOutcome } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 
@@ -46,13 +48,18 @@ export class ProviderTurnControlError extends Schema.TaggedErrorClass<ProviderTu
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
 export interface ProviderTurnControlServiceV2Shape {
+  /** With a `subagent`, resolves to the outcome its provider confirmed, if any. */
   readonly interrupt: (input: {
-    readonly subagent?: { readonly id: NodeId; readonly nativeTaskId: string };
+    readonly subagent?: {
+      readonly id: NodeId;
+      readonly nativeTaskId: string;
+      readonly requestedAt?: DateTime.Utc;
+    };
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
-  }) => Effect.Effect<void, ProviderTurnControlError>;
+  }) => Effect.Effect<void | ProviderAdapterV2SubagentOutcome, ProviderTurnControlError>;
   readonly steer: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
@@ -178,7 +185,17 @@ export const layer: Layer.Layer<
           const session = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) return;
+          if (Option.isNone(session)) {
+            if (input.subagent !== undefined) {
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause: "No live provider session can confirm this subagent's outcome.",
+              });
+            }
+            return;
+          }
           if (input.subagent !== undefined) {
             if (session.value.stopSubagent === undefined) {
               return yield* new ProviderTurnControlError({
@@ -188,11 +205,13 @@ export const layer: Layer.Layer<
                 cause: "The provider does not support stopping a native subagent.",
               });
             }
-            yield* session.value.stopSubagent({
+            return yield* session.value.stopSubagent({
               providerThread: loaded.providerThread,
               nativeTaskId: input.subagent.nativeTaskId,
+              ...(input.subagent.requestedAt === undefined
+                ? {}
+                : { requestedAt: input.subagent.requestedAt }),
             });
-            return;
           }
           if (
             loaded.providerTurn.status !== "running" &&

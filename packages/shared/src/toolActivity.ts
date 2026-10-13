@@ -25,11 +25,49 @@ export function claudeSkillInvocation(
   return name === undefined ? undefined : { name, args: asTrimmedString(record?.args) };
 }
 
-/** Activity log heading a dynamic tool derives from its input: the skill a Claude `Skill` call loads. */
+export function isJavaScriptReplTool(toolName: string | null | undefined): boolean {
+  return toolName === "js" || toolName === "cua_repl.js" || toolName === "node_repl.js";
+}
+
+export const COMPUTER_USE_TOOL_SOURCE = {
+  key: "computer-use",
+  name: "Computer Use",
+  kind: "computer",
+} as const;
+
+/** Computer-use calls may fail or still be running before result metadata is available. */
+export function dynamicToolSurface(toolName: string | null | undefined, input: unknown) {
+  if (toolName === "cua_repl.js") return "computer" as const;
+  const code = asRecord(input)?.code;
+  return isJavaScriptReplTool(toolName) &&
+    typeof code === "string" &&
+    (/\bsky\s*\./u.test(code) || /["']@oai\/sky["']/u.test(code))
+    ? ("computer" as const)
+    : undefined;
+}
+
+/**
+ * Activity log heading a dynamic tool derives from its input: a REPL's `title`,
+ * or the skill a Claude `Skill` call loads. `retainedTitle` is the stored item
+ * title; a REPL keeps it unless it is just the raw tool name.
+ */
 export function dynamicToolTitle(
   toolName: string | null | undefined,
   input: unknown,
+  retainedTitle?: string | null,
 ): string | undefined {
+  if (isJavaScriptReplTool(toolName)) {
+    const title = asTrimmedString(retainedTitle);
+    const meaningfulTitle =
+      title && title.toLowerCase() !== "js" && title.toLowerCase() !== toolName?.toLowerCase()
+        ? title
+        : undefined;
+    return (
+      asTrimmedString(asRecord(input)?.title) ??
+      meaningfulTitle ??
+      (dynamicToolSurface(toolName, input) === "computer" ? "Computer use" : "Run JavaScript")
+    );
+  }
   const skill = claudeSkillInvocation(toolName, input);
   return skill === undefined ? undefined : `Skill: ${skill.name}`;
 }

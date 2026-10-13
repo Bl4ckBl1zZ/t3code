@@ -245,7 +245,10 @@ export const make = Effect.gen(function* () {
           if (detected !== null && first.branch !== null) {
             // Summary reads can outlast a remote edit. Recheck the branch and
             // the project's primary remote before saving the group's links.
-            const current = yield* git.branchPullRequest({ cwd, branch: first.branch });
+            const current = yield* git.branchPullRequest(
+              { cwd, branch: first.branch },
+              { freshGitState: true },
+            );
             const currentIdentity = yield* repositoryIdentities.resolve(project.workspaceRoot, {
               refresh: true,
             });

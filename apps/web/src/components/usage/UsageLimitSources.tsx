@@ -5,6 +5,7 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { SecretInput } from "../settings/SecretInput";
 
 /** Hub credentials and settings belong to this environment only. */
 export function UsageLimitSources({
@@ -186,9 +187,7 @@ export function UsageLimitSources({
           </label>
           <label className="grid gap-1 text-xs">
             Management key
-            <Input
-              type="password"
-              autoComplete="off"
+            <SecretInput
               placeholder={editingId ? "Blank keeps the current key" : undefined}
               required={editingId === null}
               value={key}
