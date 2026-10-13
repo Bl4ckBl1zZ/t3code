@@ -22,6 +22,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiError from "effect/http-api/HttpApiError";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import * as HttpObservability from "@t3tools/shared/httpObservability";
+import { buildT3ProjectFileJsonSchema } from "@t3tools/shared/t3ProjectFile";
 
 import {
   RelayApi,
@@ -163,6 +164,27 @@ export const layerDocsRedirectRoute = HttpRouter.add(
   "/",
   HttpServerResponse.redirect("/docs"),
 );
+
+/**
+ * Serves this build's `t3.json` JSON Schema at `/schema/t3.json`. Project files
+ * written by self-hosted builds point their `$schema` here, and the document
+ * must describe this build's fields: it rejects unknown properties, so a schema
+ * from another build turns a field it lacks into an editor error.
+ *
+ * `schemaUrl` comes from the deployment, not the request, so a caller-controlled
+ * `Host` cannot change the advertised `$id`.
+ */
+export const layerProjectFileSchemaRoute = (schemaUrl: string) => {
+  const body = `${JSON.stringify({ ...buildT3ProjectFileJsonSchema(), $id: schemaUrl }, null, 2)}\n`;
+  return HttpRouter.add(
+    "GET",
+    "/schema/t3.json",
+    HttpServerResponse.text(body, {
+      contentType: "application/json",
+      headers: { "cache-control": "public, max-age=3600" },
+    }),
+  );
+};
 
 // Shorter than the mobile client's 10s request timeout on purpose: when a
 // request hangs (e.g. a stuck upstream query), the client would otherwise
