@@ -6,7 +6,7 @@
  */
 
 /** The repository that publishes the `t3` CLI: its npm package and release archives. */
-export const UPSTREAM_RELEASE_REPOSITORY = "pingdotgg/t3code";
+const UPSTREAM_RELEASE_REPOSITORY = "pingdotgg/t3code";
 
 /**
  * Where a build's own releases are published, baked in at build time from
@@ -48,7 +48,7 @@ export function releaseSourcePublishesCli(source: ReleaseSource): boolean {
   return source.repository === UPSTREAM_RELEASE_REPOSITORY;
 }
 
-export function releasesPageUrl(source: ReleaseSource): string {
+function releasesPageUrl(source: ReleaseSource): string {
   return `https://github.com/${source.repository}/releases`;
 }
 
