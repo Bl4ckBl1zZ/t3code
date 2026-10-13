@@ -9,7 +9,7 @@
  */
 
 /** URLs a single terminal may announce before older ones stop counting. */
-export const TERMINAL_ANNOUNCED_URLS_MAX = 8;
+const TERMINAL_ANNOUNCED_URLS_MAX = 8;
 
 /** A partial line carried between chunks; longer lines are not URLs worth keeping. */
 const PARTIAL_LINE_MAX = 1_024;
@@ -30,7 +30,7 @@ const LOOPBACK_URL =
 const NON_HTTP_PORTS = new Set([22, 25, 3306, 5432, 5672, 6379, 9229, 11211, 27017]);
 
 /** Normalizes an announced URL to the form the scanner probes, or null when it is not one. */
-export function normalizeAnnouncedUrl(raw: string): string | null {
+function normalizeAnnouncedUrl(raw: string): string | null {
   let url: URL;
   try {
     // Trailing punctuation belongs to the sentence, not the URL.

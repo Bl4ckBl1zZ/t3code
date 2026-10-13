@@ -10,10 +10,10 @@ import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 
 /** The desktop treats a report older than 75 seconds as unknown. */
-export const AGENT_ACTIVITY_REPORT_INTERVAL = Duration.seconds(30);
+const AGENT_ACTIVITY_REPORT_INTERVAL = Duration.seconds(30);
 
 /** True while the desktop holds a downloaded update it installs on its own. */
-export function isAutomaticInstallWaiting(report: DesktopUpdateStatusReport): boolean {
+function isAutomaticInstallWaiting(report: DesktopUpdateStatusReport): boolean {
   return report.state.status === "downloaded" && report.state.autoUpdateEnabled === true;
 }
 

@@ -11,7 +11,7 @@ import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
 /** Bytes kept or read per task: enough to find the last line of a noisy command. */
-export const BACKGROUND_OUTPUT_TAIL_BYTES = 2_048;
+const BACKGROUND_OUTPUT_TAIL_BYTES = 2_048;
 
 /** CSI, OSC and two-byte escape sequences, plus backspace runs. */
 const TERMINAL_CONTROL_SEQUENCES = new RegExp(

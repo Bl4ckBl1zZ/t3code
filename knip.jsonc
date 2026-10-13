@@ -14,9 +14,15 @@
       ],
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly.
-      "entry": ["knip-schemas.ts", "mobile-native-client.ts", "setup-worktree.ts"],
+      // Knip loads its preprocessor through a CLI option; native verification,
+      // worktree setup (from t3.json) and the iOS release tool (from
+      // apps/mobile/scripts/ios-testflight.sh) run directly.
+      "entry": [
+        "knip-schemas.ts",
+        "mobile-native-client.ts",
+        "setup-worktree.ts",
+        "ios-release.ts",
+      ],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.

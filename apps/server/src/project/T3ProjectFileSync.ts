@@ -200,7 +200,7 @@ function renderScript(script: ProjectScript, previous: RawObject | undefined) {
  * Every other file script was never imported and stays untouched. Actions the
  * file lacks are appended.
  */
-export function renderProjectFile(
+function renderProjectFile(
   existing: RawObject | null,
   scripts: ReadonlyArray<ProjectScript>,
   previouslyOwned: ReadonlySet<string> = new Set(),
@@ -259,7 +259,7 @@ interface Baseline {
   readonly fileStamp: string | null;
 }
 
-export class T3ProjectFileSync extends Context.Service<
+class T3ProjectFileSync extends Context.Service<
   T3ProjectFileSync,
   {
     /**

@@ -19,6 +19,8 @@ const legacyReaders = ["orchestration-v2/legacy/", "persistence/Migrations/"] as
 const legacyReaderFiles: Record<string, string> = {
   // Provider history for settings migration reads V1 thread sessions once at load.
   "serverSettings.ts": "one-time provider history for settings migration",
+  // The fork database upgrade deletes V1 rows of removed Hermes/T3 Work threads.
+  "persistence/forkDatabaseBridge.ts": "one-time fork database upgrade",
 };
 const retiredPaths = [
   "orchestration",

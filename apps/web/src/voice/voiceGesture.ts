@@ -18,7 +18,7 @@ export type VoiceGestureConfig = {
   readonly cancelHysteresis: number;
 };
 
-export const VOICE_GESTURE_DEFAULTS: VoiceGestureConfig = {
+const VOICE_GESTURE_DEFAULTS: VoiceGestureConfig = {
   holdMs: 300,
   tooShortMs: 500,
   cancelDistance: 80,

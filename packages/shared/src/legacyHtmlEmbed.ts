@@ -4,7 +4,7 @@
  * threads from that fork still hold them, so clients show each closed one as
  * an inline HTML render instead of its source.
  */
-export const LEGACY_HTML_EMBED_LANGUAGE = "t3-html";
+const LEGACY_HTML_EMBED_LANGUAGE = "t3-html";
 
 export function isLegacyHtmlEmbedLanguage(language: string | null | undefined): boolean {
   return language?.trim().toLowerCase() === LEGACY_HTML_EMBED_LANGUAGE;

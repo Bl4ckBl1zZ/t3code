@@ -37,7 +37,7 @@ public class T3SwiftImportModule: Module {
     else { return nil }
     let url = root.appendingPathComponent("T3CodeSwift/environments.json", isDirectory: false)
     guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-    return String(decoding: try Data(contentsOf: url), as: UTF8.self)
+    return String(bytes: try Data(contentsOf: url), encoding: .utf8)
   }
 
   private static func readCredentials() throws -> [String: String] {
@@ -62,9 +62,11 @@ public class T3SwiftImportModule: Module {
     for item in result as? [[String: Any]] ?? [] {
       let account =
         item[kSecAttrAccount as String] as? String
-        ?? (item[kSecAttrAccount as String] as? Data).map { String(decoding: $0, as: UTF8.self) }
-      guard let account, let data = item[kSecValueData as String] as? Data else { continue }
-      credentials[account] = String(decoding: data, as: UTF8.self)
+        ?? (item[kSecAttrAccount as String] as? Data).flatMap { String(bytes: $0, encoding: .utf8) }
+      guard let account, let data = item[kSecValueData as String] as? Data,
+        let credential = String(bytes: data, encoding: .utf8)
+      else { continue }
+      credentials[account] = credential
     }
     return credentials
   }

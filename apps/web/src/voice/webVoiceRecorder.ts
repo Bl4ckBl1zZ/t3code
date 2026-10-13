@@ -5,7 +5,7 @@ const LEVEL_INTERVAL_MS = 80;
 
 export type MicrophoneFailure = "unsupported" | "denied" | "no-device" | "failed";
 
-export class MicrophoneError extends Error {
+class MicrophoneError extends Error {
   readonly reason: MicrophoneFailure;
 
   constructor(reason: MicrophoneFailure, options?: ErrorOptions) {
@@ -15,7 +15,7 @@ export class MicrophoneError extends Error {
   }
 }
 
-export function microphoneFailureMessage(reason: MicrophoneFailure): string {
+function microphoneFailureMessage(reason: MicrophoneFailure): string {
   switch (reason) {
     case "unsupported":
       return "This browser cannot record audio here.";

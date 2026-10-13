@@ -69,7 +69,7 @@ function renderItem(message: OrchestrationV2HistoricalMessage): string {
  * Oldest first, keeping the newest sections whole when the transcript must be
  * cut: they sit closest to the verbatim history the target receives.
  */
-export function handoffSummaryTranscript(
+function handoffSummaryTranscript(
   messages: ReadonlyArray<OrchestrationV2HistoricalMessage>,
 ): string {
   const selected: Array<string> = [];
@@ -86,7 +86,7 @@ export function handoffSummaryTranscript(
   return selected.join("\n\n");
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
