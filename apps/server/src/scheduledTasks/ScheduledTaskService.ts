@@ -45,6 +45,7 @@ import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { forkParked } from "../serverActivation.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -1155,6 +1156,56 @@ export const layer = Layer.effect(
         Effect.andThen(notifyChanged),
         Effect.as({ id: input.id }),
       );
+
+    // A thread-bound task posts into its thread, so once the thread is deleted
+    // every run could only fail. Thread deletion is permanent, so the tasks go
+    // with it.
+    const deleteTasksForThread = (threadId: string) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ readonly task_id: string }>`
+          SELECT task_id FROM scheduled_tasks WHERE thread_id = ${threadId}
+        `;
+        const ids = rows.flatMap((row) => Option.toArray(decodeTaskId(row.task_id)));
+        if (ids.length === 0) return;
+        yield* Effect.forEach(ids, (id) => deleteTask({ id }), { discard: true });
+        yield* Effect.logInfo("Deleted schedule tasks bound to a deleted thread", {
+          threadId,
+          taskIds: ids,
+        });
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not delete schedule tasks bound to a deleted thread", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+
+    // Every delete path (a thread, or a project with its threads) emits
+    // thread.deleted. The sweep covers deletions while the server was down.
+    yield* forkParked(
+      Stream.runForEach(threadManagement.streamDomainEvents, (event) =>
+        event.type === "thread.deleted" ? deleteTasksForThread(event.threadId) : Effect.void,
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Schedule task thread-deletion watch stopped", { cause }),
+        ),
+      ),
+    );
+    yield* sql<{ readonly thread_id: string }>`
+      SELECT DISTINCT task.thread_id
+      FROM scheduled_tasks AS task
+      JOIN orchestration_v2_projection_threads AS thread
+        ON thread.thread_id = task.thread_id
+      WHERE thread.deleted_at IS NOT NULL
+    `.pipe(
+      Effect.flatMap((rows) =>
+        Effect.forEach(rows, (row) => deleteTasksForThread(row.thread_id), { discard: true }),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not sweep schedule tasks of deleted threads", { cause }),
+      ),
+    );
 
     const runNow: ScheduledTaskService["Service"]["runNow"] = (input: ScheduledTaskRunNowInput) =>
       Effect.gen(function* () {

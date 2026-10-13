@@ -3,15 +3,18 @@ import * as NodeUtil from "node:util";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
-import { ScheduledTaskError } from "@t3tools/contracts";
+import { type OrchestrationV2DomainEvent, ScheduledTaskError } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -32,6 +35,7 @@ const insertRow = (
     status: string;
     scheduleJson?: string;
     prompt?: string;
+    threadId?: string | null;
   },
   now: string,
 ) =>
@@ -42,7 +46,7 @@ const insertRow = (
     enabled: row.enabled,
     schedule_json: row.scheduleJson ?? '{"type":"interval","everyMs":60000}',
     project_id: "project:test",
-    thread_id: null,
+    thread_id: row.threadId ?? null,
     workspace_strategy_json: '{"type":"root"}',
     model_selection_json: '{"instanceId":"codex","model":"gpt-5"}',
     runtime_mode: "full-access",
@@ -350,4 +354,70 @@ it.effect(
         }),
       );
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("deletes the tasks bound to a thread when the thread is deleted", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-09-09T12:00:00.000Z";
+    for (const [id, threadId] of [
+      ["bound-deleted-offline", "thread:deleted-offline"],
+      ["bound-deleted-live", "thread:deleted-live"],
+      ["bound-live", "thread:live"],
+      ["unbound", null],
+    ] as const) {
+      yield* insertRow(sql, { id, threadId, next: null, enabled: 0, status: "never" }, now);
+    }
+    // Deleted while the server was down.
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        created_at, updated_at, deleted_at, payload_json
+      )
+      VALUES (
+        'thread:deleted-offline', 'project:test', 'Deleted', 'codex', 'full-access', 'default',
+        ${now}, ${now}, ${now}, '{}'
+      )
+    `;
+    const domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
+    const watching = yield* Deferred.make<void>();
+
+    yield* Effect.gen(function* () {
+      const context = yield* Layer.build(
+        Layer.provideMerge(
+          ScheduledTaskService.layer,
+          Layer.mergeAll(
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              streamDomainEvents: Stream.unwrap(
+                PubSub.subscribe(domainEvents).pipe(
+                  Effect.tap(() => Deferred.succeed(watching, undefined)),
+                  Effect.map((subscription) => Stream.fromSubscription(subscription)),
+                ),
+              ),
+            }),
+            Layer.mock(SecretRequests.SecretRequests)({}),
+            NodeCrypto.layer,
+            Scheduler.layer,
+          ),
+        ),
+      );
+      const service = Context.get(context, ScheduledTaskService.ScheduledTaskService);
+      const taskIds = service
+        .list()
+        .pipe(Effect.map(({ tasks }) => tasks.map((task) => task.id).toSorted()));
+      assert.deepEqual(yield* taskIds, ["bound-deleted-live", "bound-live", "unbound"]);
+
+      yield* Deferred.await(watching);
+      yield* PubSub.publish(domainEvents, {
+        type: "thread.deleted",
+        threadId: "thread:deleted-live",
+      } as unknown as OrchestrationV2DomainEvent);
+      yield* service.subscribeList().pipe(
+        Stream.filter(({ tasks }) => !tasks.some((task) => task.id === "bound-deleted-live")),
+        Stream.runHead,
+      );
+      assert.deepEqual(yield* taskIds, ["bound-live", "unbound"]);
+    }).pipe(Effect.scoped);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
