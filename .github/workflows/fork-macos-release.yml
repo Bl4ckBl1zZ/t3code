@@ -88,6 +88,10 @@ jobs:
       T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
+      # Installed fork builds keep their Electron profile (Local Storage,
+      # IndexedDB, Windows credential keys) in this folder under the app data
+      # directory; upstream's packaged default is t3code-v2.
+      T3CODE_DESKTOP_USER_DATA_DIR_NAME: t3code
     steps:
       - name: Require T3 Connect public config
         shell: bash

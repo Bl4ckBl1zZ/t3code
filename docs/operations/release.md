@@ -544,7 +544,9 @@ Checklist:
    - Team has rights to create Developer ID certificates.
 2. Create an explicit App ID for `com.t3tools.t3code` and enable Associated Domains. A fork that
    signs its own build sets `T3CODE_DESKTOP_APP_ID` to its App ID; the packager uses it for the
-   bundle identifier and the passkey keychain group.
+   bundle identifier and the passkey keychain group. Its JS bundle build can also set
+   `T3CODE_DESKTOP_USER_DATA_DIR_NAME` to keep the Electron profile folder its installed builds
+   already use (packaged builds otherwise use `t3code-v2`).
 3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
    App ID with Associated Domains enabled.
 4. Export the certificate + private key as `.p12` from Keychain.

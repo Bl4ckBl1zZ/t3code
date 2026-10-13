@@ -84,6 +84,14 @@ const make = Effect.gen(function* () {
   const load = Effect.fn("desktop.legacyLocalStorage.load")(function* (userDataPath: string) {
     // Development already shares its profile between versions.
     if (environment.isDevelopment) return;
+    // A build pinned to its V1 profile already has that Local Storage.
+    if (
+      V1_PROFILE_NAMES.some(
+        (name) => path.join(environment.appDataDirectory, name) === userDataPath,
+      )
+    ) {
+      return;
+    }
     const marker = path.join(userDataPath, MARKER_FILE_NAME);
     if (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))) return;
     yield* Ref.set(markerPath, Option.some(marker));
