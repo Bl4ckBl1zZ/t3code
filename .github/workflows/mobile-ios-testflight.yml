@@ -1,0 +1,151 @@
+name: iOS TestFlight
+
+# Builds the Expo app in apps/mobile and ships it to TestFlight on a
+# GitHub-hosted macOS runner: expo prebuild -> xcodebuild archive -> export ->
+# altool upload. No EAS service is involved: identity comes from the
+# provisioning profiles, the build number from App Store Connect, and OTA
+# updates stay off because no updates URL is configured.
+#
+# This replaces the fork's SwiftUI client under the same App Store record and
+# bundle ids (com.t3code.dev, .widgets, .sharing), so TestFlight users receive
+# it as an update. scripts/ios-release.ts and scripts/lib/ios-release.ts hold
+# the logic; apps/mobile/scripts/ios-testflight.sh drives it.
+#
+# Every merge to main ships. A release can also be cut by pushing a v* or
+# fork-v* tag by hand (tags created with GITHUB_TOKEN do not start runs).
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+      - "fork-v*"
+  workflow_dispatch:
+    inputs:
+      build-number:
+        description: "Override the build number instead of asking App Store Connect"
+        required: false
+        type: string
+      skip-upload:
+        description: "Archive and export without uploading to TestFlight"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  # Newest merge wins, so TestFlight only receives head of main. The build
+  # number is re-resolved from App Store Connect on every run, so a cancelled
+  # run does not strand one.
+  cancel-in-progress: true
+
+jobs:
+  build-and-submit:
+    name: Build iOS app and submit to TestFlight
+    runs-on: macos-26
+    timeout-minutes: 120
+    environment:
+      name: production
+    env:
+      APP_VARIANT: production
+      # Compiled into the bundle by `expo prebuild` and the embedded app config.
+      # A missing Clerk key or relay URL ships a build that cannot sign in, so
+      # ios-release.ts check-config fails the run instead.
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      # Associated domains (passkeys, app links) for the fork's Clerk instance.
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+      # Deliberately not `https://${{ vars.RELAY_DOMAIN }}`: with the variable
+      # unset that yields a truthy "https://".
+      T3CODE_RELAY_URL: ${{ vars.RELAY_DOMAIN && format('https://{0}', vars.RELAY_DOMAIN) || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        # The newest stable Xcode on the image; the app builds with the newest
+        # iOS SDK so SDK-gated native features compile in.
+        run: |
+          set -euo pipefail
+          xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|_rc' | sort -V | tail -n 1)"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Expose pnpm
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+
+      - name: Restore CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: cocoapods-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            cocoapods-${{ runner.os }}-
+
+      - name: Materialize signing credentials
+        id: credentials
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_MAIN_PROFILE_BASE64: ${{ secrets.APPLE_MAIN_APPSTORE_PROFILE_BASE64 }}
+          APPLE_WIDGETS_PROFILE_BASE64: ${{ secrets.APPLE_WIDGETS_APPSTORE_PROFILE_BASE64 }}
+          APPLE_SHARING_PROFILE_BASE64: ${{ secrets.APPLE_SHARING_APPSTORE_PROFILE_BASE64 }}
+          APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          # Outside the workspace so `expo prebuild --clean` cannot sweep it and
+          # no key can be committed by accident.
+          credentials="${RUNNER_TEMP}/ios-credentials"
+          mkdir -p "$credentials"
+          chmod 700 "$credentials"
+          printf '%s' "$APPLE_DISTRIBUTION_P12_BASE64" | base64 -d > "$credentials/distribution.p12"
+          printf '%s' "$APPLE_MAIN_PROFILE_BASE64" | base64 -d > "$credentials/main.mobileprovision"
+          printf '%s' "$APPLE_WIDGETS_PROFILE_BASE64" | base64 -d > "$credentials/widgets.mobileprovision"
+          printf '%s' "$APPLE_SHARING_PROFILE_BASE64" | base64 -d > "$credentials/sharing.mobileprovision"
+          printf '%s' "$APPLE_API_KEY_VALUE" > "$credentials/asc-api-key.p8"
+          echo "dir=$credentials" >> "$GITHUB_OUTPUT"
+
+      - name: Build and upload to TestFlight
+        env:
+          APPLE_DISTRIBUTION_P12: ${{ steps.credentials.outputs.dir }}/distribution.p12
+          APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          APPLE_MAIN_PROFILE: ${{ steps.credentials.outputs.dir }}/main.mobileprovision
+          APPLE_WIDGETS_PROFILE: ${{ steps.credentials.outputs.dir }}/widgets.mobileprovision
+          APPLE_SHARING_PROFILE: ${{ steps.credentials.outputs.dir }}/sharing.mobileprovision
+          ASC_API_KEY_PATH: ${{ steps.credentials.outputs.dir }}/asc-api-key.p8
+          ASC_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+          # The fork's App Store Connect record, which the SwiftUI client
+          # shipped to before; overridable for another fork.
+          ASC_APP_ID: ${{ vars.ASC_APP_ID || '6796384276' }}
+          # The App Store bundle id the profiles must be for. Catches a wrong
+          # profile secret before the 20-minute archive, not at upload.
+          T3CODE_IOS_EXPECTED_BUNDLE_ID: com.t3code.dev
+          T3CODE_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
+          # Only main and release tags reach TestFlight. Dispatching against a
+          # branch archives and exports but stops before uploading.
+          SKIP_UPLOAD: >-
+            ${{ (inputs.skip-upload || (github.ref != 'refs/heads/main'
+            && !startsWith(github.ref, 'refs/tags/'))) && '1' || '' }}
+        run: ./apps/mobile/scripts/ios-testflight.sh
+
+      - name: Upload IPA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-production-ipa
+          path: apps/mobile/build/export/*.ipa
+          if-no-files-found: warn
