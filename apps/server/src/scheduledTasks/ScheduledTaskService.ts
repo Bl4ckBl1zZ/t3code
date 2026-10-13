@@ -45,6 +45,7 @@ import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { forkParked } from "../serverActivation.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -662,8 +663,12 @@ export const layer = Layer.effect(
         UPDATE scheduled_tasks
         SET updated_at = ${input.completedAtIso},
             next_run_at = ${input.nextRunAtIso},
-            last_run_status = ${input.status},
-            last_run_error = ${input.error},
+            -- A preparation failure can be reported before the launch returns.
+            last_run_status = CASE
+              WHEN ${input.status} = 'succeeded' AND last_run_error IS NOT NULL THEN 'failed'
+              ELSE ${input.status}
+            END,
+            last_run_error = COALESCE(${input.error}, last_run_error),
             run_count = run_count + 1
         WHERE task_id = ${input.id}
           AND last_run_status = 'running'
@@ -671,6 +676,39 @@ export const layer = Layer.effect(
       `.pipe(
         Effect.mapError((cause) =>
           taskError("Could not record schedule task run.", { taskId: input.id, cause }),
+        ),
+      );
+
+    // Workspace preparation continues after `launch` returns, so a launched
+    // run can still fail once this fire was recorded. Guarded on the run's
+    // start time so a later fire is never touched; a failure reported while
+    // the run is still recording is kept by markCompleted.
+    const markPreparationFailed = (input: {
+      readonly id: ScheduledTaskId;
+      readonly startedAtIso: string;
+      readonly error: string;
+    }) =>
+      Effect.gen(function* () {
+        const now = yield* localNow;
+        yield* sql`
+          UPDATE scheduled_tasks
+          SET updated_at = ${iso(now)},
+              last_run_status = CASE
+                WHEN last_run_status = 'succeeded' THEN 'failed'
+                ELSE last_run_status
+              END,
+              last_run_error = ${input.error}
+          WHERE task_id = ${input.id}
+            AND last_run_at = ${input.startedAtIso}
+            AND last_run_status IN ('running', 'succeeded')
+        `;
+        yield* notifyChanged;
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not record schedule task preparation failure", {
+            taskId: input.id,
+            cause,
+          }),
         ),
       );
 
@@ -811,6 +849,8 @@ export const layer = Layer.effect(
                   },
                   createdBy: active.createdBy,
                   creationSource: active.creationSource,
+                  onPreparationFailure: (error) =>
+                    markPreparationFailed({ id: active.id, startedAtIso, error }),
                 }),
               )
             : yield* Effect.exit(
@@ -1155,6 +1195,56 @@ export const layer = Layer.effect(
         Effect.andThen(notifyChanged),
         Effect.as({ id: input.id }),
       );
+
+    // A thread-bound task posts into its thread, so once the thread is deleted
+    // every run could only fail. Thread deletion is permanent, so the tasks go
+    // with it.
+    const deleteTasksForThread = (threadId: string) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ readonly task_id: string }>`
+          SELECT task_id FROM scheduled_tasks WHERE thread_id = ${threadId}
+        `;
+        const ids = rows.flatMap((row) => Option.toArray(decodeTaskId(row.task_id)));
+        if (ids.length === 0) return;
+        yield* Effect.forEach(ids, (id) => deleteTask({ id }), { discard: true });
+        yield* Effect.logInfo("Deleted schedule tasks bound to a deleted thread", {
+          threadId,
+          taskIds: ids,
+        });
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not delete schedule tasks bound to a deleted thread", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+
+    // Every delete path (a thread, or a project with its threads) emits
+    // thread.deleted. The sweep covers deletions while the server was down.
+    yield* forkParked(
+      Stream.runForEach(threadManagement.streamDomainEvents, (event) =>
+        event.type === "thread.deleted" ? deleteTasksForThread(event.threadId) : Effect.void,
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Schedule task thread-deletion watch stopped", { cause }),
+        ),
+      ),
+    );
+    yield* sql<{ readonly thread_id: string }>`
+      SELECT DISTINCT task.thread_id
+      FROM scheduled_tasks AS task
+      JOIN orchestration_v2_projection_threads AS thread
+        ON thread.thread_id = task.thread_id
+      WHERE thread.deleted_at IS NOT NULL
+    `.pipe(
+      Effect.flatMap((rows) =>
+        Effect.forEach(rows, (row) => deleteTasksForThread(row.thread_id), { discard: true }),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not sweep schedule tasks of deleted threads", { cause }),
+      ),
+    );
 
     const runNow: ScheduledTaskService["Service"]["runNow"] = (input: ScheduledTaskRunNowInput) =>
       Effect.gen(function* () {

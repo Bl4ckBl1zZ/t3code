@@ -94,12 +94,18 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /**
+   * Called when workspace preparation fails, which happens after `launch` has
+   * returned. Callers that record the launch outcome themselves, such as
+   * scheduled tasks, use it to report the run as failed. A retry does not call it.
+   */
+  readonly onPreparationFailure?: (detail: string) => Effect.Effect<void>;
 }
 
 /** What workspace preparation reads from a launch; a retry rebuilds it from the run. */
 type PreparationInput = Pick<
   ThreadLaunchInput,
-  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage"
+  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage" | "onPreparationFailure"
 > & {
   /**
    * Set when a retry reuses the worktree its failed attempt created and
@@ -679,12 +685,12 @@ const make = Effect.gen(function* () {
   });
 
   const failPreparedRun = (
-    input: Pick<PreparationInput, "commandId">,
+    input: Pick<PreparationInput, "commandId" | "onPreparationFailure">,
     threadId: ThreadId,
     runId: RunId | null,
     cause: unknown,
   ) =>
-    runId === null
+    (runId === null
       ? Effect.logWarning("Thread workspace preparation failed", {
           commandId: input.commandId,
           threadId,
@@ -712,7 +718,20 @@ const make = Effect.gen(function* () {
                 persistCause,
               }),
             ),
-          );
+          )
+    ).pipe(
+      Effect.andThen(
+        input.onPreparationFailure?.(failureDetail(cause)).pipe(
+          Effect.catchCause((notifyCause) =>
+            Effect.logWarning("Failed to report thread workspace preparation failure", {
+              commandId: input.commandId,
+              threadId,
+              notifyCause,
+            }),
+          ),
+        ) ?? Effect.void,
+      ),
+    );
 
   const reservePreparation = (commandId: CommandId) =>
     Ref.modify(scheduledLaunches, (scheduled) => {

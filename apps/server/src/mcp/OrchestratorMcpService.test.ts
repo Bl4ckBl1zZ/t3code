@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -19,6 +20,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 
 import {
   DispatchModeLimit,
@@ -34,6 +36,9 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { buildUnavailableProviderSnapshot } from "../provider/unavailableProviderSnapshot.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
@@ -2166,6 +2171,77 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.equal(updated.scheduledTaskId, bound.id);
         assert.equal(updated.webhookUrl, undefined);
       }),
+    );
+
+    it.effect("does not recreate a task deleted while an edit was in flight", () =>
+      Effect.gen(function* () {
+        const realTasks = yield* ScheduledTaskService.ScheduledTaskService;
+        const { task: created } = yield* realTasks.upsert({
+          title: "Hourly",
+          prompt: "Check the build",
+          enabled: true,
+          schedule: { type: "interval", everyMs: 3_600_000 },
+          projectId,
+          threadId: null,
+          workspaceStrategy: { type: "root" },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+        });
+        // The user deletes the task right after the edit loaded it.
+        const deletingAfterLoad = ScheduledTaskService.ScheduledTaskService.of({
+          ...realTasks,
+          list: () => realTasks.list().pipe(Effect.tap(() => realTasks.delete({ id: created.id }))),
+        });
+        const error = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.flatMap((mcp) =>
+            mcp.updateScheduledTask(supervisedClient, {
+              scheduledTaskId: created.id,
+              prompt: "Something else",
+            }),
+          ),
+          Effect.flip,
+          Effect.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  NodeServices.layer,
+                  Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+                  ServerSettings.layerTest(),
+                  Layer.mock(ProviderRegistry.ProviderRegistry)({
+                    getProviders: Effect.succeed([]),
+                  }),
+                  Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+                    list: () => Effect.succeed([]),
+                  }),
+                  Layer.mock(ProjectService.ProjectService)({}),
+                  Layer.mock(SecretRequests.SecretRequests)({}),
+                  Layer.succeed(ScheduledTaskService.ScheduledTaskService, deletingAfterLoad),
+                ),
+              ),
+            ),
+          ),
+        );
+        assert.equal(error.code, "orchestration_error");
+        assert.deepEqual((yield* realTasks.list()).tasks, []);
+      }).pipe(
+        Effect.provide(
+          ScheduledTaskService.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+                Layer.mock(ThreadManagementService.ThreadManagementService)({
+                  streamDomainEvents: Stream.never,
+                }),
+                Layer.mock(SecretRequests.SecretRequests)({}),
+                NodeCrypto.layer,
+                Scheduler.layer,
+              ),
+            ),
+            Layer.provide(SqlitePersistence.layerMemory),
+          ),
+        ),
+      ),
     );
   });
 

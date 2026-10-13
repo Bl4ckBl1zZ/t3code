@@ -1,12 +1,15 @@
 import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { forkParked } from "../serverActivation.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -231,6 +234,9 @@ export const layer: Layer.Layer<
 
     const supersedableThreadEventTypes = new Set(SUPERSEDABLE_THREAD_EVENT_TYPES);
     const COMPACTION_PAGE_SIZE = 500;
+    const INCREMENTAL_AUTO_VACUUM = 2;
+    // 8 MiB at the default 4 KiB page size.
+    const INCREMENTAL_VACUUM_PAGES = 2048;
 
     /**
      * Scan newest first to retain the newest state for each entity.
@@ -358,10 +364,25 @@ export const layer: Layer.Layer<
         if (rows.length < COMPACTION_PAGE_SIZE) break;
       }
 
-      const freelistRows = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
+      const freelistCount = sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`.pipe(
+        Effect.map((rows) => rows[0]?.freelist_count ?? 0),
+      );
+      const autoVacuumRows = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum`;
+      // Databases created with incremental auto-vacuum hand the freed pages
+      // back to the filesystem, a few megabytes per statement.
+      if (autoVacuumRows[0]?.auto_vacuum === INCREMENTAL_AUTO_VACUUM) {
+        let freePages = yield* freelistCount;
+        while (freePages > 0) {
+          yield* sql.unsafe(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_PAGES})`);
+          const remaining = yield* freelistCount;
+          if (remaining >= freePages) break;
+          freePages = remaining;
+          yield* Effect.yieldNow;
+        }
+      }
+
       const pageSizeRows = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
-      const reclaimableBytes =
-        (freelistRows[0]?.freelist_count ?? 0) * (pageSizeRows[0]?.page_size ?? 0);
+      const reclaimableBytes = (yield* freelistCount) * (pageSizeRows[0]?.page_size ?? 0);
 
       return { deletedEventCount, deletedReceiptCount, reclaimableBytes };
     });
@@ -371,5 +392,35 @@ export const layer: Layer.Layer<
       rebuild: mapError("rebuild")(rebuild),
       compactEventStore: mapError("compact event store")(compactEventStore),
     });
+  }),
+);
+
+// Startup is busy reconnecting clients and recovering runs, and nothing depends
+// on compaction, so the first pass waits. Each pass walks the whole log in
+// short pages, so it runs rarely.
+export const EVENT_STORE_COMPACTION_START_DELAY = Duration.minutes(10);
+export const EVENT_STORE_COMPACTION_INTERVAL = Duration.hours(24);
+
+/** Compacts the event store shortly after the server is active, then daily. */
+export const layerCompactionWorker = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const maintenance = yield* ProjectionMaintenanceV2;
+    const compact = maintenance.compactEventStore.pipe(
+      Effect.tap((summary) =>
+        summary.deletedEventCount === 0 && summary.deletedReceiptCount === 0
+          ? Effect.void
+          : Effect.logInfo("Compacted orchestration event store", summary),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to compact orchestration event store", { cause }),
+      ),
+    );
+    yield* forkParked(
+      Effect.sleep(EVENT_STORE_COMPACTION_START_DELAY).pipe(
+        Effect.andThen(
+          compact.pipe(Effect.repeat(Schedule.spaced(EVENT_STORE_COMPACTION_INTERVAL))),
+        ),
+      ),
+    );
   }),
 );

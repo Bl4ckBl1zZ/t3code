@@ -312,6 +312,27 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(harness.onData.mock.calls[3]?.[0]).toContain(":3");
   });
 
+  it("keeps unhandled Cmd chords out of the shell unless Kitty mode can encode them", async () => {
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+
+    const save = key(surface, "s", "KeyS", { metaKey: true });
+    key(surface, "s", "KeyS", { metaKey: true }, "keyup");
+    expect(harness.onData).not.toHaveBeenCalled();
+    // The default action stays intact for app and native menu shortcuts.
+    expect(save.defaultPrevented).toBe(false);
+
+    key(surface, "c", "KeyC", { ctrlKey: true });
+    expect(harness.onData).toHaveBeenLastCalledWith("\u0003");
+
+    surface.write("\x1b[>1u");
+    harness.onData.mockClear();
+    key(surface, "s", "KeyS", { metaKey: true });
+    expect(harness.onData).toHaveBeenCalledTimes(1);
+    expect(harness.onData.mock.calls[0]?.[0]).not.toBe("s");
+  });
+
   it("selects full history and keeps selection coordinates available outside the viewport", async () => {
     vi.stubGlobal("navigator", { platform: "Linux x86_64" });
     const harness = createHarness();

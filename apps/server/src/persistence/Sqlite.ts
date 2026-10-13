@@ -18,6 +18,11 @@ const layerSetup = Layer.effectDiscard(
     // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
     yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
+    // Lets event-store compaction return freed pages to the filesystem. It only
+    // applies to a database with no tables yet and must precede journal_mode,
+    // which writes the header. Existing databases keep their mode; only an
+    // offline VACUUM converts them.
+    yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
     // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
     // largest size until the last connection closes.

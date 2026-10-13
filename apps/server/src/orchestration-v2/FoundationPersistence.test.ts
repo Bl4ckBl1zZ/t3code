@@ -350,6 +350,103 @@ it.effect("keeps other database work runnable while discovering compaction candi
   ).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("returns pages freed by compaction to the filesystem", () =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const sql = yield* SqlClient.SqlClient;
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:foundation-vacuum");
+    const messageId = MessageId.make("message:foundation-vacuum");
+    // Streaming snapshots of one message: every version but the last is superseded.
+    yield* eventSink.write({
+      events: [
+        threadCreatedEvent({
+          id: "event:foundation-vacuum:create",
+          thread: makeThread(threadId, now),
+          now,
+        }),
+        ...Array.from({ length: 400 }, (_, index): OrchestrationV2DomainEvent => ({
+          id: EventId.make(`event:foundation-vacuum:${index}`),
+          type: "message.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: messageId,
+            threadId,
+            runId: null,
+            nodeId: null,
+            role: "user",
+            text: `${index}`.padEnd(16_000, "x"),
+            attachments: [],
+            streaming: index < 399,
+            createdAt: now,
+            updatedAt: now,
+          },
+        })),
+      ],
+    });
+    const pageCount = sql<{ readonly page_count: number }>`PRAGMA page_count`.pipe(
+      Effect.map((rows) => rows[0]?.page_count ?? 0),
+    );
+    const before = yield* pageCount;
+
+    const summary = yield* maintenance.compactEventStore;
+
+    assert.equal(summary.deletedEventCount, 399);
+    assert.equal(summary.reclaimableBytes, 0);
+    // About 6 MB of superseded snapshots left the file, not just its free list.
+    assert.isBelow(yield* pageCount, before - 1_000);
+  }).pipe(Effect.provide(Layer.fresh(layerTest))),
+);
+
+it.effect(
+  "compacts the event store after a startup delay, then daily, from the layer-owned worker",
+  () =>
+    Effect.gen(function* () {
+      const runs = yield* Queue.unbounded<void>();
+      let failNext = true;
+      const maintenance = ProjectionMaintenance.ProjectionMaintenanceV2.of({
+        verify: Effect.die("unexpected verify"),
+        rebuild: Effect.die("unexpected rebuild"),
+        compactEventStore: Queue.offer(runs, undefined).pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              if (!failNext) {
+                return Effect.succeed({
+                  deletedEventCount: 0,
+                  deletedReceiptCount: 0,
+                  reclaimableBytes: 0,
+                });
+              }
+              failNext = false;
+              return Effect.fail(
+                new ProjectionMaintenance.ProjectionMaintenanceError({ operation: "compact" }),
+              );
+            }),
+          ),
+        ),
+      });
+      yield* Layer.build(
+        ProjectionMaintenance.layerCompactionWorker.pipe(
+          Layer.provide(Layer.succeed(ProjectionMaintenance.ProjectionMaintenanceV2, maintenance)),
+        ),
+      );
+      yield* Effect.yieldNow;
+      assert.isTrue(Option.isNone(yield* Queue.poll(runs)));
+
+      yield* TestClock.adjust(ProjectionMaintenance.EVENT_STORE_COMPACTION_START_DELAY);
+      yield* Queue.take(runs);
+      // A failed pass is logged and does not stop the schedule.
+      yield* TestClock.adjust(ProjectionMaintenance.EVENT_STORE_COMPACTION_INTERVAL);
+      yield* Queue.take(runs);
+      yield* TestClock.adjust(ProjectionMaintenance.EVENT_STORE_COMPACTION_INTERVAL);
+      yield* Queue.take(runs);
+    }).pipe(Effect.scoped),
+);
+
 it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
   it.effect("projects oversized tool bodies before both replay and live RPC retention", () =>
     Effect.scoped(
