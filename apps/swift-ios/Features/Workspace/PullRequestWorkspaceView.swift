@@ -14,7 +14,9 @@ struct PullRequestWorkspaceView: View {
 
     private var supportedEnvironments: [FeatureEnvironment] { model.snapshot.environments.filter { $0.supportsPullRequests == true } }
     private var requestKey: String {
-        preferences.requestKey + "|" + supportedEnvironments.map(\.id).sorted().joined(separator: ",")
+        // Reachability is part of the key: a repository on several machines
+        // is listed from a connected one, so it decides which machine answers.
+        preferences.requestKey + "|" + supportedEnvironments.map { "\($0.id):\($0.connectionState == .connected)" }.sorted().joined(separator: ",")
             + "|" + model.snapshot.projects.map { "\($0.id):\($0.repositoryCanonicalKey ?? "")" }.sorted().joined(separator: ",")
     }
 
@@ -42,12 +44,18 @@ struct PullRequestWorkspaceView: View {
                 .t3SheetToolbar(.close)
                 .t3NavigationChrome()
                 .navigationDestination(for: PullRequestWorkspaceDestination.self) { destination in
+                    // An offline environment's pull request loads from a
+                    // connected copy of its repository instead.
+                    let scope = NativePullRequestWorkspaceLogic.fallbackScope(
+                        for: destination.scope, projects: model.snapshot.projects, environments: model.snapshot.environments
+                    ) ?? destination.scope
                     PullRequestDetailSheet(
-                        access: FeaturePullRequestAccess(manager: manager, scope: destination.scope) { action, phase in
+                        access: FeaturePullRequestAccess(manager: manager, scope: scope) { action, phase in
                             feed.noteAction(action, phase: phase, rowID: destination.rowID)
                         },
                         number: destination.number
                     )
+                    .id(scope.projectID)
                 }
                 .sheet(isPresented: $showingFilters) {
                     PullRequestWorkspaceFilters(preferences: $preferences, environments: supportedEnvironments,

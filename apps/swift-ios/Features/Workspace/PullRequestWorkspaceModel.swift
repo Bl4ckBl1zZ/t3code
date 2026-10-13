@@ -113,7 +113,7 @@ final class NativePullRequestWorkspaceModel {
 
     func reload(manager: any FeatureProjectPullRequestManaging, environments: [FeatureEnvironment], projects: [FeatureProject], preferences: NativePullRequestPreferences) async {
         let assigned = NativePullRequestWorkspaceLogic.assignedProjects(projects, environments: environments, preferences: preferences)
-        let order = environments.sorted { lhs, rhs in lhs.isActive != rhs.isActive ? lhs.isActive : lhs.id < rhs.id }
+        let order = NativePullRequestWorkspaceLogic.listingOrder(environments)
         lanes = order.flatMap { environment -> [Lane] in
             let ids = assigned[environment.id] ?? []
             // Read priority groups independently, so an older authored/review
