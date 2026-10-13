@@ -187,6 +187,9 @@ import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../../keybindings";
+import { useComposerVoiceInput } from "../../voice/useComposerVoiceInput";
+import { getVoiceSessionState } from "../../voice/webVoiceSession";
+import { ComposerVoiceButton } from "./ComposerVoiceButton";
 import {
   type TerminalContextDraft,
   type TerminalContextSelection,
@@ -4002,6 +4005,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   }, [composerCursor, isLiteralPendingAnswer, promptRef]);
 
+  const voiceInput = useComposerVoiceInput({
+    draftTarget: composerDraftTarget,
+    draftKey: composerDraftTargetKey,
+    readSnapshot: readComposerSnapshot,
+    replaceRange: applyPromptReplacement,
+  });
+
   const resolveActiveComposerTrigger = useCallback((): {
     snapshot: { value: string; cursor: number; expandedCursor: number };
     trigger: ComposerTrigger | null;
@@ -4263,6 +4273,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         event?.preventDefault();
         return;
       }
+      // Dictation for this draft lands after the send, so wait for it.
+      const voiceSession = getVoiceSessionState();
+      if (
+        voiceSession.phase !== "idle" &&
+        voiceSession.phase !== "failed" &&
+        voiceSession.targetKey === composerDraftTargetKey
+      ) {
+        event?.preventDefault();
+        toastManager.add({
+          type: "info",
+          title: "Still dictating.",
+          description: "Send again once the transcript appears.",
+        });
+        return;
+      }
       // A send while a pasted image is still compressing would strand that
       // image: the turn snapshot wouldn't include it, and it would surface
       // in the *next* draft instead. Only oversized images hit this — small
@@ -4322,6 +4347,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThreadId,
       activePendingProgress,
       attachmentTargetKey,
+      composerDraftTargetKey,
       onTypingGuardSend,
       blurMobileComposerAfterSend,
       environmentId,
@@ -5776,6 +5802,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isRevertingCheckpoint,
     terminalOpen,
   ]);
+
+  const toggleVoiceInput = voiceInput.toggle;
+  const voiceInputEnabled = voiceInput.target !== null;
+  useEffect(() => {
+    if (!voiceInputEnabled) return;
+    const handler = (event: globalThis.KeyboardEvent) => {
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: getTerminalFocusOwner() !== null,
+          terminalOpen,
+          modelPickerOpen: isComposerModelPickerOpen,
+        },
+      });
+      if (command !== "composer.voiceInput" || isCommandPaletteOpen()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleVoiceInput();
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [isComposerModelPickerOpen, keybindings, terminalOpen, toggleVoiceInput, voiceInputEnabled]);
 
   // ------------------------------------------------------------------
   // Callbacks: attachments
@@ -7726,6 +7773,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         <TooltipPopup>Attach files</TooltipPopup>
                       </Tooltip>
                     </>
+                  ) : null}
+                  {voiceInput.target ? (
+                    <ComposerVoiceButton
+                      target={voiceInput.target}
+                      disabled={
+                        isConnecting || isComposerApprovalState || isChoiceOnlyPendingQuestion
+                      }
+                      shortcutLabel={shortcutLabelForCommand(keybindings, "composer.voiceInput")}
+                      onBeforeStart={voiceInput.captureAnchor}
+                    />
                   ) : null}
                   <ComposerFooterPrimaryActions
                     compact={isComposerResting || isComposerPrimaryActionsCompact}

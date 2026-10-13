@@ -22,6 +22,7 @@ export type SettingsPath =
   | "/settings/snap-shot"
   | "/settings/providers"
   | "/settings/integrations"
+  | "/settings/voice-input"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/storage"
@@ -101,6 +102,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
   "/settings/integrations": "Integrations",
+  "/settings/voice-input": "Voice Input",
   "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
@@ -1003,6 +1005,34 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["pull request trusted environments shared credentials permissions read actions"],
   },
   {
+    id: "voice-input-language",
+    title: "Spoken language",
+    to: "/settings/voice-input",
+    searchTerms: ["voice input dictation microphone speech transcription language automatic"],
+    cloudOnly: true,
+  },
+  {
+    id: "voice-input-cleanup",
+    title: "Clean up transcripts",
+    to: "/settings/voice-input",
+    searchTerms: ["voice input dictation punctuation filler words verbatim"],
+    cloudOnly: true,
+  },
+  {
+    id: "voice-input-dictionary",
+    title: "Voice dictionary",
+    to: "/settings/voice-input",
+    searchTerms: ["voice input dictation names terms spelling vocabulary"],
+    cloudOnly: true,
+  },
+  {
+    id: "voice-input-usage",
+    title: "Voice input allowance",
+    to: "/settings/voice-input",
+    searchTerms: ["voice input dictation daily limit minutes usage quota"],
+    cloudOnly: true,
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",
@@ -1025,6 +1055,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/keybindings": null,
   "/settings/providers": null,
   "/settings/integrations": null,
+  "/settings/voice-input": null,
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",

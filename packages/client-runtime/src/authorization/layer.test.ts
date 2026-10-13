@@ -192,6 +192,9 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
     unregisterDevice: unexpected,
     registerLiveActivity: unexpected,
     getAgentActivitySnapshot: unexpected,
+    getVoiceInput: unexpected,
+    updateVoiceInputSettings: unexpected,
+    transcribeVoice: unexpected,
     resetTokenCache: Effect.void,
   });
   const layer = RemoteEnvironmentAuthorization.layer.pipe(

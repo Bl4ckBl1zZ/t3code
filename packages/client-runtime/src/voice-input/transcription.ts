@@ -1,11 +1,15 @@
 /** Cancellation is cooperative: settle only after the underlying work has stopped. */
 export type VoiceTranscriptionOptions = {
   readonly signal: AbortSignal;
+  /** Recorded length by the controller's clock; set when transcribing a finished recording. */
+  readonly durationSeconds?: number;
 };
 
 /** Binds a recording to its selected implementation and resolved locale. */
 export type PreparedVoiceTranscription = {
   readonly locale: string;
+  /** Recording stops by itself at this length; defaults to the controller's limit. */
+  readonly maxDurationSeconds?: number;
   readonly transcribe: (uri: string, options: VoiceTranscriptionOptions) => Promise<string>;
 };
 
@@ -14,6 +18,8 @@ export type VoiceTranscriber = {
 };
 
 export type VoiceTranscriptionErrorCode =
+  /** A transcription service refused the request; the message is shown to the user as is. */
+  | "rejected"
   | "unavailable"
   | "unsupported-locale"
   | "preparation-failed"

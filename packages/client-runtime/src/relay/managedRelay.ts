@@ -28,6 +28,12 @@ import {
   RelayProtectedError,
   type RelayProtectedError as RelayProtectedErrorType,
   RelayUnregisterDeviceEndpoint,
+  type RelayVoiceInputError,
+  type VoiceInputSettings,
+  type VoiceInputSettingsPatch,
+  type VoiceInputStatus,
+  type VoiceTranscriptionRequest,
+  type VoiceTranscriptionResponse,
 } from "@t3tools/contracts/relay";
 import { encodeOAuthScope, oauthScopeSetEquals } from "@t3tools/shared/oauthScope";
 import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
@@ -96,6 +102,9 @@ export const ManagedRelayRequestAction = Schema.Literals([
   "unregister relay mobile device",
   "register relay live activity",
   "read relay agent activity snapshot",
+  "read voice input status",
+  "update voice input settings",
+  "transcribe voice input",
 ]);
 export type ManagedRelayRequestAction = typeof ManagedRelayRequestAction.Type;
 
@@ -112,6 +121,9 @@ export const ManagedRelayRequestActivity = Schema.Literals([
   "Relay mobile device unregistration",
   "Relay Live Activity registration",
   "Relay agent activity snapshot",
+  "Voice input status request",
+  "Voice input settings update",
+  "Voice transcription",
 ]);
 export type ManagedRelayRequestActivity = typeof ManagedRelayRequestActivity.Type;
 
@@ -223,6 +235,8 @@ export class ManagedRelayDpopSigner extends Context.Service<
 >()("@t3tools/client-runtime/relay/managedRelay/ManagedRelayDpopSigner") {}
 
 export const MANAGED_RELAY_REQUEST_TIMEOUT_MS = 10_000;
+// Uploading a clip and waiting for the model takes longer than a control-plane call.
+const MANAGED_RELAY_TRANSCRIPTION_TIMEOUT_MS = 120_000;
 
 export interface ManagedRelayAccessTokenCacheEntry {
   readonly accountId: string;
@@ -300,6 +314,18 @@ export class ManagedRelayClient extends Context.Service<
     readonly getAgentActivitySnapshot: (input: {
       readonly clerkToken: string;
     }) => Effect.Effect<RelayAgentActivitySnapshotResponse, ManagedRelayClientError>;
+    readonly getVoiceInput: (input: {
+      readonly clerkToken: string;
+    }) => Effect.Effect<VoiceInputStatus, ManagedRelayClientError>;
+    readonly updateVoiceInputSettings: (input: {
+      readonly clerkToken: string;
+      readonly patch: VoiceInputSettingsPatch;
+    }) => Effect.Effect<VoiceInputSettings, ManagedRelayClientError>;
+    /** Fails with the relay's own RelayVoiceInputError for caps and transcription failures. */
+    readonly transcribeVoice: (input: {
+      readonly clerkToken: string;
+      readonly request: VoiceTranscriptionRequest;
+    }) => Effect.Effect<VoiceTranscriptionResponse, ManagedRelayClientError | RelayVoiceInputError>;
     readonly resetTokenCache: Effect.Effect<void>;
   }
 >()("@t3tools/client-runtime/relay/managedRelay/ManagedRelayClient") {}
@@ -333,12 +359,15 @@ function isRejectedDpopAccessToken(error: ManagedRelayClientError): boolean {
   );
 }
 
-function timeoutRelayRequest(activity: ManagedRelayRequestActivity) {
+function timeoutRelayRequest(
+  activity: ManagedRelayRequestActivity,
+  timeoutMs: number = MANAGED_RELAY_REQUEST_TIMEOUT_MS,
+) {
   return <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E | ManagedRelayClientError, R> =>
     effect.pipe(
-      Effect.timeoutOption(Duration.millis(MANAGED_RELAY_REQUEST_TIMEOUT_MS)),
+      Effect.timeoutOption(Duration.millis(timeoutMs)),
       Effect.flatMap(
         Option.match({
           onNone: () =>
@@ -349,7 +378,7 @@ function timeoutRelayRequest(activity: ManagedRelayRequestActivity) {
                 Effect.fail(
                   new ManagedRelayRequestTimeoutError({
                     activity,
-                    timeoutMs: MANAGED_RELAY_REQUEST_TIMEOUT_MS,
+                    timeoutMs,
                     traceId,
                   }),
                 ),
@@ -423,6 +452,9 @@ function disabledManagedRelayClient(relayUrl: string): ManagedRelayClient["Servi
     unregisterDevice: unavailable("clientRuntime.managedRelay.unregisterDevice"),
     registerLiveActivity: unavailable("clientRuntime.managedRelay.registerLiveActivity"),
     getAgentActivitySnapshot: unavailable("clientRuntime.managedRelay.getAgentActivitySnapshot"),
+    getVoiceInput: unavailable("clientRuntime.managedRelay.getVoiceInput"),
+    updateVoiceInputSettings: unavailable("clientRuntime.managedRelay.updateVoiceInputSettings"),
+    transcribeVoice: unavailable("clientRuntime.managedRelay.transcribeVoice"),
     resetTokenCache: Effect.void.pipe(
       Effect.withSpan("clientRuntime.managedRelay.resetTokenCache"),
     ),
@@ -926,6 +958,56 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
         );
       },
       Effect.withSpan("clientRuntime.managedRelay.registerLiveActivity"),
+      withRelayClientTracing,
+    ),
+    getVoiceInput: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .getVoiceInput({ headers: bearerHeaders(input.clerkToken) })
+          .pipe(
+            Effect.mapError(relayRequestError("read voice input status")),
+            timeoutRelayRequest("Voice input status request"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.getVoiceInput"),
+      withRelayClientTracing,
+    ),
+    updateVoiceInputSettings: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .updateVoiceInputSettings({
+            headers: bearerHeaders(input.clerkToken),
+            payload: input.patch,
+          })
+          .pipe(
+            Effect.mapError(relayRequestError("update voice input settings")),
+            timeoutRelayRequest("Voice input settings update"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.updateVoiceInputSettings"),
+      withRelayClientTracing,
+    ),
+    transcribeVoice: Effect.fnUntraced(
+      function* (input) {
+        yield* Effect.annotateCurrentSpan({
+          "voice.format": input.request.audio.format,
+          "voice.duration_seconds": input.request.durationSeconds,
+        });
+        return yield* client.client
+          .transcribeVoice({
+            headers: bearerHeaders(input.clerkToken),
+            payload: input.request,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error._tag === "RelayVoiceInputError"
+                ? error
+                : relayRequestError("transcribe voice input")(error),
+            ),
+            timeoutRelayRequest("Voice transcription", MANAGED_RELAY_TRANSCRIPTION_TIMEOUT_MS),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.transcribeVoice"),
       withRelayClientTracing,
     ),
     resetTokenCache: SynchronizedRef.set(cachedTokens, []).pipe(

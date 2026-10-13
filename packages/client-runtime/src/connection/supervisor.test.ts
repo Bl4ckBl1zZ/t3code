@@ -1549,6 +1549,9 @@ describe("EnvironmentSupervisor", () => {
         unregisterDevice: unused,
         registerLiveActivity: unused,
         getAgentActivitySnapshot: unused,
+        getVoiceInput: unused,
+        updateVoiceInputSettings: unused,
+        transcribeVoice: unused,
         resetTokenCache: Effect.void,
       });
       const layerHttp = RpcHttp.layerRemoteHttpClient(fetchFn);
