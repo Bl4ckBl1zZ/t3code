@@ -37,7 +37,7 @@ const OPENCODE_CUSTOM_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabil
 });
 
 describe("providerModelsFromSettings", () => {
-  it("publishes custom names and replaces options without overriding built-in models", () => {
+  it("renames a built-in model from a named entry but keeps its built-in options", () => {
     const defaults = createModelCapabilities({ optionDescriptors: [] });
     const builtIn = { slug: "built-in", name: "Official", isCustom: false, capabilities: defaults };
     const models = providerModelsFromSettings(
@@ -50,7 +50,7 @@ describe("providerModelsFromSettings", () => {
       defaults,
     );
     expect(models).toEqual([
-      builtIn,
+      { ...builtIn, name: "Override" },
       {
         slug: "private",
         name: "My model",
@@ -76,6 +76,25 @@ describe("providerModelsFromSettings", () => {
         capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES,
       },
     ]);
+  });
+
+  it("renames a built-in model when a named entry uses its slug", () => {
+    const capabilities = createModelCapabilities({ optionDescriptors: [] });
+    const models = providerModelsFromSettings(
+      [
+        {
+          slug: "gpt-5.5",
+          name: "GPT-5.5",
+          shortName: "5.5",
+          isCustom: false,
+          capabilities,
+        },
+      ],
+      [{ slug: "gpt-5.5", name: "Team GPT" }],
+      capabilities,
+    );
+
+    expect(models).toEqual([{ slug: "gpt-5.5", name: "Team GPT", isCustom: false, capabilities }]);
   });
 
   it("preserves a custom slug that collides with a provider alias", () => {

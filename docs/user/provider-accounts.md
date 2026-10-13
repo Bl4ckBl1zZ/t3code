@@ -22,6 +22,21 @@ change which model runs. Custom options replace that model's default option set;
 only option IDs supported by the provider affect requests. Servers that predate
 custom model definitions need an update before these editors can save them.
 
+To rename a built-in model on every client, edit the server's `settings.json` in its `userdata`
+directory. Add a custom model entry with the built-in model ID and a new name under that provider
+account:
+
+```json
+{
+  "providerInstances": {
+    "codex": {
+      "driver": "codex",
+      "config": { "customModels": [{ "slug": "gpt-5.5", "name": "Team GPT" }] }
+    }
+  }
+}
+```
+
 When an account is unavailable, the model picker and status banner can open
 its setup screen on the correct environment. Codex and Claude setup include an
 account-specific terminal with an install or sign-in command ready to review.

@@ -38,6 +38,19 @@ describe("deriveProviderModelsForDisplay", () => {
       }).map((model) => model.slug),
     ).toEqual(["server-model", "kept-custom"]);
   });
+
+  it("shows a renamed built-in once, as its built-in row", () => {
+    const liveModels: ReadonlyArray<ServerProviderModel> = [
+      { slug: "gpt-5.5", name: "Team GPT", isCustom: false, capabilities: null },
+    ];
+
+    expect(
+      deriveProviderModelsForDisplay({
+        liveModels,
+        customModels: [{ slug: "gpt-5.5", name: "Team GPT", capabilities: null }],
+      }),
+    ).toEqual(liveModels);
+  });
 });
 
 describe("provider environment helpers", () => {
