@@ -1,5 +1,6 @@
 /**
- * In-place upgrade for databases written by the T3 Code fork that shipped Hermes and T3 Work.
+ * In-place upgrade for databases written by the T3 Code fork that shipped Hermes, T3 Work and
+ * T3 Chat.
  *
  * Accepted: a migration journal whose ids from 36 are a contiguous prefix of the fork's own
  * history (`FORK_MIGRATIONS`, 36 `OrchestrationV2` through 69 `PullRequestReviewGuides`) that
@@ -17,8 +18,8 @@
  * 2. the three 055 index steps the fork never ran, 056, and 057 unless fork 064 already added it;
  * 3. one payload upcast: fork subagent workflows were written without `agents`;
  * 4. cancellation of pending `terminal.close-idle` effects, a fork-only effect type;
- * 5. removal of Hermes threads, whose provider this build does not have, and of Hermes project
- *    defaults (see `removeHermesThreads`);
+ * 5. removal of T3 Work and T3 Chat: the T3 Work project with every thread in it, Hermes threads
+ *    in any project, and Hermes project defaults (see `removeWorkAndHermes`);
  * 6. removal of fork-only tables and indexes;
  * 7. a journal rewrite to this build's 36..57, after which the migrator runs the rest.
  *
@@ -100,6 +101,9 @@ const FORK_ONLY_INDEXES = [
   "orchestration_v2_projection_messages_thread_run_idx",
 ];
 
+/** The fixed id of the project that held every T3 Work and T3 Chat conversation. */
+const T3_WORK_PROJECT_ID = "project:t3-work";
+
 // Every table that keys rows by a removed thread, with its thread column.
 const THREAD_ROWS = [
   ["orchestration_v2_projection_threads", "thread_id"],
@@ -180,19 +184,20 @@ const hasColumn = (table: string, column: string) =>
   });
 
 /**
- * Deletes every Hermes thread and every thread below one in its lineage, with their event
- * streams, receipts, effects, projections, and import state. Links from surviving threads
- * (context transfers, subagent rows) to a removed thread go too. A thread the user already
- * deleted that linked to a removed thread is removed with it, so a projection rebuild cannot
- * bring those links back, unless a thread below it is still live. Surviving threads' own events
- * keep any mention of a removed thread id, and a thread that started on Hermes and moved to
- * another provider stays. Project defaults that name Hermes are cleared. Git worktrees and files on disk are
- * not touched.
+ * Deletes T3 Work and T3 Chat, which this build does not have: the T3 Work project, every thread
+ * in it (T3 Chat conversations lived there too), every Hermes thread in any other project, and
+ * every thread below one of those in its lineage, with their event streams, receipts, effects,
+ * projections, scheduled tasks, and import state. Links from surviving threads (context
+ * transfers, subagent rows) to a removed thread go too. A thread the user already deleted that
+ * linked to a removed thread is removed with it, so a projection rebuild cannot bring those links
+ * back, unless a thread below it is still live. Surviving threads' own events keep any mention of
+ * a removed thread id. Project defaults that name Hermes are cleared. Git worktrees and files on
+ * disk are not touched.
  *
  * A thread is a Hermes thread when its provider instance is `hermes` or any instance a stored
  * provider session or thread recorded with the `hermes` driver.
  */
-const removeHermesThreads = Effect.gen(function* () {
+const removeWorkAndHermes = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`CREATE TEMP TABLE fork_hermes_instances (instance_id TEXT PRIMARY KEY)`;
   yield* sql`
@@ -213,6 +218,7 @@ const removeHermesThreads = Effect.gen(function* () {
       removed(thread_id, hermes) AS (
         SELECT thread_id, 1 FROM orchestration_v2_projection_threads
         WHERE default_provider IN (SELECT instance_id FROM fork_hermes_instances)
+          OR project_id = ${T3_WORK_PROJECT_ID}
         UNION
         SELECT child.thread_id, 0
         FROM orchestration_v2_projection_threads AS child
@@ -309,6 +315,38 @@ const removeHermesThreads = Effect.gen(function* () {
     yield* countRemoved(`${table}.${column}`);
   }
 
+  yield* sql`CREATE TEMP TABLE fork_removed_tasks (task_id TEXT PRIMARY KEY)`;
+  yield* sql`
+    INSERT INTO fork_removed_tasks (task_id)
+    SELECT task_id FROM scheduled_tasks
+    WHERE project_id = ${T3_WORK_PROJECT_ID}
+      OR thread_id IN (SELECT thread_id FROM fork_removed_threads)
+  `;
+  for (const table of [
+    "scheduled_task_webhook_relay_deliveries",
+    "scheduled_task_webhook_deliveries",
+  ]) {
+    if (!tables.has(table)) continue;
+    yield* sql`DELETE FROM ${sql(table)} WHERE task_id IN (SELECT task_id FROM fork_removed_tasks)`;
+    yield* countRemoved(table);
+  }
+  yield* sql`DELETE FROM scheduled_tasks WHERE task_id IN (SELECT task_id FROM fork_removed_tasks)`;
+  yield* countRemoved("scheduled_tasks");
+  yield* sql`DROP TABLE temp.fork_removed_tasks`;
+
+  yield* sql`
+    DELETE FROM orchestration_events
+    WHERE aggregate_kind = 'project' AND stream_id = ${T3_WORK_PROJECT_ID}
+  `;
+  yield* countRemoved("orchestration_events (T3 Work project)");
+  yield* sql`
+    DELETE FROM orchestration_command_receipts
+    WHERE aggregate_kind = 'project' AND aggregate_id = ${T3_WORK_PROJECT_ID}
+  `;
+  yield* countRemoved("orchestration_command_receipts (T3 Work project)");
+  yield* sql`DELETE FROM projection_projects WHERE project_id = ${T3_WORK_PROJECT_ID}`;
+  yield* countRemoved("projection_projects");
+
   // Like 044, rewrite the events too, so a projection rebuild keeps the default cleared.
   yield* sql`
     UPDATE projection_projects SET default_model_selection_json = NULL
@@ -328,7 +366,7 @@ const removeHermesThreads = Effect.gen(function* () {
   yield* sql`DROP TABLE temp.fork_removed_threads`;
   yield* sql`DROP TABLE temp.fork_hermes_instances`;
   return {
-    hermesThreads: threads?.hermes ?? 0,
+    workAndHermesThreads: threads?.hermes ?? 0,
     linkedThreads: threads?.linked ?? 0,
     removedRows,
   };
@@ -396,7 +434,7 @@ export const upgradeForkDatabase = Effect.fn("upgradeForkDatabase")(function* <E
         WHERE effect_type = 'terminal.close-idle' AND status IN ('pending', 'running')
       `;
 
-      const removed = yield* removeHermesThreads;
+      const removed = yield* removeWorkAndHermes;
 
       for (const index of FORK_ONLY_INDEXES) yield* sql`DROP INDEX IF EXISTS ${sql(index)}`;
       for (const table of FORK_ONLY_TABLES) yield* sql`DROP TABLE IF EXISTS ${sql(table)}`;
@@ -411,7 +449,7 @@ export const upgradeForkDatabase = Effect.fn("upgradeForkDatabase")(function* <E
       yield* Effect.log("Upgraded fork database in place").pipe(
         Effect.annotateLogs({
           forkMigrationId,
-          removedHermesThreads: removed.hermesThreads,
+          removedWorkAndHermesThreads: removed.workAndHermesThreads,
           removedLinkedThreads: removed.linkedThreads,
           removedRows: removed.removedRows,
         }),

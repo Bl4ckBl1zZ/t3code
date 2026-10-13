@@ -169,6 +169,7 @@ const insertThread = (input: {
   readonly parentThreadId?: string;
   readonly payload?: Record<string, unknown>;
   readonly deletedAt?: string;
+  readonly projectId?: string;
 }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -183,7 +184,8 @@ const insertThread = (input: {
         thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
         created_at, updated_at, deleted_at, payload_json
       )
-      VALUES (${input.id}, 'project-1', ${input.id}, ${input.instance}, 'full-access', 'default',
+      VALUES (${input.id}, ${input.projectId ?? "project-1"}, ${input.id}, ${input.instance},
+        'full-access', 'default',
         ${NOW}, ${NOW}, ${input.deletedAt ?? null}, ${payload})
     `;
     yield* insertEvent(input.id, "thread.created", {
@@ -254,6 +256,9 @@ const HERMES_THREADS = [
   "thread-hermes-child",
   "thread-hermes-custom",
   "thread-deleted-hermes-parent",
+  "thread-work",
+  "thread-work-chat",
+  "thread-work-subagent",
 ];
 const WORKFLOW = { name: "review", description: "Review", phases: [] };
 
@@ -369,10 +374,39 @@ const seedForkData = Effect.gen(function* () {
       default_model_selection_json
     )
     VALUES
-      ('project-hermes', 'T3 Work', '/tmp/work', '[]', ${NOW}, ${NOW},
+      ('project-hermes', 'Hermes default', '/tmp/hermes', '[]', ${NOW}, ${NOW},
         '{"instanceId":"hermes","model":"default"}'),
+      ('project:t3-work', 'T3 Work', '/tmp/t3-work', '[]', ${NOW}, ${NOW}, NULL),
       ('project-codex', 'Code', '/tmp/code', '[]', ${NOW}, ${NOW},
         '{"instanceId":"codex","model":"gpt-5.4"}')
+  `;
+  // T3 Work and T3 Chat conversations, on providers this build has.
+  yield* insertThread({ id: "thread-work", instance: "codex", projectId: "project:t3-work" });
+  yield* insertThread({
+    id: "thread-work-chat",
+    instance: "claudeAgent",
+    projectId: "project:t3-work",
+    payload: { workInboxRole: "chat" },
+  });
+  // A subagent outside the project, below a T3 Work thread.
+  yield* insertThread({
+    id: "thread-work-subagent",
+    instance: "claudeAgent",
+    parentThreadId: "thread-work",
+  });
+  yield* sql`
+    INSERT INTO scheduled_tasks (
+      task_id, title, prompt, enabled, schedule_json, project_id, thread_id,
+      workspace_strategy_json, model_selection_json, runtime_mode, interaction_mode, created_by,
+      creation_source, created_at, updated_at, last_run_status, run_count
+    )
+    VALUES
+      ('task-work', 'Inbox', 'Check', 1, '{}', 'project:t3-work', NULL, '{}', '{}',
+        'full-access', 'default', 'user', 'web', ${NOW}, ${NOW}, 'never', 0),
+      ('task-on-work-thread', 'Follow up', 'Check', 1, '{}', 'project-1', 'thread-work', '{}',
+        '{}', 'full-access', 'default', 'user', 'web', ${NOW}, ${NOW}, 'never', 0),
+      ('task-code', 'Sync', 'Sync', 1, '{}', 'project-1', 'thread-prs', '{}', '{}',
+        'full-access', 'default', 'user', 'web', ${NOW}, ${NOW}, 'never', 0)
   `;
   yield* sql`
     INSERT INTO orchestration_v2_legacy_imports (thread_id, source_updated_at, shell_imported_at)
@@ -552,7 +586,8 @@ describe("upgradeForkDatabase", () => {
       assert.deepStrictEqual(
         yield* sql`
           SELECT project_id, default_model_selection_json FROM projection_projects
-          WHERE project_id IN ('project-hermes', 'project-codex') ORDER BY project_id
+          WHERE project_id IN ('project-hermes', 'project-codex', 'project:t3-work')
+          ORDER BY project_id
         `,
         [
           {
@@ -562,6 +597,9 @@ describe("upgradeForkDatabase", () => {
           { project_id: "project-hermes", default_model_selection_json: null },
         ],
       );
+      assert.deepStrictEqual(yield* sql`SELECT task_id FROM scheduled_tasks`, [
+        { task_id: "task-code" },
+      ]);
       const tables = yield* tableNames;
       assert.isFalse(tables.some((table) => table.startsWith("hermes_")));
       assert.notInclude(tables, "worktree_retention_registry");
