@@ -1,6 +1,12 @@
-# T3 Code
+# T3 Code (Bl4ckBl1zZ fork)
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+> [!NOTE]
+> This is a personal fork of [T3 Code](https://github.com/pingdotgg/t3code) by T3 Tools. It follows
+> upstream closely and publishes its own desktop and iOS builds, which connect through this fork's
+> own T3 Connect relay. All credit for T3 Code goes to its upstream authors. For the official apps,
+> the hosted web app, and support, go to [pingdotgg/t3code](https://github.com/pingdotgg/t3code).
+
+T3 Code is an "agent harness control surface". It enables control of the agents on your machine from a desktop, web, or mobile app.
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
 
@@ -22,67 +28,30 @@ We wanted something performant, remote-ready, and truly open. If we ever go the 
 > - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
 > - Antigravity: enable it in Settings, then use **Install Antigravity** and **Sign in with Google**. No CLI is required.
 
-### Command line
-
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
-```
-
-On Windows, in PowerShell:
-
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
-
-Then run `t3` to start the server and open the local web app. `t3 service install` keeps it running in the background, `t3 update` moves to a newer release, and `t3 --help` has the full reference.
-
-To try it once without installing, run `npx t3@latest` instead.
-
 ### Desktop app
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+Download the latest `fork-v*` release from this fork's
+[GitHub Releases](https://github.com/Bl4ckBl1zZ/t3code/releases):
 
-#### Windows (`winget`)
+- macOS (Apple Silicon): `T3-Code-<version>-arm64.dmg`
+- Windows (x64 or ARM64): `T3-Code-<version>-<arch>.exe`. The installer is unsigned, so Windows
+  SmartScreen warns on first run.
 
-```bash
-winget install T3Tools.T3Code
-```
+Installed builds update themselves from these releases.
 
-#### Windows (`scoop`)
+The upstream install script, `npx t3`, and the winget, scoop, Homebrew, AUR, and `.deb` packages
+all install official T3 Code, not this fork.
 
-```bash
-scoop install extras/t3code
-```
+### Command line
 
-#### macOS (Homebrew)
+This fork does not publish a standalone `t3` binary. The desktop app includes the `t3` command:
+open **Settings → General → About** and choose **Install** next to **t3 command**. To run a server
+without the desktop app, build it from source (see [Install T3 Code](./docs/user/install.md)).
 
-```bash
-brew install --cask t3-code
-```
+### Mobile app
 
-#### Debian, Ubuntu (`.deb`)
-
-Download the `.deb` from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), then:
-
-```bash
-sudo apt install ./T3-Code-*.deb
-```
-
-#### Arch Linux (AUR)
-
-Stable:
-
-```bash
-yay -S t3code-bin
-```
-
-Nightly:
-
-```bash
-yay -S t3code-nightly-bin
-```
-
-The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
+This fork's iOS app ships through TestFlight. There is no App Store or Android build of the fork;
+the store apps are official T3 Code.
 
 ## Some notes
 
@@ -136,6 +105,6 @@ vp i
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
 
-Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+This fork does not take issues or feature requests. For T3 Code itself, use upstream's
+[Ideas discussions](https://github.com/pingdotgg/t3code/discussions/categories/ideas) and
+[Discord](https://discord.gg/jn4EGJjrvv).

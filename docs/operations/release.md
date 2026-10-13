@@ -2,6 +2,11 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
+> [!NOTE]
+> This describes upstream's `release.yml`, which this fork does not carry. The fork publishes
+> desktop builds with `.github/workflows/fork-macos-release.yml` and iOS builds with
+> `.github/workflows/mobile-ios-testflight.yml`.
+
 This document covers the unified release workflow for stable and nightly desktop releases.
 
 ## What the workflow does
