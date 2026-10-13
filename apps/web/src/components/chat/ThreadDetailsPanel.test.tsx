@@ -4,13 +4,13 @@ import { PopoverCreateHandle } from "../ui/popover";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
-  useT3ProjectFileScripts: vi.fn(),
+  useT3ProjectFileState: vi.fn(),
   projectScriptsControl: vi.fn(),
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
-  useT3ProjectFileScripts: (...args: ReadonlyArray<unknown>) =>
-    testState.useT3ProjectFileScripts(...args),
+  useT3ProjectFileState: (...args: ReadonlyArray<unknown>) =>
+    testState.useT3ProjectFileState(...args),
 }));
 vi.mock("../BranchToolbar", () => ({
   BranchToolbar: () => null,
@@ -24,6 +24,9 @@ vi.mock("../ProjectScriptsControl", () => ({
 vi.mock("./ThreadAutomationsPanel", () => ({
   ThreadAutomationsPanel: () => null,
 }));
+vi.mock("./ThreadPortsPanel", () => ({
+  ThreadPortsPanel: () => null,
+}));
 vi.mock("./ThreadRelationshipsControl", () => ({
   ThreadRelationshipsPanel: () => null,
 }));
@@ -36,7 +39,7 @@ import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./ThreadDetail
 
 describe("ThreadDetailsPanel", () => {
   beforeEach(() => {
-    testState.useT3ProjectFileScripts.mockReset();
+    testState.useT3ProjectFileState.mockReset();
     testState.projectScriptsControl.mockReset();
   });
 
@@ -50,7 +53,11 @@ describe("ThreadDetailsPanel", () => {
         icon: "test",
       },
     ] satisfies ReadonlyArray<T3ProjectFileScript>;
-    testState.useT3ProjectFileScripts.mockReturnValue(fileScripts);
+    testState.useT3ProjectFileState.mockReturnValue({
+      status: "valid",
+      file: { scripts: fileScripts },
+      scripts: fileScripts,
+    });
 
     const props: ThreadDetailsPanelProps = {
       anchor: { current: null },
@@ -85,7 +92,7 @@ describe("ThreadDetailsPanel", () => {
 
     renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
 
-    expect(testState.useT3ProjectFileScripts).toHaveBeenCalledWith(environmentId, gitCwd);
+    expect(testState.useT3ProjectFileState).toHaveBeenCalledWith(environmentId, gitCwd);
     expect(testState.projectScriptsControl).toHaveBeenCalledWith(
       expect.objectContaining({
         displayMode: "panel",

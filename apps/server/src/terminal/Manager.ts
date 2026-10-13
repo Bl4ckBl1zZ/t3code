@@ -77,6 +77,7 @@ import {
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
+import { createTerminalUrlScanner, type TerminalUrlScanner } from "./terminalUrls.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 
@@ -307,6 +308,8 @@ interface TerminalSessionState {
   hasRunningSubprocess: boolean;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
+  /** Finds dev-server URLs this terminal's output announces. */
+  urlScanner: TerminalUrlScanner;
   runtimeEnv: Record<string, string> | null;
 }
 
@@ -328,6 +331,8 @@ type DrainProcessEventAction =
       sequence: number;
       history: BoundedTerminalHistory | null;
       data: string;
+      /** Dev-server URLs completed in this chunk's output. */
+      announcedUrls: ReadonlyArray<string>;
     }
   | {
       type: "exit";
@@ -1393,6 +1398,11 @@ interface TerminalManagerOptions {
     readonly threadId: string;
     readonly terminalId: string;
   }) => Effect.Effect<void>;
+  announceTerminalUrls?: (input: {
+    readonly threadId: string;
+    readonly terminalId: string;
+    readonly urls: ReadonlyArray<string>;
+  }) => Effect.Effect<void>;
   resolveProviderInstanceEnvironment?: (
     providerInstanceId: string,
     env: Record<string, string> | undefined,
@@ -1473,6 +1483,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
     managedBinaryToolsDir: path.join(baseDir, "tools"),
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
+    announceTerminalUrls: portDiscovery.announceTerminalUrls,
     resolveProviderInstanceEnvironment,
   });
 });
@@ -1581,6 +1592,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
   const registerTerminalProcesses = options.registerTerminalProcesses ?? (() => Effect.void);
   const unregisterTerminal = options.unregisterTerminal ?? (() => Effect.void);
+  const announceTerminalUrls = options.announceTerminalUrls ?? (() => Effect.void);
 
   yield* fileSystem.makeDirectory(logsDir, { recursive: true }).pipe(Effect.orDie);
 
@@ -2063,6 +2075,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             sequence: eventStamp.sequence,
             history: sanitized.visibleText.length > 0 ? session.history : null,
             data: nextEvent.data,
+            announcedUrls:
+              sanitized.visibleText.length > 0
+                ? session.urlScanner.push(sanitized.visibleText)
+                : [],
           } as const;
         }
 
@@ -2072,6 +2088,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.pid = null;
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
+        session.urlScanner.reset();
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
         session.pendingProcessEvents = [];
@@ -2103,6 +2120,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       if (action.type === "output") {
         if (action.history !== null) {
           yield* queuePersist(action.threadId, action.terminalId, action.history);
+        }
+        if (action.announcedUrls.length > 0) {
+          yield* announceTerminalUrls({
+            threadId: action.threadId,
+            terminalId: action.terminalId,
+            urls: action.announcedUrls,
+          });
         }
 
         yield* publishEvent({
@@ -2144,6 +2168,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.pid = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
+      session.urlScanner.reset();
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
       session.pendingProcessEvents = [];
@@ -2247,6 +2272,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.exitSignal = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
+      session.urlScanner.reset();
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -2366,6 +2392,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.process = null;
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
+        session.urlScanner.reset();
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -2635,6 +2662,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         unsubscribeExit: null,
         hasRunningSubprocess: false,
         childCommandLabel: null,
+        urlScanner: createTerminalUrlScanner(),
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
 
@@ -3075,6 +3103,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           childCommandLabel: null,
+          urlScanner: createTerminalUrlScanner(),
           runtimeEnv: normalizedRuntimeEnv(input.env),
         };
         const createdSession = session;

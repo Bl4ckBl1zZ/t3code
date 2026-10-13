@@ -67,11 +67,23 @@ export class PortDiscovery extends Context.Service<
       readonly threadId: string;
       readonly terminalId: string;
     }) => Effect.Effect<void>;
+    /**
+     * Loopback URLs a terminal's output announced. They are probed like
+     * configured URLs and attributed to that terminal, keeping their path,
+     * until its foreground process ends or it unregisters.
+     */
+    readonly announceTerminalUrls: (input: {
+      readonly threadId: string;
+      readonly terminalId: string;
+      readonly urls: ReadonlyArray<string>;
+    }) => Effect.Effect<void>;
   }
 >()("t3/preview/PortScanner/PortDiscovery") {}
 
 const POLL_INTERVAL = Duration.seconds(3);
 const LSOF_TIMEOUT_MS = 5_000;
+/** URLs one terminal may announce before its oldest stop counting. */
+const TERMINAL_ANNOUNCED_URLS_MAX = 8;
 /** File descriptors one `/proc` walk may read before it stops looking for socket owners. */
 const PROC_FD_WALK_LIMIT = 50_000;
 /** Scans that retry the fd walk for a listening socket whose owner was not found. */
@@ -96,6 +108,13 @@ interface ScannerState {
     {
       readonly owner: TerminalProcessOwner;
       readonly processIds: ReadonlySet<number>;
+    }
+  >;
+  readonly terminalUrls: ReadonlyMap<
+    string,
+    {
+      readonly owner: TerminalProcessOwner;
+      readonly urls: ReadonlyArray<string>;
     }
   >;
   readonly retainCount: number;
@@ -353,6 +372,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
   const stateRef = yield* Ref.make<ScannerState>({
     listeners: new Map(),
     terminalProcesses: new Map(),
+    terminalUrls: new Map(),
     retainCount: 0,
   });
   const webProbeCacheRef = yield* Ref.make<ReadonlyMap<string, WebProbeCacheEntry>>(new Map());
@@ -482,6 +502,10 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
   const makeWebProbeGroups = (
     servers: ReadonlyArray<DiscoveredLocalServer>,
     configuredUrls: ReadonlyArray<string>,
+    announcedUrls: ReadonlyArray<{
+      readonly owner: TerminalProcessOwner;
+      readonly url: string;
+    }>,
   ): ReadonlyArray<WebProbeGroup> => {
     const serversByKey = new Map(
       servers.map((server) => [localServerKey(server.host, server.port), server] as const),
@@ -510,6 +534,27 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
       });
     }
 
+    // Ahead of plain listeners, so a server shows at the URL it announced,
+    // path included. A terminal printed it, so the terminal owns it even when
+    // the listener is outside its process tree (a container, a detached child).
+    for (const { owner, url: raw } of announcedUrls) {
+      const url = new URL(raw);
+      const port = urlPort(url);
+      const listener = serversByKey.get(localServerKey(url.hostname, port));
+      groups.push({
+        server: {
+          host: listener?.host ?? url.hostname,
+          port,
+          url: raw,
+          processName: listener?.processName ?? null,
+          pid: listener?.pid ?? null,
+          terminal: owner,
+        },
+        urls: [raw],
+        configuredKey: null,
+      });
+    }
+
     for (const server of servers) {
       // A listener alone does not identify its protocol. Sending HTTP or TLS to
       // another app's binary RPC listener can crash it before classification.
@@ -530,7 +575,10 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
   ) {
     const nowMillis = yield* Clock.currentTimeMillis;
     const cached = yield* Ref.get(webProbeCacheRef);
-    const groups = makeWebProbeGroups(servers, configuredUrls);
+    const announcedUrls = [...(yield* Ref.get(stateRef)).terminalUrls.values()].flatMap(
+      ({ owner, urls }) => urls.map((url) => ({ owner, url })),
+    );
+    const groups = makeWebProbeGroups(servers, configuredUrls, announcedUrls);
     const batchProbes = new Map<
       string,
       Effect.Effect<{ readonly probe: WebProbeCacheEntry; readonly fresh: boolean }>
@@ -780,6 +828,13 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
         const key = terminalOwnerKey(owner);
         if (processIds.size === 0) {
           terminalProcesses.delete(key);
+          // The foreground process ended, and the server that announced its
+          // URLs with it. A restart announces them again.
+          if (state.terminalUrls.has(key)) {
+            const terminalUrls = new Map(state.terminalUrls);
+            terminalUrls.delete(key);
+            return { ...state, terminalProcesses, terminalUrls };
+          }
         } else {
           terminalProcesses.set(key, { owner, processIds });
         }
@@ -793,7 +848,26 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     yield* Ref.update(stateRef, (state) => {
       const terminalProcesses = new Map(state.terminalProcesses);
       terminalProcesses.delete(terminalOwnerKey(input));
-      return { ...state, terminalProcesses };
+      const terminalUrls = new Map(state.terminalUrls);
+      terminalUrls.delete(terminalOwnerKey(input));
+      return { ...state, terminalProcesses, terminalUrls };
+    });
+  });
+
+  const announceTerminalUrls: PortDiscovery["Service"]["announceTerminalUrls"] = Effect.fn(
+    "PortDiscovery.announceTerminalUrls",
+  )(function* (input) {
+    const announced = normalizeConfiguredUrls(input.urls);
+    if (announced.length === 0) return;
+    const owner = { threadId: ThreadId.make(input.threadId), terminalId: input.terminalId };
+    yield* Ref.update(stateRef, (state) => {
+      const key = terminalOwnerKey(owner);
+      const previous = state.terminalUrls.get(key)?.urls ?? [];
+      if (announced.every((url) => previous.includes(url))) return state;
+      const urls = [...new Set([...previous, ...announced])].slice(-TERMINAL_ANNOUNCED_URLS_MAX);
+      const terminalUrls = new Map(state.terminalUrls);
+      terminalUrls.set(key, { owner, urls });
+      return { ...state, terminalUrls };
     });
   });
 
@@ -803,6 +877,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     retain,
     registerTerminalProcesses,
     unregisterTerminal,
+    announceTerminalUrls,
   });
 }).pipe(Effect.withSpan("PortDiscovery.make"));
 
