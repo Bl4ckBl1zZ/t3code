@@ -5,6 +5,13 @@ When a server is behind your web or desktop app, an update notice appears in the
 conversation and **Settings → Connections**. Update the machine named in that
 notice.
 
+> [!NOTE]
+> In this fork, a server updates with the desktop app that hosts it. Fork
+> versions are not published to npm or as standalone `t3` releases, so
+> `t3 update`, `npx t3@<version>`, and **Copy update command** fetch official
+> T3 Code instead. Update the desktop app on that machine, or pull and rebuild a
+> server you [built from source](./install.md#build-a-server-from-source).
+
 ## Update everything at once
 
 The update button at the bottom of the sidebar updates every connected machine
@@ -112,7 +119,8 @@ offer a manual update command are not included.
 
 To update an environment from your phone, open **Settings → Environments** and
 select it. **Check for updates** finds the latest release on that environment's
-current release channel. Keep the app open while the environment updates and
+current release channel. It reads official T3 Code releases, so it does not
+find this fork's versions. Keep the app open while the environment updates and
 reconnects. Hosts that cannot update remotely show instructions for updating on
 the machine instead.
 
@@ -122,8 +130,5 @@ Provider update checks and restart continuation preferences are in
 **Settings → Maintenance**. If provider update checks are disabled, enable them
 there before refreshing to find newer versions.
 
-Install App Store or Google Play releases as usual. The mobile app can also
-download updates in the background and apply them when you next leave the app.
-It saves drafts and queued messages before restarting. If you keep the app open
-for a long time, it may ask to install immediately; choosing **Later** leaves the
-update queued for the next suitable moment.
+Install new builds of this fork's app from TestFlight. Fork builds do not
+download over-the-air updates.

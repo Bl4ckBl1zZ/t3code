@@ -10,28 +10,16 @@ launch T3 Code and configure providers afterwards.
 
 ## Command line
 
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
-```
-
-On Windows, in PowerShell:
-
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
-
-This installs the `t3` binary to `~/.local/bin`. If your shell reports `command not found`
-afterwards, that directory is not on your `PATH` yet; the installer prints the
-line to add. Set `T3CODE_CHANNEL=nightly` to install the nightly train, or
-`T3CODE_VERSION` to pin an exact version.
+This fork of T3 Code does not publish a standalone `t3` executable or npm
+package. The upstream install script, `npx t3`, and `t3 update` install official
+T3 Code, not this fork. Use the [`t3` command](#the-t3-command) that comes with
+the desktop app, or [build a server from source](#build-a-server-from-source).
 
 | Task                                             | Command                                                   |
 | ------------------------------------------------ | --------------------------------------------------------- |
 | Start the server and open the web app            | `t3`                                                      |
 | Start the server without a browser               | `t3 serve`                                                |
 | Keep it running in the background (macOS, Linux) | `t3 service install` ([details](./background-service.md)) |
-| Move to the newest release                       | `t3 update`                                               |
-| Remove it again                                  | `t3 uninstall`                                            |
 
 Run `t3 help` or `t3 --help` for the full reference. To start in a new working
 directory, use an explicit path such as `t3 ./my-project`. A bare directory name
@@ -41,17 +29,14 @@ If `t3` or `t3 start` reports an already running server, connect to that server
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
 
-To try T3 Code once without installing it, run `npx t3@latest` instead (needs
-Node.js for `npx`).
+### Build a server from source
 
-### Intel Macs
-
-There is no `t3` executable for Intel Macs (the desktop app is available). To
-run a server there, build it from source with Node.js 24 and `vp`
-([Install vp](https://github.com/pingdotgg/t3code#install-vp)):
+To run a server without the desktop app, for example on Linux or an Intel Mac,
+build it from source with Node.js 24 and `vp`
+([Install vp](https://github.com/Bl4ckBl1zZ/t3code#install-vp)):
 
 ```bash
-git clone https://github.com/pingdotgg/t3code
+git clone https://github.com/Bl4ckBl1zZ/t3code
 cd t3code && vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
@@ -61,20 +46,18 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
-Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
-or use a package manager:
+Download the newest `fork-v*` release from this fork's
+[GitHub Releases](https://github.com/Bl4ckBl1zZ/t3code/releases):
 
-| Platform           | Install                            |
-| ------------------ | ---------------------------------- |
-| Windows            | `winget install T3Tools.T3Code`    |
-| macOS              | `brew install --cask t3-code`      |
-| Debian, Ubuntu     | `sudo apt install ./T3-Code-*.deb` |
-| Arch Linux         | `yay -S t3code-bin`                |
-| Arch Linux nightly | `yay -S t3code-nightly-bin`        |
+| Platform               | Download                       |
+| ---------------------- | ------------------------------ |
+| macOS (Apple Silicon)  | `T3-Code-<version>-arm64.dmg`  |
+| Windows (x64 or ARM64) | `T3-Code-<version>-<arch>.exe` |
 
-The `.deb` updates itself like the other desktop builds. It asks for your
-password to install each update. If your desktop has no password prompt, the
-update fails. Download the new `.deb` and install it the same way.
+The Windows installer is unsigned, so SmartScreen warns the first time you run
+it. Installed builds update themselves from this fork's releases. There are no
+Linux or Intel Mac builds of this fork; the winget, Homebrew, AUR, and `.deb`
+packages install official T3 Code.
 
 ### The `t3` command
 
@@ -90,7 +73,8 @@ from npm, it stays as it is.
 Choose a WSL distro in **Settings → Connections** to run agents and projects
 there. Install the provider CLIs inside that distro. T3 Code installs its own
 server runtime there automatically; the first launch after an app update can
-take longer.
+take longer. This fork's Windows builds do not include that runtime, so the WSL
+option reports that the build lacks WSL support.
 
 ### Open a project from a terminal
 
@@ -107,23 +91,16 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
-Install T3 Code from the
-[App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or
-[Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code).
-The phone connects to a server on another machine. Follow
-[remote access](./remote-access.md) to link it through T3 Connect or a pairing URL.
-
-Nightly builds need the beta app. The store apps cannot connect to them.
-
-- **iPhone and iPad:** join the [TestFlight beta](https://testflight.apple.com/join/XgaxaRtd).
-- **Android:** join the [beta group](https://groups.google.com/g/t3-code-v2-beta). With the same
-  Google account, open the [Google Play testing page](https://play.google.com/apps/testing/com.t3tools.t3code)
-  and become a tester.
+This fork's iPhone and iPad app is distributed through TestFlight by the fork's
+maintainer. There is no Android build of this fork; the App Store and Google
+Play apps are official T3 Code. The phone connects to a server on another
+machine. Follow [remote access](./remote-access.md) to link it through T3
+Connect or a pairing URL.
 
 If the app crashes during launch, open Settings → Diagnostics on the next launch
 that succeeds. It lists startup crashes from the last 7 days with the error and
-component stack that store crash reports leave out. Copy the report and paste it
-into a GitHub issue. Error messages can quote values from the app, so read it over
+component stack that crash reports leave out. Copy the report to share it with
+the fork's maintainer. Error messages can quote values from the app, so read it over
 before sharing.
 
 ## Providers
