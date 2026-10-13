@@ -121,12 +121,13 @@ on each selected environment, and reset returns to the environment's shared list
 A project's `t3.json` actions can be imported there. Until a project has actions of its own,
 T3 Code only offers the file's scripts for import and never runs them on its own. Once it has its
 own actions, imported or created in the app, they and the `scripts` in its `t3.json` stay in sync.
-Editing actions rewrites `scripts`, creating the file if needed, and keeps every other field in
-it; scripts you did not import are dropped from the file at that point. Editing `scripts` in the
-file, by hand, by an agent or by pulling a teammate's change, updates the actions within a few
-seconds, and the file wins if both changed. Reset stops the sync and leaves the file as it is.
-Projects that already had their own actions get a `t3.json` once; if you delete it, T3 Code
-recreates it only on your next edit.
+Editing an action rewrites its script in the file, creating the file if needed, and deleting an
+action removes its script. Every other field and every script you never imported stay as they are.
+In the other direction, editing or removing a script you imported updates the action, a script
+added to the file later becomes an action, and the file wins if both sides changed. This happens
+within a few seconds, whether the file was changed by hand, by an agent or by pulling a teammate's
+change. Reset stops the sync and leaves the file as it is. Projects that already had their own
+actions get a `t3.json` once; if you delete it, T3 Code recreates it only on your next edit.
 
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the

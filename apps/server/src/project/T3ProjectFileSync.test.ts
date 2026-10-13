@@ -197,6 +197,71 @@ describe("T3ProjectFileSync", () => {
     ),
   );
 
+  it.live("never drops file scripts the project did not import", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* harness();
+        const a = { name: "A", command: "run a" };
+        const b = { name: "B", command: "run b", team: "only" };
+        yield* h.writeFile(JSON.stringify({ scripts: [a, b] }));
+        const sync = yield* h.makeSync;
+        yield* sync.syncNow;
+
+        // Import only A, then edit it in the app.
+        const imported = { ...dev, id: "a", name: "A", command: "run a" };
+        yield* h.setOwnScripts([imported]);
+        yield* sync.syncNow;
+        yield* h.setOwnScripts([{ ...imported, command: "run a --fast" }]);
+        yield* sync.syncNow;
+        assert.deepEqual((yield* h.readFile).scripts, [
+          { name: "A", command: "run a --fast", icon: "play" },
+          b,
+        ]);
+
+        // A real deletion removes A from the file; B stays.
+        yield* h.setOwnScripts([]);
+        yield* sync.syncNow;
+        assert.deepEqual((yield* h.readFile).scripts, [b]);
+      }),
+    ),
+  );
+
+  it.live("adds scripts new to the file and deletes ones removed from it, ignoring the rest", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* harness([{ ...dev, id: "a", name: "A", command: "run a" }]);
+        yield* h.writeFile(
+          JSON.stringify({
+            scripts: [
+              { name: "A", command: "run a" },
+              { name: "B", command: "run b" },
+            ],
+          }),
+        );
+        const sync = yield* h.makeSync;
+        yield* sync.syncNow;
+        assert.deepEqual(
+          (yield* h.ownScripts)?.map((script) => script.name),
+          ["A"],
+        );
+
+        yield* h.writeFile(
+          JSON.stringify({
+            scripts: [
+              { name: "B", command: "run b --changed" },
+              { name: "C", command: "run c" },
+            ],
+          }),
+        );
+        yield* sync.syncNow;
+        assert.deepEqual(
+          (yield* h.ownScripts)?.map((script) => `${script.id}:${script.command}`),
+          ["c:run c"],
+        );
+      }),
+    ),
+  );
+
   it.live("leaves an invalid t3.json and the project's actions alone", () =>
     run(
       Effect.gen(function* () {

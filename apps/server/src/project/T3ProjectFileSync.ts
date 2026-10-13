@@ -8,11 +8,14 @@
  * cloned repo first reach it through the manual import, which is the trust
  * boundary. Once a project has its own list:
  *
- * - A change to `scripts` on disk replaces the list, as does a file that
- *   differs when the server first sees the project. The file wins a conflict:
- *   it is the checked-in source a teammate or agent just edited.
- * - An in-app edit rewrites `scripts`, creating the file if needed. Every other
- *   field, every unknown field, and the unknown fields of each script survive.
+ * - A file edit updates the actions it names, deletes actions whose script
+ *   left the file, and adds scripts new to the file. Scripts that were in the
+ *   file but never imported stay an import offer. The file wins a conflict: it
+ *   is the checked-in source a teammate or agent just edited.
+ * - An in-app edit rewrites the scripts of the project's actions in place and
+ *   removes the scripts of deleted actions, creating the file if needed. Other
+ *   fields, unknown fields on each script, and scripts the project never
+ *   imported survive.
  * - Once per T3 home, a project with no `t3.json` gets one. Deleting the file
  *   afterwards is respected until the next edit.
  *
@@ -103,82 +106,131 @@ function slugScriptId(name: string): string {
   return slug.length === 0 ? "script" : slug;
 }
 
+const nameKey = (name: string) => name.trim().toLowerCase();
+
+function uniqueScriptId(name: string, taken: ReadonlySet<string>): string {
+  const base = slugScriptId(name);
+  let id = base;
+  for (let suffix = 2; taken.has(id); suffix += 1) {
+    id = `${base.slice(0, MAX_SCRIPT_ID_LENGTH - String(suffix).length - 1)}-${suffix}`;
+  }
+  return id;
+}
+
+function scriptFromFile(fileScript: T3ProjectFileScript, id: string): ProjectScript {
+  return {
+    id,
+    name: fileScript.name,
+    command: fileScript.command,
+    icon: fileScript.icon ?? "play",
+    runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
+    ...(fileScript.runOnSettle === undefined ? {} : { runOnSettle: fileScript.runOnSettle }),
+    ...(fileScript.runOnWorktreeDelete === undefined
+      ? {}
+      : { runOnWorktreeDelete: fileScript.runOnWorktreeDelete }),
+    ...(fileScript.singleRun === undefined ? {} : { singleRun: fileScript.singleRun }),
+    ...(fileScript.async === undefined ? {} : { async: fileScript.async }),
+    ...(fileScript.previewUrl === undefined ? {} : { previewUrl: fileScript.previewUrl }),
+    ...(fileScript.autoOpenPreview === undefined
+      ? {}
+      : { autoOpenPreview: fileScript.autoOpenPreview }),
+  };
+}
+
 /**
- * The project's actions for a file's scripts. An action whose name matches
- * keeps its id, so a shortcut bound to `script.<id>.run` keeps working.
+ * The project's actions after a change to the file. An action takes the file
+ * script with its name and keeps its id, so a `script.<id>.run` shortcut keeps
+ * working. Only changes since `previousFileNames` count: an action whose
+ * script left the file is deleted, and a script new to the file is added.
+ * Without a previous snapshot only same-named actions update; the rest of the
+ * file stays an import offer.
  */
-function scriptsFromFile(
+function applyFileScripts(
+  own: ReadonlyArray<ProjectScript>,
   fileScripts: ReadonlyArray<T3ProjectFileScript>,
-  current: ReadonlyArray<ProjectScript>,
+  previousFileNames: ReadonlySet<string> | null,
 ): ProjectScript[] {
-  const idsByName = new Map(current.map((script) => [script.name.toLowerCase(), script.id]));
-  const taken = new Set<string>();
-  return fileScripts.map((fileScript) => {
-    const base = idsByName.get(fileScript.name.toLowerCase()) ?? slugScriptId(fileScript.name);
-    let id = base;
-    for (let suffix = 2; taken.has(id); suffix += 1) {
-      id = `${base.slice(0, MAX_SCRIPT_ID_LENGTH - String(suffix).length - 1)}-${suffix}`;
-    }
-    taken.add(id);
-    return {
-      id,
-      name: fileScript.name,
-      command: fileScript.command,
-      icon: fileScript.icon ?? "play",
-      runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
-      ...(fileScript.runOnSettle === undefined ? {} : { runOnSettle: fileScript.runOnSettle }),
-      ...(fileScript.runOnWorktreeDelete === undefined
-        ? {}
-        : { runOnWorktreeDelete: fileScript.runOnWorktreeDelete }),
-      ...(fileScript.singleRun === undefined ? {} : { singleRun: fileScript.singleRun }),
-      ...(fileScript.async === undefined ? {} : { async: fileScript.async }),
-      ...(fileScript.previewUrl === undefined ? {} : { previewUrl: fileScript.previewUrl }),
-      ...(fileScript.autoOpenPreview === undefined
-        ? {}
-        : { autoOpenPreview: fileScript.autoOpenPreview }),
-    };
-  });
+  const fileByName = new Map(fileScripts.map((script) => [nameKey(script.name), script]));
+  const next: ProjectScript[] = [];
+  for (const script of own) {
+    const fileScript = fileByName.get(nameKey(script.name));
+    if (fileScript) next.push(scriptFromFile(fileScript, script.id));
+    else if (!previousFileNames?.has(nameKey(script.name))) next.push(script);
+  }
+  if (previousFileNames === null) return next;
+  const ownNames = new Set(own.map((script) => nameKey(script.name)));
+  for (const fileScript of fileScripts) {
+    const key = nameKey(fileScript.name);
+    if (ownNames.has(key) || previousFileNames.has(key)) continue;
+    next.push(
+      scriptFromFile(fileScript, uniqueScriptId(fileScript.name, new Set(next.map((s) => s.id)))),
+    );
+  }
+  return next;
 }
 
 const isRawObject = (value: unknown): value is RawObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+function renderScript(script: ProjectScript, previous: RawObject | undefined) {
+  const unowned = Object.fromEntries(
+    Object.entries(previous ?? {}).filter(([key]) => !OWNED_SCRIPT_KEYS.has(key)),
+  );
+  return {
+    name: script.name,
+    command: script.command,
+    icon: script.icon,
+    ...(script.runOnWorktreeCreate ? { runOnWorktreeCreate: true } : {}),
+    ...(script.runOnSettle ? { runOnSettle: true } : {}),
+    ...(script.runOnWorktreeDelete ? { runOnWorktreeDelete: true } : {}),
+    ...(script.singleRun ? { singleRun: true } : {}),
+    ...(script.async === undefined ? {} : { async: script.async }),
+    ...(script.previewUrl === undefined ? {} : { previewUrl: script.previewUrl }),
+    ...(script.autoOpenPreview === undefined ? {} : { autoOpenPreview: script.autoOpenPreview }),
+    ...unowned,
+  };
+}
+
 /**
  * The `t3.json` text for a project's actions. `existing` is the file as raw
- * JSON: its other fields stay where they are, and a script keeps the fields
- * the app does not own from the file script with the same name (or command).
+ * JSON; its other fields stay where they are. A file script named like an
+ * action is replaced in place, keeping the fields the app does not own. A file
+ * script that was an action at the last sync (`previouslyOwned`) and no longer
+ * is gets removed, unless a renamed action with its command takes its place.
+ * Every other file script was never imported and stays untouched. Actions the
+ * file lacks are appended.
  */
 export function renderProjectFile(
   existing: RawObject | null,
   scripts: ReadonlyArray<ProjectScript>,
+  previouslyOwned: ReadonlySet<string> = new Set(),
   schemaUrl: string = T3_PROJECT_FILE_SCHEMA_URL,
 ): string {
-  const existingScripts = Array.isArray(existing?.scripts)
-    ? existing.scripts.filter(isRawObject)
-    : [];
-  const fileScripts = scripts.map((script) => {
-    const previous =
-      existingScripts.find(
-        (raw) =>
-          typeof raw.name === "string" && raw.name.toLowerCase() === script.name.toLowerCase(),
-      ) ?? existingScripts.find((raw) => raw.command === script.command);
-    const unowned = Object.fromEntries(
-      Object.entries(previous ?? {}).filter(([key]) => !OWNED_SCRIPT_KEYS.has(key)),
+  const existingScripts = Array.isArray(existing?.scripts) ? existing.scripts : [];
+  const pending = new Map(scripts.map((script) => [nameKey(script.name), script]));
+  const take = (key: string) => {
+    const script = pending.get(key);
+    pending.delete(key);
+    return script;
+  };
+  const fileScripts: unknown[] = [];
+  for (const raw of existingScripts) {
+    const key = isRawObject(raw) && typeof raw.name === "string" ? nameKey(raw.name) : null;
+    const sameName = key === null ? undefined : take(key);
+    if (sameName) {
+      fileScripts.push(renderScript(sameName, raw as RawObject));
+      continue;
+    }
+    if (key === null || !previouslyOwned.has(key)) {
+      fileScripts.push(raw);
+      continue;
+    }
+    const renamed = [...pending.values()].find(
+      (script) => (raw as RawObject).command === script.command,
     );
-    return {
-      name: script.name,
-      command: script.command,
-      icon: script.icon,
-      ...(script.runOnWorktreeCreate ? { runOnWorktreeCreate: true } : {}),
-      ...(script.runOnSettle ? { runOnSettle: true } : {}),
-      ...(script.runOnWorktreeDelete ? { runOnWorktreeDelete: true } : {}),
-      ...(script.singleRun ? { singleRun: true } : {}),
-      ...(script.async === undefined ? {} : { async: script.async }),
-      ...(script.previewUrl === undefined ? {} : { previewUrl: script.previewUrl }),
-      ...(script.autoOpenPreview === undefined ? {} : { autoOpenPreview: script.autoOpenPreview }),
-      ...unowned,
-    };
-  });
+    if (renamed) fileScripts.push(renderScript(take(nameKey(renamed.name))!, raw as RawObject));
+  }
+  for (const script of pending.values()) fileScripts.push(renderScript(script, undefined));
   const document = existing
     ? { ...existing, scripts: fileScripts }
     : { $schema: schemaUrl, scripts: fileScripts };
@@ -194,11 +246,16 @@ type ProjectFileState =
       readonly scripts: ReadonlyArray<T3ProjectFileScript> | undefined;
     };
 
+/** What the last sync saw; changes are measured against it. */
 interface Baseline {
   /** Normalized own actions, or null while the project follows environment defaults. */
   readonly own: string | null;
+  /** Names of the own actions, so a write-back can tell a deletion from a never-imported script. */
+  readonly ownNames: ReadonlySet<string>;
   /** Normalized file scripts, or null when the file declares none. */
   readonly file: string | null;
+  /** Names of the file scripts, so a file edit can tell an added script from an untracked one. */
+  readonly fileNames: ReadonlySet<string>;
   readonly fileStamp: string | null;
 }
 
@@ -283,35 +340,54 @@ export const make = Effect.gen(function* () {
     if (file.status === "invalid") return;
     const fileScripts = file.status === "valid" ? file.scripts : undefined;
     const fileNorm = fileScripts === undefined ? null : normalizeScripts(fileScripts);
-    const fileChanged = baseline === undefined || fileNorm !== baseline.file;
-
-    // The file replaces a project's own list when it is new to this server or
-    // changed. A project without its own list is left to the manual import.
-    if (own !== undefined && fileScripts !== undefined && fileNorm !== ownNorm && fileChanged) {
-      yield* setOwnScripts(project.id, scriptsFromFile(fileScripts, own));
-      yield* Effect.logInfo("Applied t3.json scripts to project actions", {
-        projectId: project.id,
+    const remember = (
+      ownList: ReadonlyArray<ProjectScript> | undefined,
+      fileList: ReadonlyArray<T3ProjectFileScript> | undefined,
+      fileStamp: string | null,
+    ) =>
+      baselines.set(project.id, {
+        own: ownList === undefined ? null : normalizeScripts(ownList),
+        ownNames: new Set((ownList ?? []).map((script) => nameKey(script.name))),
+        file: fileList === undefined ? null : normalizeScripts(fileList),
+        fileNames: new Set((fileList ?? []).map((script) => nameKey(script.name))),
+        fileStamp,
       });
-      baselines.set(project.id, { own: fileNorm, file: fileNorm, fileStamp: stamp });
+
+    // A file edit (or a file that differs when the server first sees the
+    // project) updates a project's own list. A project without its own list
+    // is left to the manual import.
+    if (
+      own !== undefined &&
+      fileScripts !== undefined &&
+      (baseline === undefined || fileNorm !== baseline.file)
+    ) {
+      const next = applyFileScripts(own, fileScripts, baseline?.fileNames ?? null);
+      if (normalizeScripts(next) !== ownNorm) {
+        yield* setOwnScripts(project.id, next);
+        yield* Effect.logInfo("Applied t3.json scripts to project actions", {
+          projectId: project.id,
+        });
+      }
+      remember(next, fileScripts, stamp);
       return;
     }
     // An in-app edit of the project's own list is written back.
     if (own !== undefined && baseline !== undefined && ownNorm !== baseline.own) {
-      if (ownNorm !== fileNorm) {
-        yield* fileSystem.writeFileString(
-          filePath,
-          renderProjectFile(file.status === "valid" ? file.raw : null, own, schemaUrl),
-        );
+      const contents = renderProjectFile(
+        file.status === "valid" ? file.raw : null,
+        own,
+        baseline.ownNames,
+        schemaUrl,
+      );
+      const written = yield* decodeRawFile(contents).pipe(Effect.flatMap(decodeFile));
+      if (normalizeScripts(written.scripts ?? []) !== fileNorm) {
+        yield* fileSystem.writeFileString(filePath, contents);
         yield* Effect.logInfo("Saved project actions to t3.json", { projectId: project.id });
       }
-      baselines.set(project.id, {
-        own: ownNorm,
-        file: ownNorm,
-        fileStamp: yield* fileStamp(filePath),
-      });
+      remember(own, written.scripts, yield* fileStamp(filePath));
       return;
     }
-    baselines.set(project.id, { own: ownNorm, file: fileNorm, fileStamp: stamp });
+    remember(own, fileScripts, stamp);
   });
 
   const activeProjects = projects.snapshot.pipe(
@@ -346,14 +422,16 @@ export const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      yield* fileSystem.writeFileString(filePath, renderProjectFile(null, own, schemaUrl)).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Failed to seed t3.json for a project", {
-            projectId: project.id,
-            cause,
-          }),
-        ),
-      );
+      yield* fileSystem
+        .writeFileString(filePath, renderProjectFile(null, own, new Set(), schemaUrl))
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Failed to seed t3.json for a project", {
+              projectId: project.id,
+              cause,
+            }),
+          ),
+        );
     }
     yield* fileSystem.makeDirectory(config.stateDir, { recursive: true });
     yield* fileSystem.writeFileString(marker, "");
