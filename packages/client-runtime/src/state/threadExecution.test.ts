@@ -17,6 +17,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 import {
+  presentBackgroundTaskOutput,
   presentPendingBackgroundWork,
   presentProviderGoal,
   deriveReportedModelSelection,
@@ -492,6 +493,55 @@ describe("threadRuntimeCanArchive", () => {
   it("allows waiting and idle threads", () => {
     expect(threadRuntimeCanArchive(runtime("waiting", RunId.make("run-finished")))).toBe(true);
     expect(threadRuntimeCanArchive(runtime("idle", null))).toBe(true);
+  });
+});
+
+describe("presentBackgroundTaskOutput", () => {
+  const nowMs = Date.UTC(2026, 9, 13, 12, 0, 0);
+  const at = (msAgo: number) => DateTime.makeUnsafe(nowMs - msAgo);
+
+  it("says how long a command has run and when it last printed", () => {
+    expect(
+      presentBackgroundTaskOutput(
+        {
+          taskId: "dev",
+          startedAt: at(12 * 60_000 + 5_000),
+          lastLine: "GET / 200",
+          lastOutputAt: at(3_000),
+        },
+        nowMs,
+      ),
+    ).toEqual({
+      elapsed: "12m",
+      lastLine: "GET / 200",
+      lastOutputAgo: "3s ago",
+      deadline: null,
+      // The output label still counts seconds.
+      nextChangeMs: 1_000,
+    });
+  });
+
+  it("counts a monitor down to its deadline", () => {
+    const presentation = presentBackgroundTaskOutput(
+      { taskId: "watch", startedAt: at(60_000), deadlineAt: at(-4 * 60_000) },
+      nowMs,
+    );
+    expect(presentation.deadline).toBe("gives up in 4m");
+    expect(presentation.lastOutputAgo).toBeNull();
+    expect(presentation.nextChangeMs).toBe(30_000);
+    expect(
+      presentBackgroundTaskOutput({ taskId: "watch", deadlineAt: at(1_000) }, nowMs).deadline,
+    ).toBe("deadline passed");
+  });
+
+  it("reports nothing it was not told", () => {
+    expect(presentBackgroundTaskOutput(undefined, nowMs)).toEqual({
+      elapsed: null,
+      lastLine: null,
+      lastOutputAgo: null,
+      deadline: null,
+      nextChangeMs: null,
+    });
   });
 });
 

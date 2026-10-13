@@ -17,6 +17,8 @@ import {
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
   type OrchestrationV2GetTurnItemResult,
+  type OrchestrationV2BackgroundOutputSnapshot,
+  type OrchestrationV2BackgroundTaskOutput,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
@@ -40,6 +42,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -331,6 +334,14 @@ export interface ThreadManagementServiceShape {
     readonly itemId: TurnItemId;
   }) => Effect.Effect<OrchestrationV2GetTurnItemResult, Orchestrator.OrchestratorV2Error>;
   readonly getThreadRecords: Orchestrator.OrchestratorV2["Service"]["getThreadRecords"];
+  /**
+   * What a thread's live background tasks are doing, read from their providers
+   * on a short interval while subscribed. Emits only when something changed;
+   * nothing is persisted or broadcast to clients that are not watching.
+   */
+  readonly streamBackgroundOutput: (
+    threadId: ThreadId,
+  ) => Stream.Stream<OrchestrationV2BackgroundOutputSnapshot, Orchestrator.OrchestratorV2Error>;
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, Orchestrator.OrchestratorV2Error>;
@@ -510,6 +521,25 @@ function latestSteerableRun(
 }
 
 const SETTLE_AFTER_RUN_WAIT_MS = 24 * 60 * 60 * 1_000;
+
+/** How often a watched thread's background output is re-read. */
+const BACKGROUND_OUTPUT_POLL_INTERVAL = Duration.millis(1_500);
+
+function backgroundTaskOutputEquals(
+  left: OrchestrationV2BackgroundTaskOutput,
+  right: OrchestrationV2BackgroundTaskOutput | undefined,
+): boolean {
+  const millis = (value: DateTime.Utc | undefined) =>
+    value === undefined ? undefined : DateTime.toEpochMillis(value);
+  return (
+    right !== undefined &&
+    left.taskId === right.taskId &&
+    left.lastLine === right.lastLine &&
+    millis(left.lastOutputAt) === millis(right.lastOutputAt) &&
+    millis(left.startedAt) === millis(right.startedAt) &&
+    millis(left.deadlineAt) === millis(right.deadlineAt)
+  );
+}
 
 const make = Effect.gen(function* () {
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
@@ -1069,6 +1099,43 @@ const make = Effect.gen(function* () {
       );
     }).pipe((effect) => threadDispatch.withLock(input.threadId, effect));
 
+  const readBackgroundOutput = Effect.fn("ThreadManagementService.readBackgroundOutput")(function* (
+    threadId: ThreadId,
+  ) {
+    const { providerThreads } = yield* orchestrator.getThreadRecords(threadId, ["providerThreads"]);
+    const tasks = yield* Effect.forEach(
+      providerThreads,
+      (providerThread) =>
+        providerThread.providerSessionId == null
+          ? Effect.succeed([])
+          : sessions.get(providerThread.providerSessionId).pipe(
+              Effect.flatMap((runtime) =>
+                Option.isNone(runtime) || runtime.value.readBackgroundOutput === undefined
+                  ? Effect.succeed([])
+                  : runtime.value.readBackgroundOutput({ providerThread }),
+              ),
+              // A session that went away has nothing running to report.
+              Effect.orElseSucceed(() => []),
+            ),
+      { concurrency: "unbounded" },
+    );
+    return { tasks: tasks.flat() } satisfies OrchestrationV2BackgroundOutputSnapshot;
+  });
+
+  const streamBackgroundOutput: ThreadManagementServiceShape["streamBackgroundOutput"] = (
+    threadId,
+  ) =>
+    Stream.fromEffectSchedule(
+      readBackgroundOutput(threadId),
+      Schedule.spaced(BACKGROUND_OUTPUT_POLL_INTERVAL),
+    ).pipe(
+      Stream.changesWith(
+        (left, right) =>
+          left.tasks.length === right.tasks.length &&
+          left.tasks.every((task, index) => backgroundTaskOutputEquals(task, right.tasks[index])),
+      ),
+    );
+
   const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = (input) =>
     Effect.gen(function* () {
       const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);
@@ -1133,6 +1200,7 @@ const make = Effect.gen(function* () {
       ensureProjectionTranscript(threadId).pipe(
         Effect.andThen(orchestrator.getThreadRecords(threadId, fields, filter)),
       ),
+    streamBackgroundOutput,
     getThreadProjection,
     getCheckpointContext,
     getThreadSnapshot,

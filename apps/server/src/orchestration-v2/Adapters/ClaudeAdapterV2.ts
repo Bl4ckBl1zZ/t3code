@@ -1,4 +1,5 @@
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { parseClaudeBackgroundLaunch, readBackgroundOutputFile } from "./backgroundOutput.ts";
 import {
   dynamicToolTitle,
   formatReadToolLabel,
@@ -60,6 +61,7 @@ import {
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
   type OrchestrationV2PendingBackgroundTask,
+  type OrchestrationV2BackgroundTaskOutput,
   type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
@@ -3629,6 +3631,101 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             for (const [taskId] of endedIds) tasks.delete(taskId);
             return [tasks, { ...current, tasks }] as const;
           });
+        // What a client watching the roster can read live: where a background
+        // Bash task writes, when it started, and when a monitor gives up.
+        // Claude streams nothing for these tasks, so the output file is the
+        // only live signal. Keyed by task id; an entry outlives its roster
+        // entry only until the notification, and the map stays small.
+        const backgroundTaskOutputs = new Map<
+          string,
+          {
+            startedAt: DateTime.Utc | null;
+            outputPath: string | null;
+            deadlineAt: DateTime.Utc | null;
+          }
+        >();
+        const monitorTimeoutsByToolUseId = new Map<string, number>();
+        const backgroundTaskOutputEntry = (taskId: string) => {
+          const existing = backgroundTaskOutputs.get(taskId);
+          if (existing !== undefined) return existing;
+          const created = { startedAt: null, outputPath: null, deadlineAt: null };
+          backgroundTaskOutputs.set(taskId, created);
+          for (const oldest of backgroundTaskOutputs.keys()) {
+            if (backgroundTaskOutputs.size <= 64) break;
+            backgroundTaskOutputs.delete(oldest);
+          }
+          return created;
+        };
+        const trackClaudeBackgroundOutput = Effect.fnUntraced(function* (message: SDKMessage) {
+          for (const toolUse of claudeToolUseBlocksFromAssistantMessage(message)) {
+            if (toolUse.name !== "Monitor") continue;
+            const timeoutMs = Reflect.get(Object(toolUse.input), "timeout_ms");
+            // Claude's documented default and cap for a monitor's deadline.
+            monitorTimeoutsByToolUseId.set(
+              toolUse.id,
+              typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+                ? Math.min(timeoutMs, 1_800_000)
+                : 300_000,
+            );
+          }
+          for (const { output } of claudeToolResultEntriesFromMessage(message)) {
+            const launch = parseClaudeBackgroundLaunch(claudeCommandOutputText(output));
+            if (launch !== null) {
+              backgroundTaskOutputEntry(launch.taskId).outputPath = launch.outputPath;
+            }
+          }
+          if (message.type !== "system") return;
+          if (
+            message.subtype === "task_started" &&
+            isClaudeNonSubagentTask(message) &&
+            message.is_backgrounded !== false
+          ) {
+            const now = yield* DateTime.now;
+            const entry = backgroundTaskOutputEntry(message.task_id);
+            entry.startedAt = now;
+            const timeoutMs =
+              message.tool_use_id === undefined
+                ? undefined
+                : monitorTimeoutsByToolUseId.get(message.tool_use_id);
+            if (timeoutMs !== undefined && message.tool_use_id !== undefined) {
+              monitorTimeoutsByToolUseId.delete(message.tool_use_id);
+              entry.deadlineAt = DateTime.add(now, { milliseconds: timeoutMs });
+            }
+          } else if (message.subtype === "task_notification") {
+            backgroundTaskOutputs.delete(message.task_id);
+          }
+        });
+        const readClaudeBackgroundOutput = Effect.fnUntraced(function* (
+          providerThread: OrchestrationV2ProviderThread,
+        ) {
+          const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
+          if (nativeThreadId == null) return [];
+          const roster = rosterForNativeThread(
+            yield* Ref.get(pendingBackgroundTasksByNativeThread),
+            nativeThreadId,
+          );
+          return yield* Effect.forEach([...roster.keys()], (taskId) =>
+            Effect.gen(function* () {
+              const entry = backgroundTaskOutputs.get(taskId);
+              if (entry === undefined) return [];
+              const file =
+                entry.outputPath === null
+                  ? null
+                  : yield* readBackgroundOutputFile({ fileSystem, path: entry.outputPath });
+              return [
+                {
+                  taskId,
+                  ...(entry.startedAt === null ? {} : { startedAt: entry.startedAt }),
+                  ...(entry.deadlineAt === null ? {} : { deadlineAt: entry.deadlineAt }),
+                  ...(file?.lastLine == null ? {} : { lastLine: file.lastLine }),
+                  ...(file?.lastLine == null || file.lastOutputAt === null
+                    ? {}
+                    : { lastOutputAt: file.lastOutputAt }),
+                } satisfies OrchestrationV2BackgroundTaskOutput,
+              ];
+            }),
+          ).pipe(Effect.map((tasks) => tasks.flat()));
+        });
         const claudeTaskOutcome = (status: "completed" | "failed" | "stopped") =>
           status === "completed" ? "completed" : status === "stopped" ? "cancelled" : "failed";
         // Reads the roster, so call it before the notification clears the task from it.
@@ -6617,6 +6714,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // Before any routing: a Monitor started during an idle wake turn
           // reports its task before the drain replays the tool call.
           yield* trackClaudeMonitorCalls(message);
+          yield* trackClaudeBackgroundOutput(message);
           // Before routing too: the wake gate reads it while the root is idle.
           if (
             message.type === "system" &&
@@ -9015,6 +9113,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message: { ...turnInput.message, text: "/compact" },
             }),
           steerTurn,
+          readBackgroundOutput: ({ providerThread }) => readClaudeBackgroundOutput(providerThread),
           stopTask: ({ providerThread, taskId }) =>
             Effect.gen(function* () {
               const liveQuery = yield* Ref.get(queryContext);

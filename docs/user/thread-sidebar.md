@@ -217,6 +217,14 @@ retry and the normal snooze choices.
 On web and desktop, use **Agents** to follow work delegated to subagents.
 Stop on a thread also stops the subagents it delegated to.
 
+When a turn ends while work it started keeps running, such as a dev server, a
+monitor, or a subagent, the banner above the composer names it and offers
+**Stop**. On web and desktop, the thread details panel lists it under
+**Background** with how long each item has run. For Claude and Codex commands
+it also shows the last line the command printed and how long ago, which tells
+a stuck command from a working one. A Claude monitor shows when it gives up
+waiting. Hover a thread in the sidebar to see what it is still running.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.

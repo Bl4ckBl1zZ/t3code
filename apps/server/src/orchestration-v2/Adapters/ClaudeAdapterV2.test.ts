@@ -4726,6 +4726,142 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("reads a settled thread's background command and monitor output live", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tasksDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-tasks-" });
+        const outputPath = NodePath.join(tasksDir, `${WAKE_TASK_ID}.output`);
+        const monitorTaskId = "bmonitor01";
+        const monitorToolUseId = "toolu_monitor_live";
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-background-output"),
+            text: "Start the dev server and watch for the deploy.",
+            attachments: [],
+          }),
+        );
+        const toolUse = (id: string, name: string, input: unknown, uuid: string) =>
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-sonnet-4-6",
+              id: `msg_${id}`,
+              type: "message",
+              role: "assistant",
+              content: [{ type: "tool_use", id, name, input }],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+            parent_tool_use_id: null,
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        yield* harness.offerAndWait(
+          toolUse(
+            WAKE_TOOL_USE_ID,
+            "Bash",
+            { command: "npm run dev", run_in_background: true },
+            "00000000-0000-4000-8000-000000000201",
+          ),
+        );
+        yield* harness.offerAndWait(wakeTaskStarted);
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: WAKE_TOOL_USE_ID,
+                  content: `Command running in background with ID: ${WAKE_TASK_ID}. Output is being written to: ${outputPath}. You will be notified when it completes.`,
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: "00000000-0000-4000-8000-000000000202",
+            session_id: WAKE_NATIVE_SESSION,
+            tool_use_result: {
+              stdout: "",
+              stderr: "",
+              interrupted: false,
+              backgroundTaskId: WAKE_TASK_ID,
+            },
+          }),
+        );
+        yield* harness.offerAndWait(
+          toolUse(
+            monitorToolUseId,
+            "Monitor",
+            { description: "Deploy finished", command: "tail -f deploy.log", timeout_ms: 60_000 },
+            "00000000-0000-4000-8000-000000000203",
+          ),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            task_id: monitorTaskId,
+            tool_use_id: monitorToolUseId,
+            description: "Deploy finished",
+            is_backgrounded: true,
+            task_type: "local_bash",
+            uuid: "00000000-0000-4000-8000-000000000204",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
+        const settledThread = providerThreadRosterEvents(harness.events).at(-1)?.providerThread;
+        assert.isDefined(settledThread);
+        const readBackgroundOutput = harness.runtime.readBackgroundOutput;
+        assert.isDefined(readBackgroundOutput);
+
+        // Nothing printed yet: the clock is known, the tail is not.
+        const silent = yield* readBackgroundOutput({ providerThread: settledThread });
+        const silentCommand = silent.find((task) => task.taskId === WAKE_TASK_ID);
+        assert.isDefined(silentCommand?.startedAt);
+        assert.isUndefined(silentCommand?.lastLine);
+
+        yield* fileSystem.writeFileString(
+          outputPath,
+          "> vite\n\u001b[32m  ➜  Local:\u001b[39m   http://localhost:5173/\nbuilding 10%\rbuilding 80%\r\n",
+        );
+        const tasks = yield* readBackgroundOutput({ providerThread: settledThread });
+        const command = tasks.find((task) => task.taskId === WAKE_TASK_ID);
+        assert.equal(command?.lastLine, "building 80%");
+        assert.isDefined(command?.lastOutputAt);
+        const monitor = tasks.find((task) => task.taskId === monitorTaskId);
+        assert.isDefined(monitor?.startedAt);
+        assert.isDefined(monitor?.deadlineAt);
+        assert.equal(
+          DateTime.toEpochMillis(monitor!.deadlineAt!) -
+            DateTime.toEpochMillis(monitor!.startedAt!),
+          60_000,
+        );
+
+        // A finished task leaves the roster and reports nothing.
+        yield* harness.offerAndWait(wakeNotification);
+        const after = yield* readBackgroundOutput({
+          providerThread:
+            providerThreadRosterEvents(harness.events).at(-1)?.providerThread ?? settledThread,
+        });
+        assert.isUndefined(after.find((task) => task.taskId === WAKE_TASK_ID));
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("stops background work after the turn settled", () =>
     Effect.scoped(
       Effect.gen(function* () {

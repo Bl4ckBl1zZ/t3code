@@ -76,6 +76,7 @@ import {
   EyeIcon,
   FolderIcon,
   GitBranchIcon,
+  HourglassIcon,
   ListFilterIcon,
   MessageCircleQuestionIcon,
   PinIcon,
@@ -88,6 +89,7 @@ import {
   Undo2Icon,
   XIcon,
 } from "lucide-react";
+import { presentPendingBackgroundWork } from "@t3tools/client-runtime/state/thread-execution";
 import {
   memo,
   useCallback,
@@ -470,6 +472,8 @@ function SidebarThreadTooltip({
     .filter((instanceId) => instanceId !== modelInstanceId)
     .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
+  // Names what a settled thread still runs, which the bare "Waiting" pill cannot.
+  const backgroundWork = presentPendingBackgroundWork(thread.pendingBackgroundTasks ?? []);
   return (
     <ThreadHoverCardPopup side="right" align="start" sideOffset={4}>
       <ThreadHoverCard
@@ -550,6 +554,19 @@ function SidebarThreadTooltip({
             />
             <div className="min-w-0 truncate text-foreground/75">
               {terminalProcessLabel(terminalProcessCount)}
+            </div>
+          </div>
+        ) : null}
+        {backgroundWork ? (
+          <div className="flex min-w-0 items-start gap-2">
+            <HourglassIcon aria-hidden className="mt-1 size-3 shrink-0 stroke-muted-foreground" />
+            <div className="min-w-0 flex-1 leading-5 text-foreground/75">
+              <div className="truncate">{backgroundWork.title}</div>
+              {backgroundWork.items.length > 1 ? (
+                <div className="truncate text-muted-foreground">
+                  {backgroundWork.items.map((item) => item.label).join(", ")}
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}

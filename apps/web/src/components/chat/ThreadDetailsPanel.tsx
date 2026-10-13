@@ -1,6 +1,8 @@
 import type {
   EditorId,
   EnvironmentId,
+  OrchestrationV2BackgroundTaskOutput,
+  OrchestrationV2PendingBackgroundTask,
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -20,6 +22,7 @@ import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { ThreadBackgroundPanel } from "./ThreadBackgroundPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
 const GitActionsControl = memo(BaseGitActionsControl);
@@ -62,6 +65,10 @@ export interface ThreadDetailsPanelProps extends Pick<
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  /** Work the settled thread left running, with what each piece is printing. */
+  backgroundTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  backgroundOutputs: ReadonlyMap<string, OrchestrationV2BackgroundTaskOutput>;
+  onOpenRelatedThread: (threadId: ThreadId) => void;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -170,6 +177,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {density === "full" && !props.draftId ? (
+            <ThreadBackgroundPanel
+              tasks={props.backgroundTasks}
+              outputs={props.backgroundOutputs}
+              onOpenThread={props.onOpenRelatedThread}
+            />
           ) : null}
 
           {density === "full" && !props.draftId ? (

@@ -16,6 +16,7 @@ import {
   NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2BackgroundTaskOutput,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2TurnItem,
   ProjectId,
@@ -4385,6 +4386,88 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ),
         ),
       ),
+  );
+
+  const outputDelta = (delta: string, afterMs?: number) => ({
+    type: "emit_inbound" as const,
+    label: "item/commandExecution/outputDelta",
+    ...(afterMs === undefined ? {} : { afterMs }),
+    frame: {
+      method: "item/commandExecution/outputDelta",
+      params: {
+        delta,
+        itemId: BG_COMMAND_ITEM,
+        threadId: BG_NATIVE_THREAD,
+        turnId: BG_NATIVE_TURN,
+      },
+    },
+  });
+  const [bgPreamble, bgCommandStarted, bgAnswer, bgTurnCompleted, bgCommandCompleted] = [
+    backgroundExecTranscript.entries.slice(0, -4),
+    ...backgroundExecTranscript.entries.slice(-4),
+  ];
+  const backgroundOutputTranscript = makeCodexReplayTranscript({
+    scenario: "codex-bg-exec-output",
+    entries: [
+      ...(bgPreamble as typeof backgroundExecTranscript.entries),
+      bgCommandStarted!,
+      outputDelta("compiling\n"),
+      outputDelta("ready on :3000\n"),
+      bgAnswer!,
+      bgTurnCompleted!,
+      outputDelta("GET / 200\n", 10_000),
+      bgCommandCompleted!,
+    ],
+  });
+
+  it.effect("reads a command's live output after its turn settled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeCodexReplayHarness(backgroundOutputTranscript);
+        const readBackgroundOutput = harness.runtime.readBackgroundOutput;
+        assert.isDefined(readBackgroundOutput);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-codex-bg-output"),
+            text: BG_PROMPT,
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        const [settled] = yield* readBackgroundOutput({ providerThread: harness.providerThread });
+        assert.equal(settled?.taskId, BG_COMMAND_ITEM);
+        assert.equal(settled?.lastLine, "ready on :3000");
+        assert.isDefined(settled?.startedAt);
+
+        // Output deltas emit no events, so poll the read the way a client would.
+        const awaitOutput = (
+          predicate: (tasks: ReadonlyArray<OrchestrationV2BackgroundTaskOutput>) => boolean,
+          label: string,
+        ) =>
+          Effect.gen(function* () {
+            for (let attempt = 0; attempt < 5000; attempt++) {
+              if (
+                predicate(yield* readBackgroundOutput({ providerThread: harness.providerThread }))
+              )
+                return;
+              yield* Effect.yieldNow;
+            }
+            return yield* Effect.die(`Timed out waiting for ${label}.`);
+          });
+        yield* TestClock.adjust("10 seconds");
+        yield* awaitOutput((tasks) => tasks[0]?.lastLine === "GET / 200", "post-settle output");
+
+        // The command finished, so there is nothing left to tail.
+        yield* TestClock.adjust("30 seconds");
+        yield* awaitOutput((tasks) => tasks.length === 0, "command completed");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
   );
 
   // "thread_unloaded": the thread was settled, so T3 unsubscribed and Codex
