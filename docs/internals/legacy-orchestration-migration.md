@@ -53,6 +53,12 @@ warnings for compatibility with site-local migrations. There is no safe id range
 this ledger: any id at or below a future upstream id masks it forever, so fork schema changes belong
 in a separate migration table or outside the migrator entirely.
 
+The one exception is the Hermes fork, which recorded its own history at ids 36..69.
+[`upgradeForkDatabase`](../../apps/server/src/persistence/forkDatabaseBridge.ts) runs before the
+preview repair, recognizes that history by name, and rewrites it in place to this build's 36..57 in
+one transaction. It also deletes Hermes threads, whose provider this build does not have. A fork
+history with gaps or renamed entries is refused unchanged.
+
 ## Recovery
 
 There is no supported whole-thread export API. Recovery uses an untouched copy of the environment's
