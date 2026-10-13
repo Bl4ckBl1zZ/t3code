@@ -350,6 +350,58 @@ it.effect("keeps other database work runnable while discovering compaction candi
   ).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("returns pages freed by compaction to the filesystem", () =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const sql = yield* SqlClient.SqlClient;
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:foundation-vacuum");
+    const messageId = MessageId.make("message:foundation-vacuum");
+    // Streaming snapshots of one message: every version but the last is superseded.
+    yield* eventSink.write({
+      events: [
+        threadCreatedEvent({
+          id: "event:foundation-vacuum:create",
+          thread: makeThread(threadId, now),
+          now,
+        }),
+        ...Array.from({ length: 400 }, (_, index): OrchestrationV2DomainEvent => ({
+          id: EventId.make(`event:foundation-vacuum:${index}`),
+          type: "message.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: messageId,
+            threadId,
+            runId: null,
+            nodeId: null,
+            role: "user",
+            text: `${index}`.padEnd(16_000, "x"),
+            attachments: [],
+            streaming: index < 399,
+            createdAt: now,
+            updatedAt: now,
+          },
+        })),
+      ],
+    });
+    const pageCount = sql<{ readonly page_count: number }>`PRAGMA page_count`.pipe(
+      Effect.map((rows) => rows[0]?.page_count ?? 0),
+    );
+    const before = yield* pageCount;
+
+    const summary = yield* maintenance.compactEventStore;
+
+    assert.equal(summary.deletedEventCount, 399);
+    assert.equal(summary.reclaimableBytes, 0);
+    // About 6 MB of superseded snapshots left the file, not just its free list.
+    assert.isBelow(yield* pageCount, before - 1_000);
+  }).pipe(Effect.provide(Layer.fresh(layerTest))),
+);
+
 it.effect(
   "compacts the event store after a startup delay, then daily, from the layer-owned worker",
   () =>

@@ -234,6 +234,9 @@ export const layer: Layer.Layer<
 
     const supersedableThreadEventTypes = new Set(SUPERSEDABLE_THREAD_EVENT_TYPES);
     const COMPACTION_PAGE_SIZE = 500;
+    const INCREMENTAL_AUTO_VACUUM = 2;
+    // 8 MiB at the default 4 KiB page size.
+    const INCREMENTAL_VACUUM_PAGES = 2048;
 
     /**
      * Scan newest first to retain the newest state for each entity.
@@ -361,10 +364,25 @@ export const layer: Layer.Layer<
         if (rows.length < COMPACTION_PAGE_SIZE) break;
       }
 
-      const freelistRows = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
+      const freelistCount = sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`.pipe(
+        Effect.map((rows) => rows[0]?.freelist_count ?? 0),
+      );
+      const autoVacuumRows = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum`;
+      // Databases created with incremental auto-vacuum hand the freed pages
+      // back to the filesystem, a few megabytes per statement.
+      if (autoVacuumRows[0]?.auto_vacuum === INCREMENTAL_AUTO_VACUUM) {
+        let freePages = yield* freelistCount;
+        while (freePages > 0) {
+          yield* sql.unsafe(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_PAGES})`);
+          const remaining = yield* freelistCount;
+          if (remaining >= freePages) break;
+          freePages = remaining;
+          yield* Effect.yieldNow;
+        }
+      }
+
       const pageSizeRows = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
-      const reclaimableBytes =
-        (freelistRows[0]?.freelist_count ?? 0) * (pageSizeRows[0]?.page_size ?? 0);
+      const reclaimableBytes = (yield* freelistCount) * (pageSizeRows[0]?.page_size ?? 0);
 
       return { deletedEventCount, deletedReceiptCount, reclaimableBytes };
     });
