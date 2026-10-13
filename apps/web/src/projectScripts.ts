@@ -15,6 +15,7 @@ export interface ProjectScriptInput {
   readonly waitForSetup: boolean;
   readonly runOnSettle: boolean;
   readonly runOnWorktreeDelete: boolean;
+  readonly singleRun: boolean;
   readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
   readonly autoOpenPreview: boolean;
 }
@@ -29,6 +30,7 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
     ...(input.runOnWorktreeCreate && input.waitForSetup ? { async: false } : {}),
     ...(input.runOnSettle ? { runOnSettle: true } : {}),
     ...(input.runOnWorktreeDelete ? { runOnWorktreeDelete: true } : {}),
+    ...(input.singleRun ? { singleRun: true } : {}),
     ...(input.previewUrl === null
       ? {}
       : {

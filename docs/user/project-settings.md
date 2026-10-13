@@ -138,6 +138,13 @@ such as another drive, set **Settings → Storage → Worktree location** to an 
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
 are, and cleanup covers both the default folder and the custom one.
 
+## Single-run actions
+
+Turn on **Only one run at a time** for an action such as a dev server, or set `"singleRun": true`
+on a `t3.json` script, so a thread never runs two copies of it. The action gets its own terminal.
+Running it again while it runs stops that run and starts it fresh in the same terminal. While it
+runs, the actions menu marks it as running and the run button offers **Restart**.
+
 ## Worktree teardown
 
 To stop containers, free ports or release other resources a worktree started, turn on **Run in

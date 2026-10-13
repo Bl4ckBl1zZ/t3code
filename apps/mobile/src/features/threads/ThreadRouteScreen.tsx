@@ -25,6 +25,7 @@ import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
   resolveProjectScripts,
+  singleRunScriptTerminalId,
 } from "@t3tools/shared/projectScripts";
 import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -73,6 +74,7 @@ import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { threadEnvironment } from "../../state/threads";
+import { terminalEnvironment } from "../../state/terminal";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
@@ -92,6 +94,10 @@ import {
   useAndroidWorkspaceBack,
   useWorkspaceListNavigation,
 } from "../workspace/useAndroidWorkspaceNavigation";
+
+/** Grid a single-run script's terminal starts with; the terminal screen resizes it on attach. */
+const SINGLE_RUN_TERMINAL_COLS = 80;
+const SINGLE_RUN_TERMINAL_ROWS = 24;
 
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
@@ -707,6 +713,7 @@ function ThreadRouteContent(
     terminalMenuSessions,
   ]);
 
+  const restartTerminal = useAtomCommand(terminalEnvironment.restart, "terminal restart");
   const handleRunProjectScript = useCallback(
     async (script: ProjectScript) => {
       terminalDebugLog("project-script:press", {
@@ -728,16 +735,18 @@ function ThreadRouteContent(
         return;
       }
 
-      const targetTerminalId = resolveProjectScriptTerminalId({
-        existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
-        ...(knownTerminalSessions === null ||
-        !readEnvironmentScope(selectedThread.environmentId, AuthTerminalReadScope)
-          ? { uniqueSuffix: uuidv4() }
-          : {}),
-        hasRunningTerminal: terminalMenuSessions.some(
-          (session) => session.status === "running" || session.status === "starting",
-        ),
-      });
+      const targetTerminalId = script.singleRun
+        ? singleRunScriptTerminalId(script.id)
+        : resolveProjectScriptTerminalId({
+            existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
+            ...(knownTerminalSessions === null ||
+            !readEnvironmentScope(selectedThread.environmentId, AuthTerminalReadScope)
+              ? { uniqueSuffix: uuidv4() }
+              : {}),
+            hasRunningTerminal: terminalMenuSessions.some(
+              (session) => session.status === "running" || session.status === "starting",
+            ),
+          });
       const preferredWorktreePath = resolvePreferredThreadWorktreePath({
         threadShellWorktreePath: selectedThread.worktreePath ?? null,
         threadDetailWorktreePath: selectedThreadDetailWorktreePath,
@@ -750,6 +759,24 @@ function ThreadRouteContent(
         project: { cwd: selectedThreadProject.workspaceRoot },
         worktreePath: preferredWorktreePath,
       });
+      if (script.singleRun) {
+        // A single-run script owns one terminal. Restarting it stops a previous
+        // run first, so the thread never runs two; the launch below then types
+        // the command into the fresh shell.
+        const restarted = await restartTerminal({
+          environmentId: selectedThread.environmentId,
+          input: {
+            threadId: selectedThread.id,
+            terminalId: targetTerminalId,
+            cwd,
+            worktreePath: preferredWorktreePath,
+            cols: SINGLE_RUN_TERMINAL_COLS,
+            rows: SINGLE_RUN_TERMINAL_ROWS,
+            env,
+          },
+        });
+        if (restarted._tag === "Failure") return;
+      }
       stagePendingTerminalLaunch({
         target: {
           environmentId: selectedThread.environmentId,
@@ -778,6 +805,7 @@ function ThreadRouteContent(
     },
     [
       navigation,
+      restartTerminal,
       selectedThread,
       selectedThreadDetailWorktreePath,
       selectedThreadProject,

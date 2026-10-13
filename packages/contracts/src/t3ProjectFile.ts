@@ -55,6 +55,12 @@ export const T3ProjectFileScript = Schema.Struct({
         "When true, the script runs in a thread's worktree right before T3 Code deletes that worktree, for example to stop containers or free ports. It runs without a terminal and is stopped after 2 minutes; a failure is reported but never blocks the deletion.",
     }),
   ),
+  singleRun: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, a thread runs at most one instance of the script, in its own terminal. Running it again while it runs restarts it there instead of starting a second copy, which suits dev servers.",
+    }),
+  ),
   async: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:

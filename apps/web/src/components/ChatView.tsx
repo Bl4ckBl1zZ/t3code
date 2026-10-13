@@ -134,6 +134,8 @@ import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
   resolveProjectScripts,
+  runningSingleRunScriptIds,
+  singleRunScriptTerminalId,
 } from "@t3tools/shared/projectScripts";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -1616,6 +1618,7 @@ export default function ChatView(props: ChatViewProps) {
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
+  const restartTerminal = useAtomCommand(terminalEnvironment.restart, "terminal restart");
   const createThread = useOrchestrationCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useOrchestrationCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
@@ -2488,6 +2491,10 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectScripts = useMemo(
     () => (activeProject ? resolveProjectScripts(settings, activeProject) : []),
     [activeProject, settings],
+  );
+  const runningProjectScriptIds = useMemo(
+    () => runningSingleRunScriptIds(activeProjectScripts, runningTerminalIds),
+    [activeProjectScripts, runningTerminalIds],
   );
   // A project added by cloning exists before its files do. The draft stays
   // editable throughout; only sending waits for the clone, and a failed
@@ -5004,10 +5011,15 @@ export default function ChatView(props: ChatViewProps) {
         terminalUiState.activeTerminalId || activeKnownTerminalIds[0] || DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = runningTerminalIds.includes(baseTerminalId);
       const wantsNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
+      // A single-run script owns one terminal. Restarting it there stops a
+      // previous run before this one starts, so a thread never runs two.
+      const singleRunTerminalId = script.singleRun ? singleRunScriptTerminalId(script.id) : null;
       const shouldCreateNewTerminal =
-        wantsNewTerminal ||
-        !canReuseTerminal ||
-        !readEnvironmentScope(environmentId, AuthTerminalReadScope);
+        singleRunTerminalId !== null
+          ? !activeKnownTerminalIds.includes(singleRunTerminalId)
+          : wantsNewTerminal ||
+            !canReuseTerminal ||
+            !readEnvironmentScope(environmentId, AuthTerminalReadScope);
       const targetWorktreePath = options?.worktreePath ?? activeThread.worktreePath ?? null;
 
       setTerminalUiLaunchContext({
@@ -5028,7 +5040,8 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: targetWorktreePath,
         ...(options?.env ? { extraEnv: options.env } : {}),
       });
-      const targetTerminalId = shouldCreateNewTerminal ? allocateTerminalId() : baseTerminalId;
+      const targetTerminalId =
+        singleRunTerminalId ?? (shouldCreateNewTerminal ? allocateTerminalId() : baseTerminalId);
       const openTerminalInput: TerminalOpenInput = shouldCreateNewTerminal
         ? {
             threadId: activeThreadId,
@@ -5053,7 +5066,17 @@ export default function ChatView(props: ChatViewProps) {
         storeSetActiveTerminal(activeThreadRef, targetTerminalId);
       }
 
-      const openResult = await openTerminal({ environmentId, input: openTerminalInput });
+      const openResult =
+        singleRunTerminalId !== null
+          ? await restartTerminal({
+              environmentId,
+              input: {
+                ...openTerminalInput,
+                cols: SCRIPT_TERMINAL_COLS,
+                rows: SCRIPT_TERMINAL_ROWS,
+              },
+            })
+          : await openTerminal({ environmentId, input: openTerminalInput });
       if (openResult._tag === "Failure") {
         if (!isAtomCommandInterrupted(openResult)) {
           const error = squashAtomCommandFailure(openResult);
@@ -5115,6 +5138,7 @@ export default function ChatView(props: ChatViewProps) {
       setLastInvokedScriptByProjectId,
       environmentId,
       openTerminal,
+      restartTerminal,
       openPreview,
       hasTerminalWriteAccess,
       activeKnownTerminalIds,
@@ -11280,6 +11304,7 @@ export default function ChatView(props: ChatViewProps) {
     ...(draftId ? { draftId } : {}),
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject ? activeProjectScripts : undefined,
+    runningProjectScriptIds,
     preferredScriptId: activeProject
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)
       : null,

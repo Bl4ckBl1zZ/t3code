@@ -58,6 +58,7 @@ import {
 export type { NewProjectScriptInput, ProjectScriptActionResult };
 
 const NO_FILE_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
+const NO_RUNNING_SCRIPTS: ReadonlySet<string> = new Set();
 
 interface ProjectScriptsControlProps {
   displayMode?: "toolbar" | "panel";
@@ -68,6 +69,8 @@ interface ProjectScriptsControlProps {
   /** Scripts declared in the project's checked-in t3.json, offered for import. */
   fileScripts?: ReadonlyArray<T3ProjectFileScript>;
   preferredScriptId?: string | null;
+  /** Single-run scripts whose terminal is running a command; running one again restarts it. */
+  runningScriptIds?: ReadonlySet<string>;
   onRunScript?: ((script: ProjectScript) => void) | undefined;
   onAddScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateScript: (
@@ -85,6 +88,7 @@ export default function ProjectScriptsControl({
   scripts,
   fileScripts = NO_FILE_SCRIPTS,
   preferredScriptId = null,
+  runningScriptIds = NO_RUNNING_SCRIPTS,
   onRunScript,
   onAddScript,
   onUpdateScript,
@@ -113,6 +117,8 @@ export default function ProjectScriptsControl({
     }
     return primaryProjectScript(scripts);
   }, [preferredScriptId, scripts]);
+  const primaryRunVerb =
+    primaryScript && runningScriptIds.has(primaryScript.id) ? "Restart" : "Run";
   const importableScripts = useMemo(
     () =>
       fileScripts.filter(
@@ -151,6 +157,7 @@ export default function ProjectScriptsControl({
       waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
       runOnSettle: fileScript.runOnSettle ?? false,
       runOnWorktreeDelete: fileScript.runOnWorktreeDelete ?? false,
+      singleRun: fileScript.singleRun ?? false,
       ...(readEnvironmentScope(environmentId, AuthSettingsWriteScope) ? { keybinding: null } : {}),
       previewUrl: fileScript.previewUrl ?? null,
       autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
@@ -206,7 +213,9 @@ export default function ProjectScriptsControl({
             onClick={() => onRunScript?.(script)}
           >
             <ScriptIcon icon={script.icon} className="size-4" />
-            <MenuItemLabel>{projectScriptMenuLabel(script)}</MenuItemLabel>
+            <MenuItemLabel>
+              {projectScriptMenuLabel(script, { running: runningScriptIds.has(script.id) })}
+            </MenuItemLabel>
             <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
               {shortcutLabel &&
                 (presentation === "menu" ? (
@@ -262,7 +271,9 @@ export default function ProjectScriptsControl({
               onClick={() => onRunScript?.(primaryScript)}
             >
               <ScriptIcon icon={primaryScript.icon} className="size-4" />
-              <MenuItemLabel>Run {primaryScript.name}</MenuItemLabel>
+              <MenuItemLabel>
+                {runningScriptIds.has(primaryScript.id) ? "Restart" : "Run"} {primaryScript.name}
+              </MenuItemLabel>
               <MenuShortcut>
                 {shortcutLabelForCommand(keybindings, commandForProjectScript(primaryScript.id))}
               </MenuShortcut>
@@ -308,7 +319,7 @@ export default function ProjectScriptsControl({
                   part="primary"
                   panel={isPanel}
                   className={isPanel ? undefined : "w-7 sm:w-6 @3xl/header-actions:w-auto!"}
-                  aria-label={`Run ${primaryScript.name}`}
+                  aria-label={`${primaryRunVerb} ${primaryScript.name}`}
                   // The tooltip wrapper replaces data-slot="button", so themed
                   // toolbar styling needs its own hook.
                   data-toolbar-control=""
@@ -321,6 +332,9 @@ export default function ProjectScriptsControl({
                 icon={primaryScript.icon}
                 {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
               />
+              {runningScriptIds.has(primaryScript.id) ? (
+                <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-success" />
+              ) : null}
               <span
                 className={cn(
                   "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
@@ -332,7 +346,7 @@ export default function ProjectScriptsControl({
             </TooltipTrigger>
             <TooltipPopup side="top">
               {onRunScript
-                ? `Run ${primaryScript.name}`
+                ? `${primaryRunVerb} ${primaryScript.name}`
                 : "Pair this client again with permission to run terminal commands."}
             </TooltipPopup>
           </Tooltip>

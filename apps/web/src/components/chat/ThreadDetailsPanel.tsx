@@ -34,6 +34,8 @@ export interface ThreadDetailsPanelProps extends Pick<
   draftId?: DraftId;
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  /** Single-run scripts whose terminal is running a command. */
+  runningProjectScriptIds?: ReadonlySet<string>;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -139,6 +141,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   fileScripts={fileScripts}
                   preferredScriptId={props.preferredScriptId}
                   onRunScript={props.onRunProjectScript}
+                  {...(props.runningProjectScriptIds
+                    ? { runningScriptIds: props.runningProjectScriptIds }
+                    : {})}
                   onAddScript={props.onAddProjectScript}
                   onUpdateScript={props.onUpdateProjectScript}
                   onDeleteScript={props.onDeleteProjectScript}

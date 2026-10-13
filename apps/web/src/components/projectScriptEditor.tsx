@@ -94,6 +94,8 @@ export interface NewProjectScriptInput {
   waitForSetup: boolean;
   runOnSettle: boolean;
   runOnWorktreeDelete: boolean;
+  /** At most one run per thread; running it again restarts it. */
+  singleRun: boolean;
   /** Omit to preserve the current shortcut when the form did not edit it. */
   keybinding?: string | null;
   /** Optional URL to open in the in-app preview when this script runs. */
@@ -112,6 +114,7 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   waitForSetup: false,
   runOnSettle: false,
   runOnWorktreeDelete: false,
+  singleRun: false,
   keybinding: null,
   previewUrl: null,
   autoOpenPreview: false,
@@ -139,6 +142,7 @@ export function editorRequestForScript(
       waitForSetup: script.runOnWorktreeCreate && script.async === false,
       runOnSettle: script.runOnSettle ?? false,
       runOnWorktreeDelete: script.runOnWorktreeDelete ?? false,
+      singleRun: script.singleRun ?? false,
       keybinding: keybindingValueForCommand(keybindings, commandForProjectScript(script.id)),
       previewUrl: script.previewUrl ?? null,
       autoOpenPreview: script.autoOpenPreview ?? false,
@@ -183,6 +187,7 @@ export function ProjectScriptEditorDialog({
   const [waitForSetup, setWaitForSetup] = useState(false);
   const [runOnSettle, setRunOnSettle] = useState(false);
   const [runOnWorktreeDelete, setRunOnWorktreeDelete] = useState(false);
+  const [singleRun, setSingleRun] = useState(false);
   const [keybinding, setKeybinding] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [autoOpenPreview, setAutoOpenPreview] = useState(false);
@@ -216,6 +221,7 @@ export function ProjectScriptEditorDialog({
     setWaitForSetup(request.initial.waitForSetup);
     setRunOnSettle(request.initial.runOnSettle);
     setRunOnWorktreeDelete(request.initial.runOnWorktreeDelete);
+    setSingleRun(request.initial.singleRun);
     setKeybinding(request.initial.keybinding ?? "");
     setPreviewUrl(request.initial.previewUrl ?? "");
     setAutoOpenPreview(request.initial.autoOpenPreview);
@@ -291,6 +297,7 @@ export function ProjectScriptEditorDialog({
         waitForSetup: runOnWorktreeCreate && waitForSetup,
         runOnSettle,
         runOnWorktreeDelete,
+        singleRun,
         ...((request.scriptId === null && canChangeKeybinding) || changesKeybinding
           ? { keybinding: keybindingRule?.key ?? null }
           : {}),
@@ -436,6 +443,13 @@ export function ProjectScriptEditorDialog({
                     Open this URL in the in-app preview when this action runs.
                   </p>
                 </div>
+                <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+                  <span>Only one run at a time; running it again restarts it</span>
+                  <Switch
+                    checked={singleRun}
+                    onCheckedChange={(checked) => setSingleRun(Boolean(checked))}
+                  />
+                </label>
                 <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
                   <span>Run automatically on worktree creation</span>
                   <Switch

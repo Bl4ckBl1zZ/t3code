@@ -5,7 +5,9 @@ import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
   projectScriptMenuLabel,
+  runningSingleRunScriptIds,
   settleProjectScript,
+  singleRunScriptTerminalId,
   setupProjectScript,
 } from "@t3tools/shared/projectScripts";
 
@@ -29,6 +31,7 @@ describe("projectScripts helpers", () => {
         waitForSetup: false,
         runOnSettle: false,
         runOnWorktreeDelete: false,
+        singleRun: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
       }),
@@ -53,6 +56,7 @@ describe("projectScripts helpers", () => {
         waitForSetup: false,
         runOnSettle: false,
         runOnWorktreeDelete: false,
+        singleRun: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -74,6 +78,7 @@ describe("projectScripts helpers", () => {
       autoOpenPreview: false,
       runOnSettle: false,
       runOnWorktreeDelete: false,
+      singleRun: false,
     } as const;
     expect(
       buildProjectScript("setup", { ...input, runOnWorktreeCreate: true, waitForSetup: true }),
@@ -174,6 +179,7 @@ describe("projectScripts helpers", () => {
       previewUrl: null,
       autoOpenPreview: false,
       runOnWorktreeDelete: false,
+      singleRun: false,
     } as const;
     const holder = {
       id: "holder",
@@ -199,6 +205,18 @@ describe("projectScripts helpers", () => {
         { ...input, runOnWorktreeCreate: false, runOnSettle: false, runOnWorktreeDelete: true },
       ),
     ).toMatchObject({ runOnWorktreeCreate: true, runOnSettle: true, runOnWorktreeDelete: false });
+  });
+
+  it("reports a single-run script as running only while its own terminal runs a command", () => {
+    const base = { command: "pnpm dev", icon: "play" as const, runOnWorktreeCreate: false };
+    const scripts = [
+      { ...base, id: "dev", name: "Dev", singleRun: true },
+      { ...base, id: "test", name: "Test" },
+    ];
+    expect(singleRunScriptTerminalId("dev")).toBe("script-dev");
+    expect([...runningSingleRunScriptIds(scripts, ["script-dev", "script-test"])]).toEqual(["dev"]);
+    expect(runningSingleRunScriptIds(scripts, ["term-1"]).size).toBe(0);
+    expect(projectScriptMenuLabel(scripts[0]!, { running: true })).toBe("Dev (running)");
   });
 
   it("never picks a teardown-only script as the primary action", () => {

@@ -43,6 +43,11 @@ export function ProjectActionsList({
                 on settle
               </span>
             ) : null}
+            {script.singleRun ? (
+              <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-2xs font-normal text-muted-foreground">
+                single run
+              </span>
+            ) : null}
             {script.runOnWorktreeDelete ? (
               <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-2xs font-normal text-muted-foreground">
                 teardown

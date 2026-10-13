@@ -40,6 +40,8 @@ export const ProjectScript = Schema.Struct({
   runOnSettle: Schema.optional(Schema.Boolean),
   /** Run in the worktree right before T3 Code removes it. */
   runOnWorktreeDelete: Schema.optional(Schema.Boolean),
+  /** At most one run per thread; running it again restarts that run. */
+  singleRun: Schema.optional(Schema.Boolean),
   /** Start the agent while setup runs unless explicitly disabled. */
   async: Schema.optional(Schema.Boolean),
   previewUrl: Schema.optional(TrimmedNonEmptyString),

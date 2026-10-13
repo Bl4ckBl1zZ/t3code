@@ -74,9 +74,16 @@ export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectSc
   return scripts.find((script) => script.runOnWorktreeCreate) ?? null;
 }
 
-/** Menu label naming the lifecycle roles a script runs in, e.g. "Clean (on settle)". */
-export function projectScriptMenuLabel(script: ProjectScript): string {
+/**
+ * Menu label naming the lifecycle roles a script runs in, e.g. "Clean (on settle)",
+ * and whether a single-run script is running.
+ */
+export function projectScriptMenuLabel(
+  script: ProjectScript,
+  options?: { readonly running?: boolean },
+): string {
   const roles = [
+    ...(options?.running ? ["running"] : []),
     ...(script.runOnWorktreeCreate ? ["setup"] : []),
     ...(script.runOnSettle ? ["on settle"] : []),
     ...(script.runOnWorktreeDelete ? ["teardown"] : []),
@@ -90,4 +97,28 @@ export function settleProjectScript(scripts: readonly ProjectScript[]): ProjectS
 
 export function teardownProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
   return scripts.find((script) => script.runOnWorktreeDelete === true) ?? null;
+}
+
+/**
+ * The terminal a single-run script always uses. One terminal per script is
+ * what keeps a thread to one instance: running the script again restarts this
+ * terminal instead of opening another.
+ */
+export function singleRunScriptTerminalId(scriptId: string): string {
+  return `script-${scriptId}`;
+}
+
+/** Ids of single-run scripts whose terminal is running a command. */
+export function runningSingleRunScriptIds(
+  scripts: readonly ProjectScript[],
+  runningTerminalIds: Iterable<string>,
+): ReadonlySet<string> {
+  const running = new Set(runningTerminalIds);
+  return new Set(
+    scripts
+      .filter(
+        (script) => script.singleRun === true && running.has(singleRunScriptTerminalId(script.id)),
+      )
+      .map((script) => script.id),
+  );
 }
