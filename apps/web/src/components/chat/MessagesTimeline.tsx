@@ -121,7 +121,7 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
-import { ChevronDown, ChevronRight } from "lucide";
+import { ChevronDown, ChevronRight, Link as LinkIconNode } from "lucide";
 import { Button, InlineButton } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -136,6 +136,7 @@ import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { keepTimelineEndVisibleAfterOverlayGrowth } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import {
   collapseWorkEntriesKeepingLiveBackground,
   computeStableMessagesTimelineRows,
@@ -1638,6 +1639,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   ];
   const messageReply = extractLeadingMessageReply(elementContextState.promptText);
   const messageBodyText = messageReply?.messageText ?? elementContextState.promptText;
+  // Attached contexts stay behind, so a shared link carries the prose alone.
+  const promptLink = useMemo(() => promptLinkFor(messageBodyText), [messageBodyText]);
   const previewImages = userAttachments.filter(
     (attachment) =>
       attachment.type === "image" && attachment.name.startsWith("preview-annotation-"),
@@ -1816,6 +1819,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
             {displayedUserMessage.copyText && (
               <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />
+            )}
+            {promptLink !== null && (
+              <MessageCopyButton
+                text={promptLink}
+                label="Copy prompt link"
+                icon={LinkIconNode}
+                variant="ghost"
+              />
             )}
           </div>
         </div>

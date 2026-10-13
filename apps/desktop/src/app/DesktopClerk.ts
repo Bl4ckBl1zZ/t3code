@@ -8,6 +8,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import { HostProcessArguments } from "@t3tools/shared/hostProcess";
+import { promptLinkAppPath } from "@t3tools/shared/promptLinks";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
@@ -142,11 +144,24 @@ export const make = Effect.gen(function* () {
         return yield* Effect.interrupt;
       }
 
-      // As the default browser, macOS hands T3 Code every web link through open-url.
-      yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
-        if (!DesktopWebLinks.isWebLink(url)) return;
-        event.preventDefault();
+      // Prompt links and thread links (`t3code://new?…`, `t3code://threads/…`) reach the
+      // renderer through the same queue as web links; it routes them in the app.
+      const openAppLink = (value: string | undefined) => {
+        if (!value || promptLinkAppPath(value) === null) return false;
+        void runPromise(webLinks.receive(value));
+        return true;
+      };
+      // Windows and Linux hand the link that launched the app over as an argument.
+      const args = yield* HostProcessArguments;
+      args.some((value) => openAppLink(value));
+      // As the default browser, macOS hands T3 Code every web link through the same event.
+      const openWebLink = (url: string) => {
+        if (!DesktopWebLinks.isWebLink(url)) return false;
         void runPromise(webLinks.receive(url));
+        return true;
+      };
+      yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
+        if (openWebLink(url) || openAppLink(url)) event.preventDefault();
       });
       // A browser opens HTML files too, which macOS hands over by path.
       yield* electronApp.on("open-file", (event: { preventDefault: () => void }, path: string) => {
@@ -154,7 +169,9 @@ export const make = Effect.gen(function* () {
         event.preventDefault();
         void runPromise(webLinks.receive(NodeURL.pathToFileURL(path).href));
       });
-      yield* electronApp.on("second-instance", () => {
+      yield* electronApp.on("second-instance", (_event: unknown, argv: readonly string[]) => {
+        // Delivering the link reveals the window too.
+        if (argv?.some((value) => openAppLink(value))) return;
         void runPromise(
           Effect.gen(function* () {
             const mainWindow = yield* electronWindow.currentMainOrFirst;
