@@ -16,6 +16,44 @@ const runtimeVersionPolicy =
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const IOS_APP_GROUP_IDENTIFIER_PATTERN = /^group\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const IOS_APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+
+// Identity overrides for builds shipped under another App Store record, such
+// as a fork's. Each one falls back to the T3 Tools value when unset.
+const optionalEnv = (name: string) => repoEnv[name]?.trim() || undefined;
+const iosIdentityOverrides = {
+  bundleIdentifier: optionalEnv("T3CODE_IOS_BUNDLE_ID"),
+  appGroupIdentifier: optionalEnv("T3CODE_IOS_APP_GROUP_ID"),
+  appleTeamId: optionalEnv("T3CODE_IOS_APPLE_TEAM_ID"),
+  buildNumber: optionalEnv("T3CODE_IOS_BUILD_NUMBER"),
+  // Comma-separated Clerk frontend API hosts, the same variable desktop uses
+  // for its passkey domains.
+  passkeyRpDomains: optionalEnv("T3CODE_CLERK_PASSKEY_RP_DOMAINS")
+    ?.split(",")
+    .map((domain) => domain.trim().toLowerCase())
+    .filter((domain) => domain.length > 0),
+};
+// Per-target profiles for a manually signed archive (see ios-testflight.sh).
+const iosManualSigning = {
+  appProfile: optionalEnv("T3CODE_IOS_PROVISIONING_PROFILE"),
+  widgetsProfile: optionalEnv("T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE"),
+  sharingProfile: optionalEnv("T3CODE_IOS_SHARING_PROVISIONING_PROFILE"),
+  identity: optionalEnv("T3CODE_IOS_SIGNING_IDENTITY") ?? "Apple Distribution",
+};
+const isIosManualSigningEnabled = iosManualSigning.appProfile !== undefined;
+
+const UPSTREAM_EAS_PROJECT_ID = "d763fcb8-d37c-41ea-a773-b54a0ab4a454";
+// A build under another bundle id must never claim the T3 Tools EAS project
+// or install OTA updates published for the T3 Tools app.
+const isUpstreamIdentity = iosIdentityOverrides.bundleIdentifier === undefined;
+const easProjectId =
+  optionalEnv("T3CODE_EXPO_PROJECT_ID") ??
+  (isUpstreamIdentity ? UPSTREAM_EAS_PROJECT_ID : undefined);
+const easOwner = optionalEnv("T3CODE_EXPO_OWNER") ?? (isUpstreamIdentity ? "pingdotgg" : undefined);
+const updatesUrl =
+  optionalEnv("T3CODE_MOBILE_UPDATES_URL") ??
+  (easProjectId ? `https://u.expo.dev/${easProjectId}` : undefined);
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 // Android layers are rendered by scripts/export-android-icons.ts from the Icon Composer sources.
@@ -29,6 +67,35 @@ if (
 ) {
   throw new Error(
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
+  );
+}
+
+if (
+  iosIdentityOverrides.bundleIdentifier &&
+  !IOS_BUNDLE_IDENTIFIER_PATTERN.test(iosIdentityOverrides.bundleIdentifier)
+) {
+  throw new Error(
+    "T3CODE_IOS_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code.",
+  );
+}
+if (
+  iosIdentityOverrides.appGroupIdentifier &&
+  !IOS_APP_GROUP_IDENTIFIER_PATTERN.test(iosIdentityOverrides.appGroupIdentifier)
+) {
+  throw new Error("T3CODE_IOS_APP_GROUP_ID must be an App Group such as group.com.example.t3code.");
+}
+if (
+  iosIdentityOverrides.appleTeamId &&
+  !IOS_APPLE_TEAM_ID_PATTERN.test(iosIdentityOverrides.appleTeamId)
+) {
+  throw new Error("T3CODE_IOS_APPLE_TEAM_ID must be a 10-character Apple Team ID.");
+}
+if (
+  isIosManualSigningEnabled &&
+  (!iosIdentityOverrides.appleTeamId || !iosManualSigning.widgetsProfile)
+) {
+  throw new Error(
+    "T3CODE_IOS_PROVISIONING_PROFILE also requires T3CODE_IOS_APPLE_TEAM_ID and T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE.",
   );
 }
 
@@ -112,7 +179,15 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 const variant = VARIANT_CONFIG[APP_VARIANT];
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
-  : variant.iosBundleIdentifier;
+  : (iosIdentityOverrides.bundleIdentifier ?? variant.iosBundleIdentifier);
+const iosAppGroupIdentifier =
+  iosIdentityOverrides.appGroupIdentifier ?? `group.${iosBundleIdentifier}`;
+// The default group of the App ID, so keychain items an earlier app under the
+// same bundle id saved without an explicit group stay readable.
+const iosKeychainAccessGroup = `$(AppIdentifierPrefix)${
+  iosIdentityOverrides.bundleIdentifier ?? variant.iosBundleIdentifier
+}`;
+const iosAssociatedDomainHosts = iosIdentityOverrides.passkeyRpDomains ?? [variant.relyingParty];
 
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
@@ -124,7 +199,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
   "expo-widgets",
   {
     bundleIdentifier: `${iosBundleIdentifier}.widgets`,
-    groupIdentifier: `group.${iosBundleIdentifier}`,
+    groupIdentifier: iosAppGroupIdentifier,
     enablePushNotifications: true,
     // Agent activity can update many times an hour; without the
     // frequent-updates entitlement iOS throttles the update budget sooner.
@@ -203,7 +278,7 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       // real system share target.
       enabled: !isIosPersonalTeamBuild,
       extensionBundleIdentifier: `${iosBundleIdentifier}.sharing`,
-      appGroupId: `group.${iosBundleIdentifier}`,
+      appGroupId: iosAppGroupIdentifier,
       activationRule: {
         supportsText: true,
         supportsWebUrlWithMaxCount: 1,
@@ -239,12 +314,14 @@ const config: ExpoConfig = {
   orientation: "portrait",
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
-  updates: {
-    enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    checkAutomatically: "ON_LOAD",
-    fallbackToCacheTimeout: 0,
-  },
+  updates: updatesUrl
+    ? {
+        enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
+        url: updatesUrl,
+        checkAutomatically: "ON_LOAD",
+        fallbackToCacheTimeout: 0,
+      }
+    : { enabled: false },
   ios: {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
@@ -252,16 +329,17 @@ const config: ExpoConfig = {
     // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
+    ...(iosIdentityOverrides.buildNumber ? { buildNumber: iosIdentityOverrides.buildNumber } : {}),
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
-    appleTeamId: "ARK85ZXQ4Z",
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    appleTeamId: iosIdentityOverrides.appleTeamId ?? "ARK85ZXQ4Z",
+    associatedDomains: iosAssociatedDomainHosts.flatMap((host) => [
+      `applinks:${host}`,
+      `webcredentials:${host}`,
+    ]),
     entitlements: {
-      "keychain-access-groups": [`$(AppIdentifierPrefix)${variant.iosBundleIdentifier}`],
+      "keychain-access-groups": [iosKeychainAccessGroup],
     },
     infoPlist: {
       UISupportedInterfaceOrientations: [
@@ -321,6 +399,22 @@ const config: ExpoConfig = {
     favicon: variant.assets.appIcon,
   },
   plugins: [
+    // First on purpose: same-type mods run last-registered-first, so this runs
+    // after expo-sharing and expo-widgets have created the targets it signs.
+    ...(isIosManualSigningEnabled
+      ? [
+          [
+            "./plugins/withIosManualSigning.cjs",
+            {
+              appleTeamId: iosIdentityOverrides.appleTeamId,
+              appProfileSpecifier: iosManualSigning.appProfile,
+              widgetProfileSpecifier: iosManualSigning.widgetsProfile,
+              sharingProfileSpecifier: iosManualSigning.sharingProfile,
+              identity: iosManualSigning.identity,
+            },
+          ] satisfies NonNullable<ExpoConfig["plugins"]>[number],
+        ]
+      : []),
     "expo-asset",
     [
       "expo-font",
@@ -492,11 +586,9 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    },
+    ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
   },
-  owner: "pingdotgg",
+  ...(easOwner ? { owner: easOwner } : {}),
 };
 
 export default config;
