@@ -262,9 +262,10 @@
         "key": "apiKey",
         "control": "password",
         "label": "API key",
-        "description": "Gemini API key, or a Vertex AI express key for Agent Platform. Stored in plain text on this environment.",
+        "description": "Gemini API key, or a Vertex AI express key for Agent Platform. Stored separately on this environment.",
         "placeholder": "Optional",
-        "clearWhenEmpty": "omit"
+        "clearWhenEmpty": "omit",
+        "secret": true
       },
       {
         "key": "gcpProject",
