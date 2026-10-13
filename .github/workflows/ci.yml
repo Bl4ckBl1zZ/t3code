@@ -259,8 +259,7 @@ jobs:
 
       # integration/transferBudgetV2.integration.test.ts writes the report; exactly one shard
       # produces these files. Gating the upload on their presence keeps a
-      # single `thread-transfer-results` artifact per run, which is the name
-      # thread-transfer-report.yml resolves.
+      # single `thread-transfer-results` artifact per run.
       - name: Detect transfer budget report
         id: transfer_budget
         if: always()
