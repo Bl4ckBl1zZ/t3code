@@ -21,6 +21,7 @@ import { migrate } from "drizzle-orm/effect-postgres/migrator";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 
 export const RELAY_MIGRATIONS_FOLDER = NodeURL.fileURLToPath(
   new URL("../migrations/postgres", import.meta.url),
@@ -103,26 +104,34 @@ const migrationDatabaseUrl = Config.Redacted("DATABASE_MIGRATION_URL").pipe(
 );
 
 const check = Effect.gen(function* () {
-  const database = yield* makeWithDefaults();
+  const client = yield* SqlClient.SqlClient;
   const journal = `"${RELAY_MIGRATIONS_SCHEMA}"."${RELAY_MIGRATIONS_TABLE}"`;
-  const exists = yield* database.execute<{ readonly present: string | null }>(
-    sql.raw(`SELECT to_regclass(${literal(journal)})::text AS present`),
-  );
-  const applied = exists[0]?.present
-    ? (yield* database.execute<{ readonly name: string }>(
-        sql.raw(`SELECT name FROM ${journal} ORDER BY id`),
-      )).map((row) => row.name)
+  const [exists] = yield* client<{ readonly present: string | null }>`
+    SELECT to_regclass(${journal})::text AS present
+  `;
+  const applied = exists?.present
+    ? (yield* client<{ readonly name: string }>`
+        SELECT name FROM ${client(RELAY_MIGRATIONS_SCHEMA)}.${client(RELAY_MIGRATIONS_TABLE)}
+        ORDER BY id
+      `).map((row) => row.name)
     : [];
-  const appliedSet = new Set(applied.map((name) => FORK_RENAMED_MIGRATIONS[name] ?? name));
-  const pending = readMigrationFiles({ migrationsFolder: RELAY_MIGRATIONS_FOLDER })
-    .map((migration) => migration.name)
-    .filter((name) => !appliedSet.has(name));
-  const local = new Set(
-    readMigrationFiles({ migrationsFolder: RELAY_MIGRATIONS_FOLDER }).map((m) => m.name),
+  const local = readMigrationFiles({ migrationsFolder: RELAY_MIGRATIONS_FOLDER }).map(
+    (migration) => migration.name,
   );
-  const unknown = applied.filter((name) => !local.has(FORK_RENAMED_MIGRATIONS[name] ?? name));
+  const appliedSet = new Set(applied.map((name) => FORK_RENAMED_MIGRATIONS[name] ?? name));
+  const localSet = new Set(local);
   yield* Effect.logInfo("Relay migration check (read-only)").pipe(
-    Effect.annotateLogs({ applied, pending, appliedButNotInThisBuild: unknown }),
+    Effect.annotateLogs({
+      applied,
+      pending: local.filter((name) => !appliedSet.has(name)),
+      appliedButNotInThisBuild: applied.filter(
+        (name) => !localSet.has(FORK_RENAMED_MIGRATIONS[name] ?? name),
+      ),
+      backupTaken:
+        (yield* client`
+        SELECT 1 FROM pg_namespace WHERE nspname = ${FORK_BACKUP_SCHEMA}
+      `).length > 0,
+    }),
   );
 }).pipe(Effect.provide(PgClient.layerConfig({ url: migrationDatabaseUrl })));
 
