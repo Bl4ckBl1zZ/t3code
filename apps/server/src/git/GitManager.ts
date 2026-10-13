@@ -126,10 +126,14 @@ export class GitManager extends Context.Service<
       input: VcsStatusInput,
       options?: GitRemoteStatusOptions,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
-    /** Resolve the PR for a saved branch without changing the current checkout. */
+    /**
+     * Resolve the PR for a saved branch without changing the current checkout.
+     * `refresh` asks the host again. `freshGitState` rereads the branch's git
+     * state without forcing a host refresh; use it before persisting a result.
+     */
     readonly branchPullRequest: (
       input: { readonly cwd: string; readonly branch: string },
-      options?: { readonly refresh?: boolean },
+      options?: { readonly refresh?: boolean; readonly freshGitState?: boolean },
     ) => Effect.Effect<GitBranchPullRequest | null, GitManagerServiceError>;
     readonly invalidateLocalStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
@@ -1232,7 +1236,8 @@ export const make = Effect.gen(function* () {
   // reactors ask about the same saved branches every sweep, so each verified
   // answer is remembered until the PR lookup it came from expires. Local
   // upstream or remote edits are therefore noticed within the PR lookup TTL;
-  // invalidateStatus (a new epoch) and `refresh` still bypass it immediately.
+  // invalidateStatus (a new epoch) and `refresh` still bypass it immediately,
+  // and `freshGitState` skips it for callers about to persist or act on one.
   interface BranchPullRequestAnswer {
     readonly pr: GitBranchPullRequest | null;
     readonly resolvedAt: number;
@@ -2353,7 +2358,7 @@ export const make = Effect.gen(function* () {
     const answerKey = [cacheCwd, branch, String(prLookupEpoch(cacheCwd))].join("\u0000");
     if (options?.refresh) {
       branchPullRequestAnswers.delete(answerKey);
-    } else {
+    } else if (!options?.freshGitState) {
       const known = branchPullRequestAnswers.get(answerKey);
       if (known !== undefined && (yield* Clock.currentTimeMillis) < known.expiresAt) {
         return known.pr;
