@@ -31,18 +31,33 @@ export class DesktopUserDataInitializationError extends Schema.TaggedError<Deskt
   }
 }
 
+declare const __T3CODE_BUILD_DESKTOP_USER_DATA_DIR_NAME__: string | undefined;
+
+/**
+ * Profile folder pinned at build time with `T3CODE_DESKTOP_USER_DATA_DIR_NAME`.
+ * A distribution whose installed builds already use that folder keeps it, so
+ * an update reopens the same Local Storage and IndexedDB instead of starting
+ * a separate profile.
+ */
+const BUILD_TIME_USER_DATA_DIR_NAME =
+  typeof __T3CODE_BUILD_DESKTOP_USER_DATA_DIR_NAME__ === "undefined"
+    ? ""
+    : __T3CODE_BUILD_DESKTOP_USER_DATA_DIR_NAME__.trim();
+
 /** Select Electron's profile independently of the server's T3 home. */
 export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPath")(
   function* (input: {
     readonly appDataDirectory: string;
     readonly isDevelopment: boolean;
     readonly platform: NodeJS.Platform;
+    readonly pinnedDirName?: string;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const pinnedDirName = input.pinnedDirName ?? BUILD_TIME_USER_DATA_DIR_NAME;
     const names = input.isDevelopment
       ? { current: "t3code-dev", legacy: "T3 Code (Dev)" }
-      : { current: "t3code-v2", legacy: "T3 Code (Alpha)" };
+      : { current: pinnedDirName || "t3code-v2", legacy: "T3 Code (Alpha)" };
     const destinationPath = path.join(input.appDataDirectory, names.current);
     const legacyPath = path.join(input.appDataDirectory, names.legacy);
     const inspect = (resourcePath: string) =>
@@ -53,7 +68,8 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
             DesktopUserDataInitializationError.fromFileSystem(cause, "inspect", resourcePath),
           ),
         );
-    if (input.isDevelopment) {
+    // A pinned profile resolves like V1 did: the legacy folder while it exists.
+    if (input.isDevelopment || pinnedDirName) {
       return (yield* inspect(legacyPath)) ? legacyPath : destinationPath;
     }
     // Chromium databases require their own profile for each running version.

@@ -40,6 +40,7 @@ import {
   LinuxDesktopBuildPrerequisitesMissingError,
   MacDesktopBuildPrerequisitesMissingError,
   MacPasskeySigningConfigurationResolutionError,
+  InvalidDesktopAppIdError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
   preflightLinuxDesktopBuild,
@@ -49,6 +50,7 @@ import {
   resolveMacWebAuthnEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
+  resolveDesktopAppId,
   resolveDesktopRuntimeDependencies,
   resolveMergedStageDependencies,
   resolveFffNativeDependencies,
@@ -1950,6 +1952,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
     });
+  });
+
+  it("overrides the desktop application identifier for packaging and entitlements", () => {
+    assert.equal(resolveDesktopAppId(undefined), "com.t3tools.t3code");
+    assert.equal(resolveDesktopAppId(" com.example.app "), "com.example.app");
+    assert.throws(() => resolveDesktopAppId("not a bundle id"), InvalidDesktopAppIdError);
+
+    const configuration = resolveMacPasskeySigningConfiguration({
+      T3CODE_DESKTOP_APP_ID: "com.example.app",
+      T3CODE_APPLE_TEAM_ID: "ABC1234567",
+      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+    });
+    assert.equal(configuration.appId, "com.example.app");
+    assert.include(
+      renderMacPasskeyEntitlements(configuration, {
+        touchIdKeychainAccessGroup: undefined,
+        browserPasskeys: false,
+      }),
+      "<string>ABC1234567.com.example.app</string>",
+    );
   });
 
   it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {

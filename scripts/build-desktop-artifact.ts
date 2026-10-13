@@ -56,7 +56,8 @@ import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+const DEFAULT_DESKTOP_APP_ID = "com.t3tools.t3code";
+const DESKTOP_APP_ID_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -1177,6 +1178,29 @@ export class InvalidAppleTeamIdError extends Schema.TaggedError<InvalidAppleTeam
   }
 }
 
+export class InvalidDesktopAppIdError extends Schema.TaggedError<InvalidDesktopAppIdError>()(
+  "InvalidDesktopAppIdError",
+  {
+    appId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `T3CODE_DESKTOP_APP_ID '${this.appId}' must be a reverse-DNS application identifier.`;
+  }
+}
+
+/**
+ * Bundle identifier for packaged builds. Forks that ship their own signed app
+ * set `T3CODE_DESKTOP_APP_ID`; the passkey keychain group derives from it too.
+ */
+export function resolveDesktopAppId(value: string | undefined): string {
+  const appId = value?.trim() || DEFAULT_DESKTOP_APP_ID;
+  if (!DESKTOP_APP_ID_PATTERN.test(appId)) {
+    throw new InvalidDesktopAppIdError({ appId });
+  }
+  return appId;
+}
+
 export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedError<MissingMacPasskeyProvisioningProfileError>()(
   "MissingMacPasskeyProvisioningProfileError",
   {},
@@ -1218,6 +1242,7 @@ export class MissingMacPasskeyRpDomainError extends Schema.TaggedError<MissingMa
 export const MacPasskeySigningConfigurationError = Schema.Union([
   InvalidMacPasskeyRpDomainError,
   InvalidAppleTeamIdError,
+  InvalidDesktopAppIdError,
   MissingMacPasskeyProvisioningProfileError,
   MissingMacPasskeyDomainConfigurationError,
   InvalidMacPasskeyPublishableKeyError,
@@ -1270,6 +1295,7 @@ function normalizePasskeyRpDomain(value: string): string {
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
 ): MacPasskeySigningConfiguration {
+  const appId = resolveDesktopAppId(env.T3CODE_DESKTOP_APP_ID);
   const teamId = env.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
   if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
     throw new InvalidAppleTeamIdError({ teamId });
@@ -1304,7 +1330,7 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    appId,
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -2767,9 +2793,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  appId = DEFAULT_DESKTOP_APP_ID,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    appId,
     productName: resolveDesktopProductName(version),
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
@@ -3537,6 +3564,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const repoRoot = yield* RepoRoot;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
+  const repoEnv = loadRepoEnv({ repoRoot });
+  const appId = yield* Effect.try({
+    try: () => resolveDesktopAppId(repoEnv.T3CODE_DESKTOP_APP_ID),
+    catch: () => new InvalidDesktopAppIdError({ appId: repoEnv.T3CODE_DESKTOP_APP_ID ?? "" }),
+  });
   const hostPlatform = yield* HostProcess.Platform;
   if (hostPlatform === "linux" && options.platform === "linux") {
     yield* preflightLinuxDesktopBuild(options.arch);
@@ -3799,7 +3831,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () => resolveMacPasskeySigningConfiguration(repoEnv),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
@@ -3888,6 +3920,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      appId,
     ),
     dependencies: stageDependencies,
     devDependencies: {

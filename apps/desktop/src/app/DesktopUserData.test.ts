@@ -71,3 +71,30 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect.each(["darwin", "win32"] as const)(
+  "keeps a pinned profile folder in place on %s",
+  (platform) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-profile-" });
+      const pinned = path.join(directory, "t3code");
+      yield* fs.makeDirectory(pinned, { recursive: true });
+      yield* fs.writeFileString(path.join(pinned, "Local State"), "existing state");
+
+      const resolve = resolveUserDataPath({
+        appDataDirectory: directory,
+        isDevelopment: false,
+        platform,
+        pinnedDirName: "t3code",
+      });
+      assert.equal(yield* resolve, pinned);
+      assert.isFalse(yield* fs.exists(path.join(directory, "t3code-v2")));
+
+      // Installs that predate the rename still own the legacy folder.
+      const legacy = path.join(directory, "T3 Code (Alpha)");
+      yield* fs.makeDirectory(legacy, { recursive: true });
+      assert.equal(yield* resolve, legacy);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

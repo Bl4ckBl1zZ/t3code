@@ -1,9 +1,8 @@
 name: Deploy T3 Connect relay
 
+# No push trigger: this repository's relay is self-hosted on its own database
+# and must not be redeployed with upstream's relay configuration on every push.
 on:
-  push:
-    branches:
-      - main
   # Redeploys main after a variable or secret change. Alchemy redeploys the
   # Worker when a value it reads changes, so force is rarely needed, and it
   # replaces the Postgres runtime role (alchemy-run/alchemy#1832).
@@ -28,7 +27,7 @@ jobs:
     name: Deploy production relay
     # A manual run from another branch would deploy that branch to production.
     if: github.ref == 'refs/heads/main'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
       name: production
