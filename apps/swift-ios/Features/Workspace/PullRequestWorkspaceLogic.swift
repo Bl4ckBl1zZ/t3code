@@ -74,9 +74,12 @@ struct NativePullRequestPreferences: Codable, Equatable, Sendable {
 }
 
 enum NativePullRequestWorkspaceLogic {
+    /// Which environment lists each repository. The same repository can be
+    /// available on several machines, so it is read once: from a connected
+    /// one first, since an unreachable machine cannot answer, then the active
+    /// one.
     static func assignedProjects(_ projects: [FeatureProject], environments: [FeatureEnvironment], preferences: NativePullRequestPreferences) -> [String: [String]] {
-        let available = environments.filter { $0.supportsPullRequests == true && (preferences.environmentID == nil || $0.id == preferences.environmentID) }
-            .sorted { lhs, rhs in lhs.isActive != rhs.isActive ? lhs.isActive : lhs.id < rhs.id }
+        let available = listingOrder(environments.filter { $0.supportsPullRequests == true && (preferences.environmentID == nil || $0.id == preferences.environmentID) })
         var seen = Set<String>()
         var assigned: [String: [String]] = [:]
         for environment in available {
@@ -86,6 +89,34 @@ enum NativePullRequestWorkspaceLogic {
             }
         }
         return assigned
+    }
+
+    /// Connected environments first, then the active one, then by id.
+    static func listingOrder(_ environments: [FeatureEnvironment]) -> [FeatureEnvironment] {
+        environments.sorted { lhs, rhs in
+            let reachable = (lhs.connectionState == .connected, rhs.connectionState == .connected)
+            if reachable.0 != reachable.1 { return reachable.0 }
+            return lhs.isActive != rhs.isActive ? lhs.isActive : lhs.id < rhs.id
+        }
+    }
+
+    /// Another connected environment holding the pull request's repository,
+    /// for when the one it was opened in is unreachable. Nil while the
+    /// original is connected or no other copy exists.
+    static func fallbackScope(
+        for scope: FeaturePullRequestProjectScope,
+        projects: [FeatureProject],
+        environments: [FeatureEnvironment]
+    ) -> FeaturePullRequestProjectScope? {
+        guard let own = projects.first(where: { $0.id == scope.projectID }) else { return nil }
+        let connected = Set(environments.filter { $0.connectionState == .connected }.map(\.id))
+        guard !connected.contains(own.environmentID) else { return nil }
+        let key = scope.canonicalKey
+        guard let copy = projects.first(where: {
+            $0.environmentID != own.environmentID && connected.contains($0.environmentID)
+                && $0.repositoryCanonicalKey?.lowercased() == key
+        }) else { return nil }
+        return FeaturePullRequestProjectScope(projectID: copy.id, host: scope.host, repository: scope.repository)
     }
 
     static func sort(_ rows: [NativePullRequestRow], preferences: NativePullRequestPreferences) -> [NativePullRequestRow] {

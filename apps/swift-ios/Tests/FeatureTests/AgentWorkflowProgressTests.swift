@@ -61,7 +61,9 @@ final class AgentWorkflowProgressTests: XCTestCase {
         XCTAssertEqual(WorkflowObservability.formatTokenCount(1234), "1.2k")
         XCTAssertEqual(WorkflowObservability.formatTokenCount(9999), "10.0k")
         XCTAssertEqual(WorkflowObservability.formatTokenCount(45_000), "45k")
-        XCTAssertEqual(WorkflowObservability.formatTokenCount(999_999), "1000k")
+        XCTAssertEqual(WorkflowObservability.formatTokenCount(999_499), "999k")
+        XCTAssertEqual(WorkflowObservability.formatTokenCount(999_500), "1.0M")
+        XCTAssertEqual(WorkflowObservability.formatTokenCount(999_999), "1.0M")
         XCTAssertEqual(WorkflowObservability.formatTokenCount(1_000_000), "1.0M")
         // Exactly representable in binary, where %.1f alone would round to even
         // and disagree with the other clients' toFixed.

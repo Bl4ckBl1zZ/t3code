@@ -35,4 +35,16 @@ struct ThreadHistoricalWorkSummaryTests {
             .init(action: .tool, source: source), .init(action: .tool, source: source), .init(action: .linkPR, source: source)
         ]) == "Used Chrome integration and linked 1 pull request")
     }
+    @Test func sourcesSharingANameAreNamedOnce() {
+        func integration(_ index: Int, _ name: String) -> ThreadHistoricalWorkItem {
+            .init(action: .tool, source: ToolActivitySource(key: "integration-\(index)", name: name, kind: "integration", icon: nil))
+        }
+        #expect(ThreadHistoricalWorkSummary.label([integration(0, "Foo"), integration(1, "Foo"), .init(action: .command)])
+            == "Used Foo integration and ran 1 command")
+        #expect(ThreadHistoricalWorkSummary.label([integration(0, "Foo"), integration(1, "Bar"), integration(2, "Foo"), .init(action: .command)])
+            == "Used Foo and Bar integrations and ran 1 command")
+        let app = ToolActivitySource(key: "native-app:com.t3tools.t3code", name: "Computer Use", kind: "computer", icon: nil)
+        #expect(ThreadHistoricalWorkSummary.label([.init(action: .tool, source: app), .init(action: .tool, source: .computerUse)])
+            == "Used Computer Use")
+    }
 }

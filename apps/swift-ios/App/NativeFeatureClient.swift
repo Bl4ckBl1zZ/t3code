@@ -4433,6 +4433,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                                 .disconnected,
                                 detail: self.refusedCredentialDetail(environmentID: environmentID)
                             )
+                        } else if case .tunnelNotReady = error as? T3ConnectRelayError {
+                            self.emitConnection(
+                                .reconnecting,
+                                detail: "\(T3ConnectRelayError.tunnelNotReadyMessage) Retrying automatically."
+                            )
                         } else {
                             self.emitConnection(
                                 .reconnecting,
@@ -5820,7 +5825,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     projectIcon: project.projectIcon,
                     repositoryCanonicalKey: project.repositoryIdentity?.canonicalKey,
                     providerInstancesOff: serverConfigsByEnvironmentID[environment.id]?
-                        .providerInstancesOff(inProject: project.id)
+                        .providerInstancesOff(inProject: project.id),
+                    repositoryGroupingKey: project.repositoryIdentity?.groupingKey
                 )
             }
         }

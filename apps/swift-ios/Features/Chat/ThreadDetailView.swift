@@ -29,6 +29,7 @@ public struct ThreadDetailView: View {
 
     @State private var lastPullRequestPrompt: String?
     @State private var pullRequestCheckoutWarning: String?
+    @State private var linkedPromptAlert: LinkedPromptAlert?
     @State private var citationPreview: AssistantCitation?
     @State private var citationError: String?
     @State private var draft = ""
@@ -127,8 +128,25 @@ public struct ThreadDetailView: View {
         .alert("Pull request checkout", isPresented: Binding(get: { pullRequestCheckoutWarning != nil }, set: { if !$0 { pullRequestCheckoutWarning = nil } })) {
             Button("OK") { pullRequestCheckoutWarning = nil }
         } message: { Text(pullRequestCheckoutWarning ?? "") }
-        .onChange(of: isSending) { if !isSending { consumePullRequestPrompt() } }
-        .onChange(of: isSwappingDraft) { if !isSwappingDraft { consumePullRequestPrompt() } }
+        .onChange(of: isSending) { if !isSending { consumePullRequestPrompt(); consumeLinkedPrompt() } }
+        .onChange(of: isSwappingDraft) { if !isSwappingDraft { consumePullRequestPrompt(); consumeLinkedPrompt() } }
+        .onChange(of: model.pendingLinkedPrompts[thread.id]) { consumeLinkedPrompt() }
+        .alert(
+            linkedPromptAlert?.replacement == nil ? "Prompt from a link" : "Linked prompt ready. Replace draft?",
+            isPresented: Binding(get: { linkedPromptAlert != nil }, set: { if !$0 { linkedPromptAlert = nil } }),
+            presenting: linkedPromptAlert
+        ) { alert in
+            if let replacement = alert.replacement {
+                Button("Keep Mine", role: .cancel) {}
+                Button("Replace") {
+                    draft = replacement
+                    composerFocused = true
+                    scheduleDraftSave()
+                }
+            } else {
+                Button("OK") {}
+            }
+        } message: { alert in Text(alert.notice) }
     }
 
     /// The screen and its bars. Split from `threadContent` so neither
@@ -1896,6 +1914,27 @@ public struct ThreadDetailView: View {
         scheduleDraftSave()
     }
 
+    /// A linked prompt fills an empty composer; typed text is replaced only
+    /// when the user says so. The notice rides in the same alert, so a link
+    /// never stacks two dialogs. Nothing is sent.
+    private func consumeLinkedPrompt() {
+        guard didRestoreDraft, !isSending, !isSwappingDraft,
+              let prompt = model.pendingLinkedPrompts.removeValue(forKey: thread.id) else { return }
+        let notice = PromptLinks.notice(hiddenCharacters: prompt.hiddenCharacters)
+        switch PromptLinks.threadDraftAction(currentText: draft, prompt: prompt.text) {
+        case .fill:
+            draft = prompt.text
+            toolSurface = nil
+            composerFocused = true
+            scheduleDraftSave()
+            linkedPromptAlert = LinkedPromptAlert(notice: notice, replacement: nil)
+        case .keep:
+            linkedPromptAlert = LinkedPromptAlert(notice: notice, replacement: nil)
+        case .ask:
+            linkedPromptAlert = LinkedPromptAlert(notice: notice, replacement: prompt.text)
+        }
+    }
+
     private var draftKey: String {
         FeatureComposerDraftStore.threadKey(currentThread)
     }
@@ -1918,6 +1957,7 @@ public struct ThreadDetailView: View {
         attachments = restored.attachments
         didRestoreDraft = true
         consumePullRequestPrompt()
+        consumeLinkedPrompt()
 
         // Changes made while the file read or thread refresh was in flight did
         // not pass the didRestoreDraft gate, so enqueue their first save now.
@@ -3859,7 +3899,13 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
 private struct FeatureRemoteAttachmentThumbnail: View {
     private struct Request: Hashable {
         let url: URL
+        let identity: String?
         let maximumPixelSize: Int
+        /// The image's own identity: a re-minted URL for the same attachment
+        /// keeps showing what is loaded while the cache answers.
+        var cacheKey: String {
+            FeatureAttachmentThumbnailLoader.cacheKey(for: url, identity: identity, maximumPixelSize: maximumPixelSize)
+        }
     }
 
     @SwiftUI.Environment(\.displayScale) private var displayScale
@@ -3868,10 +3914,11 @@ private struct FeatureRemoteAttachmentThumbnail: View {
     @State private var failedRequest: Request?
 
     let url: URL
+    var identity: String? = nil
 
     var body: some View {
         Group {
-            if loadedRequest == request, let image {
+            if loadedRequest?.cacheKey == request.cacheKey, let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -3887,6 +3934,7 @@ private struct FeatureRemoteAttachmentThumbnail: View {
             do {
                 let image = try await FeatureAttachmentThumbnailLoader.image(
                     for: activeRequest.url,
+                    identity: activeRequest.identity,
                     maximumPixelSize: activeRequest.maximumPixelSize
                 )
                 try Task.checkCancellation()
@@ -3907,6 +3955,7 @@ private struct FeatureRemoteAttachmentThumbnail: View {
     private var request: Request {
         Request(
             url: url,
+            identity: identity,
             maximumPixelSize: min(768, max(190, Int(ceil(190 * displayScale))))
         )
     }
@@ -4132,7 +4181,12 @@ private struct FeatureMessageAttachmentsView: View {
                                         previewData: previewData
                                     )
                                 } else if let url = attachment.url {
-                                    FeatureRemoteAttachmentThumbnail(url: url)
+                                    FeatureRemoteAttachmentThumbnail(
+                                        url: url,
+                                        identity: FeatureAttachmentThumbnailLoader.attachmentIdentity(
+                                            scope: mediaContext?.threadID, attachmentID: attachment.id
+                                        )
+                                    )
                                 } else {
                                     attachmentPlaceholder(systemImage: "photo")
                                 }

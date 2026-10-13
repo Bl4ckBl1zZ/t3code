@@ -54,6 +54,8 @@ public struct NewThreadView: View {
     /// The machine whose "No project" folder is being opened.
     @State private var openingScratchEnvironmentID: String?
     @State private var scratchFailure: String?
+    /// "Read it before you send": the draft came from a prompt link.
+    @State private var linkNotice: String?
     @FocusState private var promptFocused: Bool
     private let voice = VoiceComposerCoordinator.shared
 
@@ -104,7 +106,13 @@ public struct NewThreadView: View {
             Button("Save Draft") { dismiss() }
             Button("Keep Editing", role: .cancel) {}
         }
+        .alert("Prompt from a link", isPresented: Binding(get: { linkNotice != nil }, set: { if !$0 { linkNotice = nil } })) {
+            Button("OK") { linkNotice = nil }
+        } message: { Text(linkNotice ?? "") }
         .onAppear {
+            if let draftID, let notice = model.pendingNewTaskLinkNotices.removeValue(forKey: draftID) {
+                linkNotice = notice
+            }
             if projectID.isEmpty {
                 // A caller-supplied project is an explicit destination and wins;
                 // otherwise reopen on the project this sheet was last used for.

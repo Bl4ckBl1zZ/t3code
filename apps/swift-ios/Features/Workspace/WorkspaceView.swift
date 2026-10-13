@@ -5,7 +5,9 @@ struct FeatureWorkspaceNavigationRequest: Equatable, Sendable {
     enum Destination: Equatable, Sendable {
         case thread(id: String)
         case project(id: String)
-        case newTask(projectID: String?)
+        /// `draftID` opens a specific New Task draft, such as one a prompt
+        /// link wrote; nil opens the project's usual draft.
+        case newTask(projectID: String?, draftID: String? = nil)
     }
 
     let id: UUID
@@ -1586,7 +1588,7 @@ public struct WorkspaceView: View {
             dismissTransientPresentations()
             selectedProjectID = id
             closeSelectedThread()
-        case let .newTask(projectID):
+        case let .newTask(projectID, draftID):
             if let projectID,
                model.snapshot.projects.contains(where: { $0.id == projectID }) {
                 selectedProjectID = projectID
@@ -1595,6 +1597,7 @@ public struct WorkspaceView: View {
             Task { @MainActor in
                 await Task.yield()
                 if let projectID {
+                    newTaskDraftID = draftID
                     presentNewTask(projectID: projectID)
                 } else {
                     openNewTaskOrProjectCreation(initialProjectID: nil)

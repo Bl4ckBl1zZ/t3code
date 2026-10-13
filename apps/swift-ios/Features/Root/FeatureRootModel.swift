@@ -28,6 +28,14 @@ public final class FeatureRootModel {
 
     var pendingPullRequestPrompts: [String: PendingPullRequestPrompt] = [:]
 
+    /// Prompts a link brought for an existing thread, keyed by thread id. The
+    /// thread's composer takes one once its draft is restored.
+    var pendingLinkedPrompts: [String: PromptLinks.LinkedPrompt] = [:]
+
+    /// The notice a New Task draft written by a prompt link shows when it
+    /// opens, keyed by draft id.
+    var pendingNewTaskLinkNotices: [String: String] = [:]
+
     func stagePullRequestTask(scope: FeaturePullRequestScope, overview: FeaturePullRequestOverview, kind: PullRequestHandoffKind, mode: PullRequestCheckoutMode, selection: PullRequestHandoffSelection? = nil) async throws -> String {
         let prepared: FeaturePullRequestPreparedThread
         if case let .thread(id) = scope, kind != .checkout {

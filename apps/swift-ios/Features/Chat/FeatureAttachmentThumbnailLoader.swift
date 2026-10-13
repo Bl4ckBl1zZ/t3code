@@ -6,8 +6,11 @@ import UIKit
 /// both scroll in and out of recycled cells, so decoding is cached rather than
 /// repeated.
 enum FeatureAttachmentThumbnailLoader {
-    static func image(for url: URL, maximumPixelSize: Int) async throws -> UIImage {
-        let cacheKey = "\(url.absoluteString)#\(maximumPixelSize)" as NSString
+    /// `identity` names the bytes when the URL does not: a signed asset URL
+    /// changes on every mint, and a reconnect mints again, so a URL-keyed
+    /// cache misses each time.
+    static func image(for url: URL, identity: String? = nil, maximumPixelSize: Int) async throws -> UIImage {
+        let cacheKey = cacheKey(for: url, identity: identity, maximumPixelSize: maximumPixelSize) as NSString
         if let cached = FeatureAttachmentThumbnailCache.shared.image(for: cacheKey) {
             return cached
         }
@@ -25,6 +28,17 @@ enum FeatureAttachmentThumbnailLoader {
         try Task.checkCancellation()
         FeatureAttachmentThumbnailCache.shared.insert(image, for: cacheKey)
         return image
+    }
+
+    static func cacheKey(for url: URL, identity: String?, maximumPixelSize: Int) -> String {
+        "\(identity ?? url.absoluteString)#\(maximumPixelSize)"
+    }
+
+    /// A server attachment never changes bytes once stored, so its image
+    /// caches under its id, scoped by the thread (and so the environment) it
+    /// belongs to. Nil without a scope, which falls back to the URL.
+    static func attachmentIdentity(scope: String?, attachmentID: String) -> String? {
+        scope.map { "t3-attachment:\($0.utf8.count):\($0)\(attachmentID)" }
     }
 
     private static func downsample(data: Data, maximumPixelSize: Int) throws -> UIImage {

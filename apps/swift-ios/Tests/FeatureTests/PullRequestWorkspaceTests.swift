@@ -28,6 +28,37 @@ final class PullRequestWorkspaceTests: XCTestCase {
         XCTAssertEqual(NativePullRequestWorkspaceLogic.assignedProjects(projects, environments: environments, preferences: selected), ["two": ["project"]])
     }
 
+    func testSharedRepositoryIsListedFromAConnectedEnvironment() {
+        let projects = [project("one", canonical: "github.com/owner/repo"), project("two", canonical: "github.com/owner/repo")]
+        var reachable = environments
+        reachable[1].connectionState = .connected
+        reachable[0].connectionState = .disconnected
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.assignedProjects(projects, environments: reachable, preferences: .init()), ["two": ["project"]])
+        reachable[0].connectionState = .connected
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.assignedProjects(projects, environments: reachable, preferences: .init()), ["one": ["project"]])
+        // Unprobed everywhere keeps the active environment first.
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.assignedProjects(projects, environments: environments, preferences: .init()), ["one": ["project"]])
+    }
+
+    func testOfflinePullRequestMovesToAConnectedCopyOfItsRepository() {
+        let laptop = project("laptop", "t3", canonical: "github.com/pingdotgg/t3code")
+        let projects = [laptop, project("desktop", "other", canonical: "github.com/pingdotgg/other"), project("server", "t3-copy", canonical: "GitHub.com/PingDotGG/T3Code")]
+        func environments(connected: Set<String>) -> [FeatureEnvironment] {
+            ["laptop", "desktop", "server"].map { id in
+                var environment = FeatureEnvironment(id: id, name: id, endpoint: "https://\(id).test", isActive: id == "laptop", supportsPullRequests: true)
+                environment.connectionState = connected.contains(id) ? .connected : .disconnected
+                return environment
+            }
+        }
+        let scope = FeaturePullRequestProjectScope(projectID: laptop.id, host: "github.com", repository: "pingdotgg/t3code")
+        XCTAssertEqual(
+            NativePullRequestWorkspaceLogic.fallbackScope(for: scope, projects: projects, environments: environments(connected: ["desktop", "server"])),
+            FeaturePullRequestProjectScope(projectID: FeatureScopedID.project(environmentID: "server", wireID: "t3-copy"), host: "github.com", repository: "pingdotgg/t3code")
+        )
+        XCTAssertNil(NativePullRequestWorkspaceLogic.fallbackScope(for: scope, projects: projects, environments: environments(connected: ["laptop", "server"])))
+        XCTAssertNil(NativePullRequestWorkspaceLogic.fallbackScope(for: scope, projects: projects, environments: environments(connected: ["desktop"])))
+    }
+
     func testHostIsPartOfIdentityAndReadinessUsesMeasuredSizes() {
         let rows = [
             NativePullRequestRow(environmentID: "one", entry: entry(1, conflict: true), sizeKnown: true),

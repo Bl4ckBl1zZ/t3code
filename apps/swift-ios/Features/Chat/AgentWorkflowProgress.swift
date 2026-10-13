@@ -123,7 +123,8 @@ public enum WorkflowObservability {
     /// Compact token count: 1234 -> "1.2k". Exact below 1000.
     public static func formatTokenCount(_ tokens: Int) -> String {
         if tokens < 1000 { return String(tokens) }
-        if tokens < 1_000_000 { return "\(scaled(Double(tokens) / 1000))k" }
+        // Anything from 999,500 rounds to 1000k, so it belongs to the next unit.
+        if tokens < 999_500 { return "\(scaled(Double(tokens) / 1000))k" }
         return "\(scaled(Double(tokens) / 1_000_000))M"
     }
 

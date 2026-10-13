@@ -54,3 +54,13 @@ before it replaces it.
 T3 Code removes characters you cannot see, such as zero-width and hidden tag characters, because
 they can hide instructions for the agent. When a prompt had them, T3 Code warns you that it may be
 malicious.
+
+## On iPhone and iPad
+
+The iOS app opens prompt links that app.t3.codes hands to it. A few things differ:
+
+- When you do not have the repository, choose **Use without project**, or add the project first
+  and open the link again. The iOS app does not clone from a link.
+- A `pr` link with no linked thread opens a draft in the repository's project with the pull request
+  link added to the prompt. The task starts from your default branch.
+- To share a prompt you sent, touch and hold the message and choose **Copy Prompt Link**.

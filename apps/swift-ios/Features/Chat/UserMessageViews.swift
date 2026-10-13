@@ -200,6 +200,13 @@ struct UserMessageBubble<Attachments: View>: View {
                 T3HUD.show("Copied", systemImage: "doc.on.doc")
             })
         }
+        // The prose alone: attached contexts belong to this thread.
+        if let link = PromptLinks.shareLink(for: content.body) {
+            actions.append(.init(id: "copy-prompt-link", title: "Copy Prompt Link", systemImage: "link") {
+                UIPasteboard.general.string = link
+                T3HUD.show("Prompt link copied", systemImage: "link")
+            })
+        }
         if let point = meta.restore, let store {
             let blocked: String? = store.isWorking
                 ? "Stop the current turn first"
@@ -560,6 +567,7 @@ struct UserMessageAnnotationCard: View {
 /// A message image from the server or, while it is still sending, from the
 /// bytes on this device. Downsampled and cached like the attachment grid.
 struct UserMessageAttachmentImage: View {
+    @SwiftUI.Environment(\.markdownMediaContext) private var mediaContext
     let attachment: FeatureMessageAttachment
     let maximumPixelSize: Int
     @State private var image: UIImage?
@@ -579,7 +587,11 @@ struct UserMessageAttachmentImage: View {
         .accessibilityHidden(true)
         .task(id: "\(attachment.id)#\(maximumPixelSize)") {
             if let url = attachment.url {
-                image = try? await FeatureAttachmentThumbnailLoader.image(for: url, maximumPixelSize: maximumPixelSize)
+                image = try? await FeatureAttachmentThumbnailLoader.image(
+                    for: url,
+                    identity: FeatureAttachmentThumbnailLoader.attachmentIdentity(scope: mediaContext?.threadID, attachmentID: attachment.id),
+                    maximumPixelSize: maximumPixelSize
+                )
             } else if let data = attachment.previewData {
                 image = await Task.detached(priority: .utility) { UIImage(data: data) }.value
             }

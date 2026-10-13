@@ -84,6 +84,8 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Icon: String, Equatable, Sendable {
         case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap, pullRequest, computer
         case key
+        /// A JavaScript REPL call that is not computer use.
+        case code
 
         var symbolName: String {
             switch self {
@@ -101,7 +103,8 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
             case .wrench: "wrench"
             case .zap: "bolt"
             case .pullRequest: T3Symbol.pullRequest
-            case .computer: "desktopcomputer"
+            case .computer: "macwindow.and.cursorarrow"
+            case .code: "chevron.left.forwardslash.chevron.right"
             }
         }
     }
@@ -133,7 +136,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Waiting: Equatable, Sendable { case approval, input }
 
     public var item: OrchestrationV2TurnItem { projectedItem.item }
-    var activityIcon: ToolActivityIcon? { icon == .pullRequest ? nil : item.toolIcon ?? item.toolSource?.icon }
+    var activityIcon: ToolActivityIcon? { icon == .pullRequest ? nil : item.toolIcon ?? item.presentedToolSource?.icon }
 
     /// A `file_change` row headlines its own diffstat.
     public var diffStat: ThreadWorkLogDiffStat? {
@@ -202,7 +205,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         default: action = .tool
         }
         return ThreadHistoricalWorkItem(action: action, files: files, successful: toolLike && status == .success,
-            running: isRunning, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction", source: item.toolSource)
+            running: isRunning, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction", source: item.presentedToolSource)
     }
 
     public static func make(
@@ -369,8 +372,16 @@ public enum ThreadWorkLogPresentation {
         case .webSearch: .globe
         case .approvalRequest, .userInputRequest, .userMessage, .assistantMessage: .message
         // Read-style tool calls (a file/notebook path argument) present as reads.
-        case let .dynamicTool(_, input, _):
-            T3McpToolPresentation.icon(for: item) ?? (item.toolSurface == "browser" ? .globe : item.toolSurface == "computer" ? .computer : DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench)
+        case let .dynamicTool(toolName, input, _):
+            T3McpToolPresentation.icon(for: item) ?? {
+                switch item.presentedToolSurface {
+                case "browser": return .globe
+                case "computer": return .computer
+                default:
+                    if JavaScriptReplTool.matches(toolName) { return .code }
+                    return DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench
+                }
+            }()
         case .subagent: .hammer
         case .runInterruptRequest, .runInterruptResult: .warning
         case .error: .alert
@@ -385,6 +396,12 @@ public enum ThreadWorkLogPresentation {
         _ item: OrchestrationV2TurnItem,
         toolDisplayName: String? = nil
     ) -> String {
+        // A REPL call reads as its action ("Inspect the window"), never as
+        // the raw tool name the provider retained as its title.
+        if case let .dynamicTool(toolName, input, _) = item.payload,
+           let title = JavaScriptReplTool.title(toolName: toolName, input: input, retainedTitle: item.base.title) {
+            return capitalizePhrase(title)
+        }
         let title = item.base.title?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let title, !title.isEmpty {
             return toolDisplayName ?? capitalizePhrase(title)
@@ -1120,7 +1137,7 @@ struct ThreadWorkLog: View {
                 } else if let summary = historicalSummary {
                     Button { toggleGroup() } label: {
                         HStack(spacing: 8) {
-                            ThreadToolActivityIcon(icon: visibleCandidates.allSatisfy { $0.icon != .pullRequest && $0.item.toolSource?.key != nil && $0.item.toolSource?.key == visibleCandidates.first?.item.toolSource?.key } ? visibleCandidates.first?.item.toolSource?.icon : nil, fallback: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
+                            ThreadToolActivityIcon(icon: visibleCandidates.allSatisfy { $0.icon != .pullRequest && $0.item.presentedToolSource?.key != nil && $0.item.presentedToolSource?.key == visibleCandidates.first?.item.presentedToolSource?.key } ? visibleCandidates.first?.item.presentedToolSource?.icon : nil, fallback: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
                                 .foregroundStyle(T3Colors.textTertiary)
                                 .frame(width: 20)
                             Text(summary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
