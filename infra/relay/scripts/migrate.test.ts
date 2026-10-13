@@ -17,7 +17,7 @@ import {
 const FORK_MIGRATIONS_FOLDER = NodeURL.fileURLToPath(
   new URL("./testdata/fork-migrations", import.meta.url),
 );
-// Fork-only table the voice rebuild drops; nothing reads it after the bridge.
+// Fork-only table of per-user OpenRouter keys, dropped by the shared-key voice migration.
 const FORK_ONLY_TABLE = "relay_account_integrations";
 
 const databases: PGlite[] = [];
@@ -69,12 +69,6 @@ const describeSchema = async (database: Database) => ({
   ),
 });
 
-const withoutTable = (schema: Awaited<ReturnType<typeof describeSchema>>, table: string) => ({
-  columns: schema.columns.filter((row) => row.table_name !== table),
-  constraints: schema.constraints.filter((row) => row.table_name !== table),
-  indexes: schema.indexes.filter((row) => row.tablename !== table),
-});
-
 const journalNames = async (database: Database) =>
   (
     await rows(
@@ -98,7 +92,7 @@ describe("relay migrations on a fork-migrated database", () => {
     );
   });
 
-  it("ends in the fresh upstream schema plus the fork-only integrations table", async () => {
+  it("ends in the fresh schema and drops the fork-only integrations table", async () => {
     const fresh = await openDatabase();
     await migrateRelay(fresh);
     const forked = await forkMigratedDatabase();
@@ -118,11 +112,12 @@ describe("relay migrations on a fork-migrated database", () => {
         "relay_mobile_devices",
         "relay_voice_input_settings",
         "relay_voice_transcription_requests",
+        "relay_voice_usage_days",
       ]),
     );
     const forkedSchema = await describeSchema(forked);
-    expect(withoutTable(forkedSchema, FORK_ONLY_TABLE)).toEqual(freshSchema);
-    expect(forkedSchema.columns.some((row) => row.table_name === FORK_ONLY_TABLE)).toBe(true);
+    expect(forkedSchema).toEqual(freshSchema);
+    expect(forkedSchema.columns.some((row) => row.table_name === FORK_ONLY_TABLE)).toBe(false);
   });
 
   it("records every local migration once and leaves the fork's voice row", async () => {

@@ -1,6 +1,10 @@
 import { replaceTextRange } from "@t3tools/shared/composerTrigger";
 
-import type { PreparedVoiceTranscription, VoiceTranscriber } from "./transcription.ts";
+import {
+  VoiceTranscriptionError,
+  type PreparedVoiceTranscription,
+  type VoiceTranscriber,
+} from "./transcription.ts";
 
 export const VOICE_RECORDING_LIMIT_SECONDS = 5 * 60;
 
@@ -45,6 +49,8 @@ export interface VoiceRecorder {
 
 export type VoiceInputControllerDependencies = {
   readonly recorder: VoiceRecorder;
+  /** Clock for measuring recording length. */
+  readonly now?: () => number;
   readonly getTranscriber: () => VoiceTranscriber | null;
   readonly requestPermission: () => Promise<{
     readonly granted: boolean;
@@ -132,7 +138,11 @@ let activeTranscriptionOperation: Promise<unknown> | null = null;
 
 function acquireSession(): VoiceInputSession | null {
   if (activeSession) return null;
-  const { promise, resolve } = Promise.withResolvers<void>();
+  // Not Promise.withResolvers: the web app, which also imports this module, targets ES2023.
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
   const token = { abandoned: false, released: promise, release: resolve };
   activeSession = token;
   return token;
@@ -164,10 +174,18 @@ function errorCode(error: unknown): string | null {
   return typeof error.code === "string" ? error.code : null;
 }
 
+function rejectedMessage(error: unknown): string | null {
+  return error instanceof VoiceTranscriptionError && error.code === "rejected"
+    ? error.message
+    : null;
+}
+
 function preparationErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message === "voice-operation-busy") {
     return "Voice transcription is still finishing. Try again shortly.";
   }
+  const rejected = rejectedMessage(error);
+  if (rejected) return rejected;
   if (errorCode(error) === "unsupported-locale") {
     return "Voice transcription is not available for this language.";
   }
@@ -178,7 +196,7 @@ function transcriptionErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message === "voice-operation-busy") {
     return "Voice transcription is still finishing. Try again shortly.";
   }
-  return "Could not transcribe this recording.";
+  return rejectedMessage(error) ?? "Could not transcribe this recording.";
 }
 
 const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
@@ -194,10 +212,14 @@ export class VoiceInputController {
   private recordingUri: string | null = null;
   private readonly ownedRecordingUris = new Set<string>();
   private recordingConfigured = false;
+  private recordingStartedAt: number | null = null;
   private finishing = false;
+  private readonly now: () => number;
 
   constructor(dependencies: VoiceInputControllerDependencies) {
     this.dependencies = dependencies;
+    // @effect-diagnostics-next-line globalDate:off -- the controller runs outside an Effect runtime.
+    this.now = dependencies.now ?? (() => Date.now());
   }
 
   get currentState(): VoiceInputState {
@@ -273,7 +295,10 @@ export class VoiceInputController {
         return;
       }
       this.capturedDraft = capturedDraft;
-      this.dependencies.recorder.record({ forDuration: VOICE_RECORDING_LIMIT_SECONDS });
+      this.dependencies.recorder.record({
+        forDuration: this.transcription.maxDurationSeconds ?? VOICE_RECORDING_LIMIT_SECONDS,
+      });
+      this.recordingStartedAt = this.now();
       this.setState({ phase: "recording", error: null, errorAction: null });
     } catch {
       if (this.isCurrent(operationToken))
@@ -395,10 +420,17 @@ export class VoiceInputController {
       const transcription = this.transcription;
       const signal = this.transcriptionAbortController.signal;
       const capturedDraft = this.capturedDraft;
+      const durationSeconds =
+        this.recordingStartedAt === null
+          ? undefined
+          : Math.max(0, (this.now() - this.recordingStartedAt) / 1_000);
       let transcript: string;
       try {
         transcript = await runTranscriptionOperation(() =>
-          transcription.transcribe(recordingUri, { signal }),
+          transcription.transcribe(recordingUri, {
+            signal,
+            ...(durationSeconds === undefined ? {} : { durationSeconds }),
+          }),
         );
       } catch (error) {
         if (this.isCurrent(operationToken)) {
@@ -473,6 +505,7 @@ export class VoiceInputController {
     this.capturedDraft = null;
     this.transcription = null;
     this.transcriptionAbortController = null;
+    this.recordingStartedAt = null;
   }
 
   private rememberRecordingUri(uri: string | null): void {

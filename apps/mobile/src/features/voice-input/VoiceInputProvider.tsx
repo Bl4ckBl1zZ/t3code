@@ -1,4 +1,5 @@
-import { RegistryContext, useAtomMount } from "@effect/atom-react";
+import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
+import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import {
   AudioModule,
   RecordingPresets,
@@ -21,7 +22,7 @@ import {
   type ReactNode,
 } from "react";
 import { AppState, Platform } from "react-native";
-import { AsyncResult } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useSharedValue } from "react-native-reanimated";
 
 import {
@@ -31,6 +32,8 @@ import {
 } from "../../lib/microphonePriority";
 import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { managedRelayQueryManager } from "../cloud/managedRelayState";
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { getNativeShowcaseScene } from "../showcase/nativeShowcaseScene";
 import {
   VOICE_RECORDING_LIMIT_SECONDS,
@@ -38,10 +41,14 @@ import {
   type VoiceInputState,
 } from "@t3tools/client-runtime/voice-input";
 import { createLazyVoiceRecorder, type LazyVoiceRecorder } from "./lazyVoiceRecorder";
+import { getRelayVoiceTranscriber } from "./relayVoiceInput";
 import { normalizeVoiceInputDecibels, VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 import { VoiceInputSession } from "./voiceInputSession";
 
 const INITIAL_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
+const SIGNED_OUT_VOICE_STATUS_ATOM = Atom.make(AsyncResult.initial<never>()).pipe(
+  Atom.withLabel("voice-input:mobile:relay-status:signed-out"),
+);
 const VOICE_METERING_INTERVAL_MS = 80;
 // The native constructor takes platform-flattened options, as `useAudioRecorder`
 // builds them with expo-audio's internal `createRecordingOptions`.
@@ -103,6 +110,18 @@ function useVoiceInputRuntime() {
   // Dictation reads and records microphones without subscribing the provider to preferences.
   useAtomMount(mobilePreferencesAtom);
   useAtomMount(updateMobilePreferencesAtom);
+  // Signed-in T3 Connect accounts dictate through the relay; load its status
+  // early so the first recording knows its clip limit and language.
+  const relaySession = useAtomValue(managedRelaySessionAtom);
+  const relayVoiceStatus = useAtomValue(
+    relaySession && hasCloudPublicConfig()
+      ? managedRelayQueryManager.voiceInputAtom(relaySession.accountId)
+      : SIGNED_OUT_VOICE_STATUS_ATOM,
+  );
+  const relayVoiceAvailable =
+    relaySession !== null &&
+    hasCloudPublicConfig() &&
+    !(AsyncResult.isSuccess(relayVoiceStatus) && !relayVoiceStatus.value.available);
   const [{ state, ownerKey, label }, setState] = useState({
     state: INITIAL_STATE,
     ownerKey: null as string | null,
@@ -157,7 +176,7 @@ function useVoiceInputRuntime() {
     recorderRef.current = recorder;
     sessionRef.current = new VoiceInputSession({
       recorder,
-      getTranscriber: getLocalVoiceTranscriber,
+      getTranscriber: () => getRelayVoiceTranscriber(registry) ?? getLocalVoiceTranscriber(),
       requestPermission: async () => {
         const permission = await requestRecordingPermissionsAsync();
         return { granted: permission.granted, canAskAgain: permission.canAskAgain };
@@ -254,9 +273,12 @@ function useVoiceInputRuntime() {
   const cancel = useCallback(() => controller.cancel(), [controller]);
 
   return {
-    // Store screenshots show the dictation button even on simulators, whose
-    // on-device transcription is unavailable.
-    isAvailable: getLocalVoiceTranscriber() !== null || getNativeShowcaseScene() !== null,
+    // T3 Connect voice input works on any device; on-device dictation needs
+    // iOS 26. Store screenshots show the button even on simulators.
+    isAvailable:
+      relayVoiceAvailable ||
+      getLocalVoiceTranscriber() !== null ||
+      getNativeShowcaseScene() !== null,
     state,
     audioLevels,
     elapsedSeconds,

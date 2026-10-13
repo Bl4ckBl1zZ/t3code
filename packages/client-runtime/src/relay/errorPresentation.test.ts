@@ -6,6 +6,7 @@ import {
   DPOP_RETRY_HINT,
   DPOP_UNKNOWN_HINT,
   relayProtectedErrorMessage,
+  relayVoiceInputErrorMessage,
 } from "./errorPresentation.ts";
 
 describe("relayProtectedErrorMessage", () => {
@@ -53,5 +54,19 @@ describe("relayProtectedErrorMessage", () => {
     });
 
     expect(relayProtectedErrorMessage(error)).toBe("Relay rejected the cloud session token.");
+  });
+});
+
+describe("relayVoiceInputErrorMessage", () => {
+  it("tells the user when the daily voice limit resets", () => {
+    expect(
+      relayVoiceInputErrorMessage({ code: "daily_limit_reached", retryAfterSeconds: 30 }),
+    ).toBe("You reached today's voice input limit. It resets in 1 min.");
+    expect(
+      relayVoiceInputErrorMessage({ code: "daily_limit_reached", retryAfterSeconds: 5 * 3600 }),
+    ).toBe("You reached today's voice input limit. It resets in 5 h.");
+    expect(
+      relayVoiceInputErrorMessage({ code: "daily_limit_reached", retryAfterSeconds: 3600 + 125 }),
+    ).toBe("You reached today's voice input limit. It resets in 1 h 3 min.");
   });
 });

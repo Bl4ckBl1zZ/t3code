@@ -10,7 +10,11 @@ import {
   type VoiceInputControllerDependencies,
   type VoiceRecorder,
 } from "./controller.ts";
-import type { PreparedVoiceTranscription, VoiceTranscriber } from "./transcription.ts";
+import {
+  VoiceTranscriptionError,
+  type PreparedVoiceTranscription,
+  type VoiceTranscriber,
+} from "./transcription.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -295,6 +299,35 @@ describe("VoiceInputController", () => {
       { text: "hello new text", selection: { start: 14, end: 14 } },
     ]);
     expect(harness.deleted).toEqual(["file:///voice.m4a"]);
+  });
+
+  it("records up to a service's clip limit, reports the length, and shows its rejection", async () => {
+    let clock = 1_000;
+    const transcribe = vi.fn<PreparedVoiceTranscription["transcribe"]>(async () => {
+      throw new VoiceTranscriptionError("rejected", "You reached today's voice input limit.");
+    });
+    const harness = createHarness({
+      now: () => clock,
+      getTranscriber: () => ({
+        prepare: async () => ({ locale: "en", maxDurationSeconds: 120, transcribe }),
+      }),
+    });
+    await harness.controller.start();
+    expect(harness.recorder.record).toHaveBeenCalledWith({ forDuration: 120 });
+
+    clock += 4_500;
+    await harness.controller.stop();
+
+    expect(transcribe).toHaveBeenCalledWith("file:///voice.m4a", {
+      signal: expect.any(AbortSignal),
+      durationSeconds: 4.5,
+    });
+    expect(harness.controller.currentState).toEqual({
+      phase: "error",
+      error: "You reached today's voice input limit.",
+      errorAction: "retry",
+    });
+    expect(harness.commits).toEqual([]);
   });
 
   it.each(["cancel", "dispose", "ownerChanged"] as const)(

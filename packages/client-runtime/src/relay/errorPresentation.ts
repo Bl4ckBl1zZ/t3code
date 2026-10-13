@@ -1,5 +1,9 @@
 import type { DpopFailureReason } from "@t3tools/contracts";
-import type { RelayEnvironmentStatusResponse, RelayProtectedError } from "@t3tools/contracts/relay";
+import type {
+  RelayEnvironmentStatusResponse,
+  RelayProtectedError,
+  RelayVoiceInputError,
+} from "@t3tools/contracts/relay";
 
 export const DPOP_CLOCK_HINT =
   "Hint: Check that automatic date and time is enabled on both devices, then try again.";
@@ -84,4 +88,45 @@ export function relayOfflineReasonMessage(
     case undefined:
       return null;
   }
+}
+
+function durationLabel(seconds: number): string {
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+/** User-facing text for a relay voice transcription failure. */
+export function relayVoiceInputErrorMessage(
+  error: Pick<RelayVoiceInputError, "code" | "retryAfterSeconds">,
+): string {
+  switch (error.code) {
+    case "voice_unavailable":
+      return "Voice input is unavailable right now.";
+    case "invalid_audio":
+      return "The recording could not be read.";
+    case "audio_too_large":
+      return "The recording is too large to transcribe.";
+    case "clip_too_long":
+      return "The recording is longer than the clip limit.";
+    case "daily_limit_reached":
+      return error.retryAfterSeconds === undefined
+        ? "You reached today's voice input limit."
+        : `You reached today's voice input limit. It resets in ${durationLabel(error.retryAfterSeconds)}.`;
+    case "no_speech":
+      return "No speech was detected.";
+    case "rate_limited":
+      return "Transcription is busy. Try again in a moment.";
+    case "transcription_failed":
+      return "Transcription failed.";
+  }
+}
+
+/** Whether retrying the same recording can succeed. */
+export function relayVoiceInputErrorIsRetryable(
+  error: Pick<RelayVoiceInputError, "code">,
+): boolean {
+  return error.code === "rate_limited" || error.code === "transcription_failed";
 }

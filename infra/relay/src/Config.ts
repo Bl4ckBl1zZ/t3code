@@ -2,6 +2,7 @@ import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
@@ -47,6 +48,67 @@ export const legacyTunnelGraceMinutesConfig = Config.option(
   ),
 );
 
+/**
+ * Models that accept OpenRouter `input_audio`. The deploy variable picks one;
+ * adding a model is a code change, so a typo cannot send paid audio elsewhere.
+ */
+export const VoiceInputModel = Schema.Literals([
+  "google/gemini-2.5-flash",
+  "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-pro",
+  "openai/gpt-4o-audio-preview",
+]);
+export type VoiceInputModel = typeof VoiceInputModel.Type;
+
+export interface VoiceInputConfig {
+  /** Kill switch. Voice is also off while no OpenRouter key is configured. */
+  readonly enabled: boolean;
+  readonly openRouterApiKey: Redacted.Redacted<string> | undefined;
+  readonly model: VoiceInputModel;
+  /** Audio seconds each account may transcribe per UTC day. */
+  readonly dailySeconds: number;
+  readonly maxClipSeconds: number;
+  /** Decoded audio bytes per request. */
+  readonly maxUploadBytes: number;
+}
+
+// Unset GitHub variables arrive as empty strings, so blank means "use the default".
+const voiceVariable = <A>(name: string, schema: Schema.Codec<A, string>, fallback: A) =>
+  Config.String(name).pipe(
+    Config.withDefault(""),
+    Config.map((value) => value.trim()),
+    Config.mapEffect((value) =>
+      value === ""
+        ? Effect.succeed(fallback)
+        : Schema.decodeEffect(schema)(value).pipe(
+            Effect.mapError((error) => new Config.ConfigError(error)),
+          ),
+    ),
+  );
+
+const PositiveIntFromString = Schema.NumberFromString.pipe(
+  Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
+);
+
+export const voiceInputConfig: Config.Config<VoiceInputConfig> = Config.all({
+  enabled: voiceVariable("VOICE_INPUT_ENABLED", Schema.Literals(["true", "false"]), "true").pipe(
+    Config.map((value) => value === "true"),
+  ),
+  openRouterApiKey: Config.option(Config.Redacted("OPENROUTER_API_KEY")).pipe(
+    Config.map((key) =>
+      Option.getOrUndefined(Option.filter(key, (value) => Redacted.value(value).trim().length > 0)),
+    ),
+  ),
+  model: voiceVariable("VOICE_INPUT_MODEL", VoiceInputModel, "google/gemini-2.5-flash"),
+  dailySeconds: voiceVariable("VOICE_INPUT_DAILY_SECONDS", PositiveIntFromString, 30 * 60),
+  maxClipSeconds: voiceVariable("VOICE_INPUT_MAX_CLIP_SECONDS", PositiveIntFromString, 120),
+  maxUploadBytes: voiceVariable(
+    "VOICE_INPUT_MAX_UPLOAD_BYTES",
+    PositiveIntFromString,
+    10 * 1024 * 1024,
+  ),
+});
+
 export interface ApnsCredentials {
   readonly teamId: string;
   readonly keyId: string;
@@ -73,6 +135,8 @@ export class RelayConfiguration extends Context.Service<
     readonly legacyManagedEndpointCleanupMode?: ManagedEndpointCleanupMode;
     /** Canary-only override of the legacy grace period; ignored on prod. */
     readonly legacyTunnelGraceMinutes?: number;
+    /** Absent in tests and older deployments; voice is then unavailable. */
+    readonly voiceInput?: VoiceInputConfig;
   }
 >()("t3code-relay/Config/RelayConfiguration") {}
 

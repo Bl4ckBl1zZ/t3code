@@ -1,6 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import {
   RelayAuthInvalidError,
+  RelayVoiceInputError,
   type RelayClientDeviceRecord,
   type RelayClientEnvironmentRecord,
   type RelayEnvironmentStatusResponse,
@@ -19,6 +20,7 @@ import {
   createManagedRelayQueryManager,
   createManagedRelaySession,
   deregisterManagedRelayEnvironment,
+  describeManagedRelayVoiceFailure,
   managedRelayAccountChanges,
   type ManagedRelayQueryEvent,
   ManagedRelaySessionError,
@@ -84,6 +86,9 @@ function createClient(overrides?: Partial<ManagedRelay.ManagedRelayClient["Servi
     unregisterDevice: () => Effect.die("unused"),
     registerLiveActivity: () => Effect.die("unused"),
     getAgentActivitySnapshot: () => Effect.die("unused"),
+    getVoiceInput: () => Effect.die("unused"),
+    updateVoiceInputSettings: () => Effect.die("unused"),
+    transcribeVoice: () => Effect.die("unused"),
     resetTokenCache: Effect.void,
     ...overrides,
   });
@@ -113,6 +118,35 @@ function clerkToken(expiresAtSeconds: number): string {
     btoa(JSON.stringify(value)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
   return `${encode({ alg: "none" })}.${encode({ exp: expiresAtSeconds })}.signature`;
 }
+
+describe("describeManagedRelayVoiceFailure", () => {
+  it("keeps the clip for retry only when resending can succeed", () => {
+    expect(
+      describeManagedRelayVoiceFailure(
+        new RelayVoiceInputError({
+          code: "daily_limit_reached",
+          retryAfterSeconds: 120,
+          traceId: "trace",
+        }),
+      ),
+    ).toEqual({
+      message: "You reached today's voice input limit. It resets in 2 min.",
+      canRetry: false,
+    });
+    expect(
+      describeManagedRelayVoiceFailure(
+        new ManagedRelay.ManagedRelayRequestTimeoutError({
+          activity: "Voice transcription",
+          timeoutMs: 120_000,
+          traceId: null,
+        }),
+      ),
+    ).toEqual({ message: "Transcription timed out.", canRetry: true });
+    expect(
+      describeManagedRelayVoiceFailure(new ManagedRelaySessionError({ message: "signed out" })),
+    ).toEqual({ message: "Sign in to T3 Connect to use voice input.", canRetry: false });
+  });
+});
 
 describe("createManagedRelayQueryManager", () => {
   afterEach(resetRegistry);

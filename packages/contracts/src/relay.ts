@@ -15,6 +15,16 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import {
+  RelayVoiceInputErrorCode,
+  VoiceInputSettings,
+  VoiceInputSettingsPatch,
+  VoiceInputStatus,
+  VoiceTranscriptionRequest,
+  VoiceTranscriptionResponse,
+} from "./relayVoice.ts";
+
+export * from "./relayVoice.ts";
 
 export const RelayAgentAwarenessPlatform = Schema.Literals(["ios", "android"]);
 export type RelayAgentAwarenessPlatform = typeof RelayAgentAwarenessPlatform.Type;
@@ -592,6 +602,21 @@ export class RelayInternalError extends Schema.TaggedError<RelayInternalError>()
   }
 }
 
+export class RelayVoiceInputError extends Schema.TaggedError<RelayVoiceInputError>()(
+  "RelayVoiceInputError",
+  {
+    code: RelayVoiceInputErrorCode,
+    /** Seconds until a retry can succeed: the rate limit window or the next UTC day. */
+    retryAfterSeconds: Schema.optionalKey(Schema.Number),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 400 },
+) {
+  override get message(): string {
+    return `Voice input request failed: ${this.code}`;
+  }
+}
+
 export const RelayProtectedError = Schema.Union([
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
@@ -1104,8 +1129,33 @@ const RelayClientGroup = HttpApiGroup.make("client")
         OpenApi.Description,
         "Deletes the provisioned Cloudflare tunnel while keeping the environment link and its hostname reservation, so a later link re-provisions the tunnel under the same URL. Environments call this when they shut down; Cloudflare bills per provisioned tunnel, so idle tunnels should not outlive their environment.",
       ),
+    HttpApiEndpoint.get("getVoiceInput", "/v1/client/voice", {
+      headers: RelayBearerRequestHeaders,
+      success: VoiceInputStatus,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Read voice input availability, limits, usage, and settings"),
+    HttpApiEndpoint.patch("updateVoiceInputSettings", "/v1/client/voice/settings", {
+      headers: RelayBearerRequestHeaders,
+      payload: VoiceInputSettingsPatch,
+      success: VoiceInputSettings,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Update voice input settings"),
+    HttpApiEndpoint.post("transcribeVoice", "/v1/client/voice/transcriptions", {
+      headers: RelayBearerRequestHeaders,
+      payload: VoiceTranscriptionRequest,
+      success: VoiceTranscriptionResponse,
+      error: [...RelayAuthAndInternalErrors, RelayVoiceInputError],
+    })
+      .annotate(OpenApi.Summary, "Transcribe a voice recording")
+      .annotate(
+        OpenApi.Description,
+        "Transcribes with the relay's shared transcription key. Audio is not stored; the transcript is kept briefly so a retried request id returns the same result. Counts the clip against the account's daily cap.",
+      ),
   )
-  .annotate(OpenApi.Description, "Cloud-user environment links and registered devices.")
+  .annotate(
+    OpenApi.Description,
+    "Cloud-user environment links, registered devices, and voice input.",
+  )
   .middleware(RelayClientAuth);
 
 export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
