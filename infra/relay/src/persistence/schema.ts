@@ -41,6 +41,30 @@ export const relayMobileDevices = pgTable(
   ],
 );
 
+// Voice input state from the fork's relay, kept for the relay voice rebuild.
+// Per-user settings (language, dictionary, cleanup) follow the account across devices.
+export const relayVoiceInputSettings = pgTable("relay_voice_input_settings", {
+  userId: varchar("user_id", { length: 255 }).primaryKey(),
+  settingsJson: jsonb("settings_json").notNull(),
+  createdAt: varchar("created_at", { length: 64 }).notNull(),
+  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+});
+
+// Idempotency records for transcription requests, keyed by the client's request id.
+export const relayVoiceTranscriptionRequests = pgTable(
+  "relay_voice_transcription_requests",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    requestId: varchar("request_id", { length: 191 }).notNull(),
+    responseJson: jsonb("response_json").notNull(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.requestId] }),
+    index("idx_relay_voice_requests_created").on(table.createdAt),
+  ],
+);
+
 export const relayLiveActivities = pgTable(
   "relay_live_activities",
   {
