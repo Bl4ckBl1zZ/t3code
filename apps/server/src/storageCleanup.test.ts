@@ -817,7 +817,7 @@ describe("storage cleanup reports and local file policies", () => {
 
 describe("settled thread auto-delete", () => {
   // Live tests run on the wall clock, so ages count back from now.
-  const ago = (days: number) => DateTime.makeUnsafe(Date.now() - days * DAY_MS);
+  const ago = (days: number) => DateTime.subtract(DateTime.nowUnsafe(), { days });
   const daysAgo = (days: number) => DateTime.formatIso(ago(days));
   const settled = (id: string, overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
     shell({
