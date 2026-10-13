@@ -216,7 +216,7 @@ import {
   setThreadChangeRequestSnapshot,
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
-  synchronizeTerminalPulse,
+  ThreadTerminalStatusButton,
   threadChangeRequestSnapshotsAtom,
   type ThreadChangeRequestSnapshot,
   type TerminalStatusIndicator,
@@ -1437,19 +1437,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         <span className="min-w-0 truncate whitespace-nowrap">{pr.title}</span>
       </span>
     ) : null;
-  const terminalStatusIcon = terminalStatus ? (
-    <span
-      role="img"
-      aria-label={terminalProcessLabel(terminalProcessCount)}
-      data-testid={`sidebar-terminal-status-${thread.id}`}
-      className={cn("inline-flex shrink-0 items-center justify-center", terminalStatus.colorClass)}
-    >
-      <TerminalIcon
-        className={cn("size-3.5", terminalStatus.pulse && "motion-safe:animate-status-pulse")}
-        onAnimationStart={synchronizeTerminalPulse}
-      />
-    </span>
-  ) : null;
+  const terminalStatusIcon = (
+    <ThreadTerminalStatusButton
+      threadRef={threadRef}
+      terminalIds={runningTerminalIds}
+      onThreadActivate={onThreadActivate}
+    />
+  );
   // A pinned thread now reaches every shelf, so the marker is the row's pin
   // state cue wherever it lands. It unpins where the environment supports
   // pinning at all, and stays a passive glyph otherwise.

@@ -3943,6 +3943,15 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     const nextOpen = !terminalUiState.terminalOpen;
     if (nextOpen && terminalUiState.terminalIds.length === 0) {
+      // Server-created setup terminals exist before this client's drawer mounts.
+      // Reuse them before allocating a shell from the still-empty UI state.
+      const existingTerminalId =
+        runningTerminalIds.find((id) => !panelTerminalIds.has(id)) ??
+        activeServerOrderedTerminalIds.find((id) => !panelTerminalIds.has(id));
+      if (existingTerminalId !== undefined) {
+        storeEnsureTerminal(activeThreadRef, existingTerminalId, { open: true, active: true });
+        return;
+      }
       if (!activeThreadId || !activeProject) {
         return;
       }
@@ -3969,6 +3978,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     setTerminalOpen(nextOpen);
   }, [
+    activeServerOrderedTerminalIds,
     activeProject,
     activeThreadId,
     activeThreadRef,
@@ -3977,6 +3987,8 @@ function ChatViewContent(props: ChatViewProps) {
     environmentId,
     gitCwd,
     openTerminal,
+    panelTerminalIds,
+    runningTerminalIds,
     setTerminalOpen,
     storeEnsureTerminal,
     terminalUiState.terminalIds.length,

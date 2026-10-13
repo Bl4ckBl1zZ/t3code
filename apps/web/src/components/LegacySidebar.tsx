@@ -14,7 +14,6 @@ import {
   Globe2Icon,
   SearchIcon,
   SquarePenIcon,
-  TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -22,8 +21,7 @@ import {
   prStatusIndicator,
   PrStatusTooltipContent,
   resolveThreadPr,
-  terminalStatusFromRunningIds,
-  synchronizeTerminalPulse,
+  ThreadTerminalStatusButton,
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
   useLinkedThreadPullRequest,
@@ -489,7 +487,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     pr,
     linkedPullRequestStatus?.sourceControlProvider ?? gitStatus.data?.sourceControlProvider,
   );
-  const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
     ? "pointer-events-none opacity-0"
@@ -834,25 +831,11 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             </Tooltip>
           )}
           <ThreadWorktreeIndicator thread={thread} />
-          {terminalStatus && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    role="img"
-                    aria-label={terminalStatus.label}
-                    className={`inline-flex items-center justify-center ${terminalStatus.colorClass}`}
-                  />
-                }
-              >
-                <TerminalIcon
-                  className={`size-3 ${terminalStatus.pulse ? "motion-safe:animate-status-pulse" : ""}`}
-                  onAnimationStart={synchronizeTerminalPulse}
-                />
-              </TooltipTrigger>
-              <TooltipPopup side="top">{terminalStatus.label}</TooltipPopup>
-            </Tooltip>
-          )}
+          <ThreadTerminalStatusButton
+            threadRef={threadRef}
+            terminalIds={runningTerminalIds}
+            onThreadActivate={navigateToThread}
+          />
           <div
             className={`flex min-w-12 justify-end ${
               isRemoteThread ? "max-sm:min-w-24" : "max-sm:min-w-20"
