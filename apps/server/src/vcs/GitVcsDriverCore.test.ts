@@ -339,6 +339,57 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
   }).pipe(Effect.provide(layer));
 });
 
+const makeBranchWithDeletedRemote = (branch: string) =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+    yield* git(remote, ["init", "--bare"]);
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* driver.ensureRemote({ cwd, preferredName: "origin", url: remote });
+    yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+    yield* git(cwd, ["checkout", "-b", branch]);
+    yield* git(cwd, ["push", "-u", "origin", branch]);
+    yield* writeTextFile(cwd, "feature.md", "# feature\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "feature work"]);
+    // What merging a PR and deleting its branch leaves behind: the remote
+    // branch is gone and pruned, the tracking config is not.
+    yield* git(cwd, ["push", "origin", "--delete", branch]);
+    yield* git(cwd, ["fetch", "--prune", "origin"]);
+    return cwd;
+  });
+
+it.effect("treats a branch whose remote was deleted as having no upstream", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeBranchWithDeletedRemote("feature/merged-then-deleted");
+
+    const status = yield* driver.statusDetailsLocal(cwd);
+    assert.equal(status.hasUpstream, false);
+    assert.equal(status.upstreamRef, null);
+    assert.equal(status.aheadCount, 1);
+
+    const withoutDivergence = yield* driver.statusDetailsLocal(cwd, {
+      includeDivergence: false,
+    });
+    assert.equal(withoutDivergence.hasUpstream, false);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("pushes a branch whose remote was deleted instead of calling it up to date", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeBranchWithDeletedRemote("feature/recycled");
+
+    const result = yield* driver.pushCurrentBranch(cwd, "feature/recycled");
+
+    assert.equal(result.status, "pushed");
+    const remoteHeads = yield* git(cwd, ["ls-remote", "--heads", "origin", "feature/recycled"]);
+    assert.include(remoteHeads, "refs/heads/feature/recycled");
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("invalidates origin remote cache when a driver mutation adds origin", () =>
   Effect.gen(function* () {
     const driver = yield* GitVcsDriver.GitVcsDriver;

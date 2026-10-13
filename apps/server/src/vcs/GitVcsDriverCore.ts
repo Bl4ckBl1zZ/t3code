@@ -1999,6 +1999,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     let refName: string | null = null;
     let upstreamRef: string | null = null;
+    let upstreamRefExists = false;
     let aheadCount = 0;
     let behindCount = 0;
     let aheadOfDefaultCount = 0;
@@ -2016,7 +2017,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         upstreamRef = value.length > 0 ? value : null;
         continue;
       }
-      if (includeDivergence && line.startsWith("# branch.ab ")) {
+      if (line.startsWith("# branch.ab ")) {
+        upstreamRefExists = true;
+        if (!includeDivergence) continue;
         const value = line.slice("# branch.ab ".length).trim();
         const parsed = parseBranchAb(value);
         aheadCount = parsed.ahead;
@@ -2029,6 +2032,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (pathValue) changedFilesWithoutNumstat.add(pathValue);
       }
     }
+
+    // A branch whose remote was deleted keeps its tracking config, so git still
+    // prints `# branch.upstream`, but omits `# branch.ab` because there is no
+    // ref to count against. Treat it as having no upstream so push publishes it
+    // again instead of reporting it up to date.
+    if (!upstreamRefExists) upstreamRef = null;
 
     const fallbackAheadCount =
       includeDivergence && !upstreamRef && refName
