@@ -40,7 +40,6 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
@@ -2201,7 +2200,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           ),
           Effect.flip,
           Effect.provide(
-            OrchestratorMcpService.layer.pipe(
+            layerOrchestratorService.pipe(
               Layer.provide(
                 Layer.mergeAll(
                   NodeServices.layer,
