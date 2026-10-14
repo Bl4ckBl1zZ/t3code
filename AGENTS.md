@@ -8,6 +8,7 @@ This repository is the Bl4ckBl1zZ fork of [pingdotgg/t3code](https://github.com/
 - **iOS:** `.github/workflows/mobile-ios-testflight.yml` builds `apps/mobile` and ships it to TestFlight. No Android, App Store, or OTA builds.
 - **Relay:** T3 Connect runs on the fork's self-hosted relay (`deploy-relay.yml`). Builds take the relay URL and Clerk config from repository variables.
 - **Old fork data:** databases from the pre-rework fork are upgraded in place by `apps/server/src/persistence/forkDatabaseBridge.ts`.
+- **Upstream syncs:** `main` descends from upstream's history. Merge `upstream/main` into a `sync/upstream-<date>` branch, review each upstream commit against the fork's overlapping changes, and land the PR as a merge commit titled `sync: upstream <fromSha>..<toSha> (<N> commits)`. Never squash it: that drops the ancestry, and every later sync would re-conflict on the same commits. Migrations keep upstream's numbering.
 - **Identity:** the product name "T3 Code (Alpha)", app IDs, and signing team stay unchanged so installed builds keep accepting updates.
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
