@@ -27,6 +27,14 @@ export function canAutoInstall(input: {
   if (input.state.autoUpdateEnabled !== true || input.state.status !== "downloaded") {
     return false;
   }
+  // An install of this version already failed to apply here. Installing it
+  // again unattended would restart into the same version; the user retries it.
+  if (
+    input.state.notAppliedVersion !== undefined &&
+    input.state.downloadedVersion === input.state.notAppliedVersion
+  ) {
+    return false;
+  }
   return input.runningBackendIds.every((id) => {
     const record = input.activity.get(id);
     return (

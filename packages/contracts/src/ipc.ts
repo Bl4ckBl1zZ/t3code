@@ -287,6 +287,12 @@ export interface DesktopUpdateState {
   /** Opt-in: downloads install on their own once no agent work is running.
       Absent from desktop builds that predate the setting. */
   autoUpdateEnabled?: boolean;
+  /**
+   * The version the last install handed to the OS installer that did not
+   * apply: the app came back on its old version. Server-triggered updates do
+   * not install it again; the user can retry it from the update button.
+   */
+  notAppliedVersion?: string;
 }
 
 export interface DesktopUpdateReleaseNote {
@@ -319,6 +325,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   errorContext: Schema.NullOr(Schema.Literals(["check", "download", "install"])),
   canRetry: Schema.Boolean,
   autoUpdateEnabled: Schema.optionalKey(Schema.Boolean),
+  notAppliedVersion: Schema.optionalKey(Schema.String),
 });
 
 /** The desktop app's `t3` command on PATH, managed from Settings. */

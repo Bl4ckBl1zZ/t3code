@@ -33,6 +33,15 @@ describe("canAutoInstall", () => {
     ).toBe(true);
   });
 
+  it("never retries a version whose last install did not apply", () => {
+    const check = (state: DesktopUpdateState) =>
+      canAutoInstall({ state, runningBackendIds: [], activity: new Map(), nowMs: NOW });
+
+    expect(check({ ...downloaded, notAppliedVersion: "1.1.0" })).toBe(false);
+    // A newer release than the failed one installs normally.
+    expect(check({ ...downloaded, notAppliedVersion: "1.0.5" })).toBe(true);
+  });
+
   it("installs right away when no backend is running", () => {
     expect(
       canAutoInstall({ state: downloaded, runningBackendIds: [], activity: new Map(), nowMs: NOW }),
