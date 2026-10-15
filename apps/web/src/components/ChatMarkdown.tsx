@@ -1135,7 +1135,7 @@ function MarkdownLegacyHtmlEmbedCodeBlock({
       isStreaming={isStreaming}
       canWrap={!showEmbed}
       diagram={showEmbed}
-      leadingActions={
+      viewToggle={
         canShowEmbed ? (
           <span className="flex items-center gap-0.5">
             <Tooltip>

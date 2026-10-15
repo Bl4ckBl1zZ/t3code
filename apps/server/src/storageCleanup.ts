@@ -833,7 +833,7 @@ const make = Effect.gen(function* () {
           .dispatch({
             type: "thread.auto-delete",
             commandId: CommandId.make(
-              `server:auto-delete:${thread.id}:${yield* crypto.randomUUIDv4}`,
+              `server:auto-delete:${thread.id}:${yield* crypto.randomUUIDv4()}`,
             ),
             threadId: thread.id,
             snapshotAt: thread.updatedAt,
