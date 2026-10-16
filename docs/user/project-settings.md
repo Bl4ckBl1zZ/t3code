@@ -205,6 +205,7 @@ On iOS and Android, the same setting is in **Settings → Thread behavior → Au
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
 threads and worktrees were removed or kept and why, including how many days each settled thread
 has left, plus any failures.
+Results also list folders in the worktree folder that no thread uses, with their sizes; cleanup never removes them, so remove them manually if you want.
 
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.

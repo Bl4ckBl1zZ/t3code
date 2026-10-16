@@ -18,11 +18,12 @@ const layerSetup = Layer.effectDiscard(
     // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
     yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
-    // Lets event-store compaction return freed pages to the filesystem. It only
-    // applies to a database with no tables yet and must precede journal_mode,
-    // which writes the header. Existing databases keep their mode; only an
-    // offline VACUUM converts them.
-    yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
+    // Only an empty file can switch modes here; an existing database needs the
+    // offline VACUUM that `t3 doctor` runs, which rebuilds it with pointer maps.
+    const tables = yield* sql<{
+      readonly count: number;
+    }>`SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table'`;
+    if (tables[0]?.count === 0) yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
     // FULL fsyncs the WAL on every commit, on the main thread. Every provider
     // event is its own commit, so a slow or busy disk stalls the event loop

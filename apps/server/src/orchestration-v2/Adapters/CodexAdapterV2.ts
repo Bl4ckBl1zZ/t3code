@@ -4341,10 +4341,29 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("item/commandExecution/outputDelta", (payload) =>
           Effect.gen(function* () {
+            // The settled-thread background tail keeps the last output of a
+            // command it tracks; the expanded row streams every chunk.
             const entry = commandOutputTails.get(payload.itemId);
-            if (entry === undefined) return;
-            entry.tail = appendBackgroundOutputTail(entry.tail, payload.delta);
-            entry.lastOutputAt = yield* DateTime.now;
+            if (entry !== undefined) {
+              entry.tail = appendBackgroundOutputTail(entry.tail, payload.delta);
+              entry.lastOutputAt = yield* DateTime.now;
+            }
+            // A delta always follows its item/started, so the turn is already
+            // known; background commands keep printing after it settles.
+            const context =
+              (yield* Ref.get(activeTurns)).get(payload.turnId) ??
+              (yield* Ref.get(settledTurns)).get(payload.turnId);
+            if (context === undefined) return;
+            yield* emitProviderEvent({
+              type: "command_output.delta",
+              driver: CODEX_PROVIDER,
+              threadId: context.projectionThreadId,
+              itemId: idAllocator.derive.turnItemFromProviderItem({
+                driver: CODEX_PROVIDER,
+                nativeItemId: payload.itemId,
+              }),
+              chunk: payload.delta,
+            });
           }),
         );
 
