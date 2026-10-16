@@ -603,12 +603,7 @@ const make = Effect.gen(function* () {
     now: number,
     entries: StorageCleanupReportEntry[],
   ) {
-    // Auto-deleted threads may still remove their worktrees with every rule off.
-    if (
-      !anyWorktreePolicy(serverSettings, worktreeCleanupEnabled) &&
-      serverSettings.autoDeleteSettledAfterDays === null
-    )
-      return;
+    const policyEnabled = anyWorktreePolicy(serverSettings, worktreeCleanupEnabled);
     const roots: Array<string> = [];
     for (const directory of managedWorktreesDirectories(
       serverSettings,
@@ -647,6 +642,8 @@ const make = Effect.gen(function* () {
         })),
       ),
     )).filter((thread) => thread.worktreePath !== null && thread.branch !== null);
+    // Auto-deleted threads may still remove their worktrees with every rule off.
+    if (!policyEnabled && !deletedThreads.some((thread) => thread.autoDeleted)) return;
     const snapshot = yield* readThreads();
     const refreshedDefaultRefs = new Map<string, Set<string>>();
     const groups = Map.groupBy(
@@ -953,11 +950,12 @@ const make = Effect.gen(function* () {
         ),
       );
     }
-    yield* reportOrphanWorktrees(
-      roots,
-      yield* projectStore.list({ includeDeleted: true }),
-      entries,
-    );
+    if (policyEnabled)
+      yield* reportOrphanWorktrees(
+        roots,
+        yield* projectStore.list({ includeDeleted: true }),
+        entries,
+      );
   });
 
   // When the thread entered Settled. Automatic settlement backdates `settledAt`
