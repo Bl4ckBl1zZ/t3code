@@ -1,7 +1,8 @@
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
-import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
+import { NumberField } from "../../components/ui/NumberField";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
@@ -10,7 +11,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -268,11 +269,12 @@ function AutoSettleSettingsRows() {
                 <Text className="flex-1 text-foreground text-lg android:text-base">
                   Settled days
                 </Text>
-                <AutoSettleDaysField
+                <NumberField
                   value={autoDeleteDays}
                   min={1}
                   max={365}
-                  accessibilityLabel="Days settled before deletion"
+                  label="Days settled before deletion"
+                  formatValue={(value) => `${value} ${value === 1 ? "day" : "days"}`}
                   disabled={disabled}
                   onValueChange={(value) => writeToAll({ autoDeleteSettledAfterDays: value })}
                 />
