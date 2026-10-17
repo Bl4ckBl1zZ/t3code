@@ -44,7 +44,6 @@ const BUILD_TIME_USER_DATA_DIR_NAME =
     ? ""
     : __T3CODE_BUILD_DESKTOP_USER_DATA_DIR_NAME__.trim();
 
-/** Select Electron's profile independently of the server's T3 home. */
 export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPath")(
   function* (input: {
     readonly appDataDirectory: string;

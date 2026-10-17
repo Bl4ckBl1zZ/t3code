@@ -70,7 +70,6 @@ const Releases = Schema.Array(
 );
 const decodeReleases = Schema.decodeUnknownSync(Releases);
 
-/** Preserve the host's release channel and never offer a downgrade. */
 export async function findEnvironmentUpdate(
   currentVersion: string,
   signal: AbortSignal,

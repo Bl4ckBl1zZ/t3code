@@ -126,7 +126,6 @@ function sameProjectWorktreePolicies(left: ServerSettings, right: ServerSettings
   );
 }
 
-/** Live sessions keep their cwd even when no turn is currently running. */
 export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
   return thread.worktreePath !== null && threadAtRest(thread, now);
 }
@@ -324,8 +323,6 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => null),
     );
 
-  // Active threads only: archived threads are not candidates and do not count
-  // as sharing a worktree. The recheck's getThreadWorktreePaths reads the same set.
   // The snapshot takes seconds on large databases, so it runs on the reader
   // worker instead of the event loop.
   const readThreads = Effect.fn("StorageCleanup.readThreads")(function* () {
@@ -336,7 +333,6 @@ const make = Effect.gen(function* () {
     return { projects, threads };
   });
 
-  // Local threads under another project need not have a worktreePath of their own.
   const containsProjectRoot = Effect.fn("StorageCleanup.containsProjectRoot")(function* (
     worktreePath: string,
     projects: ReadonlyArray<{ readonly workspaceRoot: string }>,
@@ -519,7 +515,6 @@ const make = Effect.gen(function* () {
     });
     const index = yield* read(["rev-parse", "--git-path", "index"]);
     if (index === null) return true;
-    // Another Git process is writing to this checkout.
     if (yield* fs.exists(`${path.resolve(cwd, index.stdout.trim())}.lock`))
       return yield* failure(
         "Git index is locked. Status will resume when the index lock is removed.",
@@ -530,8 +525,6 @@ const make = Effect.gen(function* () {
     if (head === null) return true;
     const ref = head.exitCode === 0 ? head.stdout.trim() : "";
     const name = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length).trim() : null;
-    // Status output writes a detached HEAD as "(detached)", so a branch named
-    // with a leading "(" has always been read as one.
     return (name?.startsWith("(") ? null : name) !== branch;
   });
 
@@ -611,7 +604,6 @@ const make = Effect.gen(function* () {
       path,
       yield* HostProcess.HomeDirectory,
     )) {
-      // An unmounted drive only skips its own worktrees.
       const root = yield* fs.exists(directory).pipe(
         Effect.flatMap((exists) => (exists ? fs.realPath(directory) : Effect.succeed(null))),
         Effect.orElseSucceed(() => null),
@@ -702,16 +694,12 @@ const make = Effect.gen(function* () {
           return keep("outside the managed worktree folder");
         if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects]))
           return keep("contains a project checkout");
-        // A linked worktree has a .git file. Never remove a main checkout.
         if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File")
           return keep("not a linked worktree");
         if (yield* branchChanged(worktreePath, thread.branch))
           return keep("repository or branch changed");
         const changes = yield* localChangesReason(worktreePath, settings);
         if (changes !== null) return keep(changes);
-        // The project's settle script starts in the worktree right after a
-        // settle. Settling stamps updatedAt now, even when automatic
-        // settlement backdates settledAt to the thread's last activity.
         if (
           !deleted &&
           group.some(
@@ -874,11 +862,9 @@ const make = Effect.gen(function* () {
           }
           return null;
         });
-        // Most cancelled removals are caught here, before the worktree is walked.
         const blocked = yield* blockedSinceCheck();
         if (blocked !== null) return keep(blocked);
         const bytes = yield* measureWorktree(worktreePath);
-        // The walk can take a while; ask again for anything that started during it.
         const blockedWhileMeasuring = yield* blockedSinceCheck();
         if (blockedWhileMeasuring !== null) return keep(blockedWhileMeasuring);
         if (yield* branchChanged(worktreePath, thread.branch))
@@ -1061,7 +1047,6 @@ const make = Effect.gen(function* () {
     days: number | null,
     now: number,
     rotatedLogs: boolean,
-    // Owned by the caller so files removed before a failure still count.
     removed: { files: number; bytes: number },
   ) {
     if (days === null || !(yield* fs.exists(root))) return removed;
@@ -1302,8 +1287,6 @@ const make = Effect.gen(function* () {
       }),
     );
     yield* forkParked(
-      // A deleted thread's worktree waits for its sessions to end. Moving
-      // between live statuses, such as running to ready, cannot free one.
       Stream.runForEach(events, (event) => {
         const deleteRule = anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete);
         // Worktrees of auto-deleted threads wait for the deletion's cleanup to finish.
