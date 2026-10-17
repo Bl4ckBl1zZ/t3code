@@ -52,7 +52,6 @@ export function cliSelfUpdateUnavailableReason(source: ReleaseSource): string | 
     : `Self-update isn't available in this build of T3 Code. Download the latest release from ${releasesPageUrl(source)}.`;
 }
 
-=======
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 

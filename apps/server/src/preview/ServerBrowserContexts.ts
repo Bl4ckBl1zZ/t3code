@@ -111,7 +111,6 @@ export const deviceIdentity = (userAgent: PreviewDevice["userAgent"], browserUse
   };
 };
 
-
 export class ServerBrowserContexts {
   private readonly options: Options;
   private readonly contexts = new Map<string, Promise<BrowserContext>>();

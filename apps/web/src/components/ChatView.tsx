@@ -1798,7 +1798,10 @@ export default function ChatView(props: ChatViewProps) {
     activeProject ?? undefined,
   );
   const activeProjectScripts = activeProject ? resolveProjectScripts(settings, activeProject) : [];
-  const runningProjectScriptIds = runningSingleRunScriptIds(activeProjectScripts, runningTerminalIds);
+  const runningProjectScriptIds = runningSingleRunScriptIds(
+    activeProjectScripts,
+    runningTerminalIds,
+  );
   const activeProjectClone = useProjectClone(activeProjectRef);
   const cancelProjectClone = useAtomCommand(sourceControlEnvironment.cancelProjectClone, {
     reportFailure: false,

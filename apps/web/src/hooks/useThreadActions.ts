@@ -434,7 +434,9 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
-      const environmentConfig = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
+      const environmentConfig = appAtomRegistry
+        .get(environmentServerConfigsAtom)
+        .get(environmentId);
       const candidates = [...getWorktreesOrphanedByDeletion(threads, deletingIds)].flatMap(
         ([worktreePath, ownerIds]) => {
           const owner = threads.find((thread) => thread.id === ownerIds[0]);
@@ -687,7 +689,6 @@ export function useThreadActions() {
     target: ScopedThreadRef,
   ): Promise<AtomCommandResult<unknown, unknown>> =>
     (await deleteThreads([target])).lastResult ?? AsyncResult.success(undefined);
-
 
   const unsettleThread = async (target: ScopedThreadRef) => {
     if (!readEnvironmentSupportsSettlement(target.environmentId)) {

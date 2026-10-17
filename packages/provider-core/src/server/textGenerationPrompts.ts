@@ -450,10 +450,6 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
   return { prompt, outputSchema };
 }
 
-// ---------------------------------------------------------------------------
-// Context handoff summary
-// ---------------------------------------------------------------------------
-
 export interface HandoffSummaryPromptInput {
   transcript: string;
   fromProvider: string;
