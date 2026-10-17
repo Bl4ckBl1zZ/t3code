@@ -5,7 +5,6 @@ export type VoiceTranscriptionOptions = {
   readonly durationSeconds?: number;
 };
 
-/** Binds a recording to its selected implementation and resolved locale. */
 export type PreparedVoiceTranscription = {
   readonly locale: string;
   /** Recording stops by itself at this length; defaults to the controller's limit. */

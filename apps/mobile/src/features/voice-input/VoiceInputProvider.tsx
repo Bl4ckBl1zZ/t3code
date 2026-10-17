@@ -97,9 +97,7 @@ async function configureVoiceRecordingAudio(): Promise<void> {
   } catch (error) {
     try {
       await releaseVoiceRecordingAudio();
-    } catch {
-      // Keep the setup error. The controller has not started a recorder yet.
-    }
+    } catch {}
     throw error;
   }
 }
@@ -119,7 +117,6 @@ export function useGlobalVoiceInput() {
 
 function useVoiceInputRuntime() {
   const registry = use(RegistryContext);
-  // Dictation reads and records microphones without subscribing the provider to preferences.
   useAtomMount(mobilePreferencesAtom);
   useAtomMount(updateMobilePreferencesAtom);
   // Signed-in T3 Connect accounts dictate through the relay; load its status
@@ -158,7 +155,6 @@ function useVoiceInputRuntime() {
   const recorderRef = useRef<LazyVoiceRecorder<RecorderState> | null>(null);
 
   if (!sessionRef.current || !recorderRef.current) {
-    // The native recorder is created when dictation starts, not on app launch.
     const recorder = createLazyVoiceRecorder({
       create: () => new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS),
       onStatus: (status: RecordingStatus) => {
@@ -221,7 +217,6 @@ function useVoiceInputRuntime() {
 
   useEffect(
     () => () => {
-      // Dispose first so an active recording is stopped before the recorder is released.
       controller.dispose();
       recorder.release();
     },
