@@ -1125,7 +1125,7 @@ function MarkdownLegacyHtmlEmbedCodeBlock({
   const [expanded, setExpanded] = useState(false);
   const searching = use(MarkdownFindContext);
   const revealSource = () => setShowCode(true);
-  const sourceRevealRef = useFindRevealRef(revealSource);
+  const sourceRevealRef = findRevealRef(revealSource);
   const canShowEmbed = !isStreaming && isClosed && code.trim().length > 0;
   const showEmbed = canShowEmbed && !showCode;
   const toggleLabel = showCode ? "Show embed" : "Show code";
