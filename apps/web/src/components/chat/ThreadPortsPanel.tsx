@@ -9,7 +9,6 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { CopyIcon, ExternalLinkIcon, GlobeIcon } from "lucide-react";
-import { useMemo } from "react";
 
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -66,21 +65,15 @@ export function ThreadPortsPanel(props: {
     threadId: props.threadId,
   });
   const pinnedLoopback = isLoopbackPreviewUrl(props.pinnedUrl);
-  const configuredUrls = useMemo(
-    () => (pinnedLoopback && props.pinnedUrl !== undefined ? [props.pinnedUrl] : undefined),
-    [pinnedLoopback, props.pinnedUrl],
-  );
+  const configuredUrls =
+    pinnedLoopback && props.pinnedUrl !== undefined ? [props.pinnedUrl] : undefined;
   const scans = runningTerminalIds.length > 0 || pinnedLoopback;
   const { servers } = useDiscoveredPortsState(scans ? props.environmentId : null, configuredUrls);
-  const rows = useMemo(
-    () =>
-      threadPortRows({
-        threadId: props.threadId,
-        servers: scans ? servers : [],
-        pinnedUrl: props.pinnedUrl,
-      }),
-    [props.pinnedUrl, props.threadId, scans, servers],
-  );
+  const rows = threadPortRows({
+    threadId: props.threadId,
+    servers: scans ? servers : [],
+    pinnedUrl: props.pinnedUrl,
+  });
   const canOperatePreview = useEnvironmentScope(props.environmentId, AuthPreviewOperateScope);
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
 

@@ -5,7 +5,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { presentBackgroundTaskOutput } from "@t3tools/client-runtime/state/thread-execution";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
@@ -34,10 +34,7 @@ export function useThreadBackgroundOutput(input: {
       : null,
   );
   const tasks = watches ? query.data?.tasks : undefined;
-  return useMemo(
-    () => (tasks === undefined ? EMPTY_OUTPUTS : new Map(tasks.map((task) => [task.taskId, task]))),
-    [tasks],
-  );
+  return tasks === undefined ? EMPTY_OUTPUTS : new Map(tasks.map((task) => [task.taskId, task]));
 }
 
 /**
