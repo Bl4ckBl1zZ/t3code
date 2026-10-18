@@ -22,7 +22,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 
 import { runtime } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -94,9 +94,9 @@ export function useManagedRelayVoiceInput() {
     ? managedRelayQueryManager.voiceInputAtom(accountId)
     : EMPTY_VOICE_INPUT_ATOM;
   const snapshot = readManagedRelaySnapshotState(useAtomValue(atom));
-  const refresh = useCallback(() => {
+  const refresh = () => {
     if (accountId) managedRelayQueryManager.refreshVoiceInput(appAtomRegistry, accountId);
-  }, [accountId]);
+  };
   return { ...snapshot, accountId, refresh };
 }
 
@@ -122,11 +122,11 @@ export function useManagedRelayEnvironments() {
       });
     }
   }, [snapshot.error, snapshot.errorTraceId]);
-  const refresh = useCallback(() => {
+  const refresh = () => {
     if (accountId) {
       managedRelayQueryManager.refreshEnvironments(appAtomRegistry, accountId);
     }
-  }, [accountId]);
+  };
 
   return {
     ...snapshot,
@@ -149,11 +149,11 @@ export function useManagedRelayDevices() {
       });
     }
   }, [snapshot.error, snapshot.errorTraceId]);
-  const refresh = useCallback(() => {
+  const refresh = () => {
     if (accountId) {
       managedRelayQueryManager.refreshDevices(appAtomRegistry, accountId);
     }
-  }, [accountId]);
+  };
 
   return {
     ...snapshot,

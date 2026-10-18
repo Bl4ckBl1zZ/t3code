@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { useManagedRelayVoiceInput } from "../cloud/managedRelayState";
 import {
@@ -57,26 +57,23 @@ export function useComposerVoiceInput(input: {
   const available = status?.available === true;
   const language = status?.settings.language ?? null;
   const maxClipSeconds = status?.limits.maxClipSeconds ?? null;
-  const target = useMemo<VoiceTarget | null>(
-    () =>
-      available && maxClipSeconds !== null
-        ? {
-            key: draftKey,
-            locale: language ?? navigator.language,
-            maxClipSeconds,
-            deliverOffscreen: (text) =>
-              appendTranscriptToStoredDraft(draftTarget, text, language ?? navigator.language),
-          }
-        : null,
-    [available, draftKey, draftTarget, language, maxClipSeconds],
-  );
+  const target: VoiceTarget | null =
+    available && maxClipSeconds !== null
+      ? {
+          key: draftKey,
+          locale: language ?? navigator.language,
+          maxClipSeconds,
+          deliverOffscreen: (text) =>
+            appendTranscriptToStoredDraft(draftTarget, text, language ?? navigator.language),
+        }
+      : null;
 
   // Remember where the caret was when dictation started; the transcript goes
   // there unless the draft changed meanwhile, then to the current caret.
-  const captureAnchor = useCallback(() => {
+  const captureAnchor = () => {
     const snapshot = readSnapshot();
     anchorRef.current = { value: snapshot.value, position: snapshot.expandedCursor };
-  }, [readSnapshot]);
+  };
 
   useEffect(
     () =>
@@ -105,7 +102,7 @@ export function useComposerVoiceInput(input: {
   );
 
   /** Starts hands-free dictation, or stops the active recording. */
-  const toggle = useCallback(() => {
+  const toggle = () => {
     const session = getVoiceSessionState();
     if (session.phase === "recording") {
       void stopVoiceRecording();
@@ -114,7 +111,7 @@ export function useComposerVoiceInput(input: {
     if (!target || (session.phase !== "idle" && session.phase !== "failed")) return;
     captureAnchor();
     void startVoiceRecording(target);
-  }, [captureAnchor, target]);
+  };
 
   return { target, captureAnchor, toggle };
 }

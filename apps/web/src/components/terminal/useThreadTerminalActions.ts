@@ -11,7 +11,7 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { randomUUID } from "~/lib/utils";
 import { selectThreadRightPanelState, useRightPanelStore } from "../../rightPanelStore";
-import { useProject, useThreadShell } from "../../state/entities";
+import { useProject, useQuietThreadShell } from "../../state/entities";
 import { readEnvironmentScope } from "../../state/session";
 import { terminalEnvironment } from "../../state/terminal";
 import { useKnownTerminalSessions } from "../../state/terminalSessions";
@@ -35,7 +35,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
   const restartTerminalCommand = useAtomCommand(terminalEnvironment.restart, "terminal restart");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalCommand = useAtomCommand(terminalEnvironment.close, "terminal close");
-  const serverThread = useThreadShell(threadRef);
+  const serverThread = useQuietThreadShell(threadRef);
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );

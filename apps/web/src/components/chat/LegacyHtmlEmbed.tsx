@@ -1,5 +1,5 @@
 import { clampHtmlRenderHeight } from "@t3tools/shared/htmlRender";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 
 import { LRUCache } from "~/lib/lruCache";
 
@@ -20,13 +20,10 @@ const reportedHeights = new LRUCache<number>(64, 1 << 20);
 export function LegacyHtmlEmbedFrame(props: { readonly html: string }) {
   const { html } = props;
   const [contentHeight, setContentHeight] = useState(() => reportedHeights.get(html));
-  const handleContentHeight = useCallback(
-    (height: number) => {
-      reportedHeights.set(html, height, html.length * 2 + 16);
-      setContentHeight(height);
-    },
-    [html],
-  );
+  const handleContentHeight = (height: number) => {
+    reportedHeights.set(html, height, html.length * 2 + 16);
+    setContentHeight(height);
+  };
   return (
     <div style={{ height: clampHtmlRenderHeight(contentHeight ?? DEFAULT_HEIGHT) }}>
       <HtmlRenderDocument
