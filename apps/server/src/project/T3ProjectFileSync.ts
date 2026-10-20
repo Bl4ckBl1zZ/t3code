@@ -312,18 +312,20 @@ export const make = Effect.gen(function* () {
   const ownScripts = (settings: ServerSettings, projectId: ProjectId) =>
     settings.projectSettingsOverrides[projectId]?.defaultProjectScripts;
 
-  const setOwnScripts = (projectId: ProjectId, scripts: ReadonlyArray<ProjectScript>) =>
-    Effect.gen(function* () {
-      const settings = yield* settingsService.getSettings;
-      yield* settingsService.updateSettings({
-        projectSettingsOverrides: {
-          [projectId]: {
-            ...settings.projectSettingsOverrides[projectId],
-            defaultProjectScripts: scripts,
-          },
+  const setOwnScripts = Effect.fn("T3ProjectFileSync.setOwnScripts")(function* (
+    projectId: ProjectId,
+    scripts: ReadonlyArray<ProjectScript>,
+  ) {
+    const settings = yield* settingsService.getSettings;
+    yield* settingsService.updateSettings({
+      projectSettingsOverrides: {
+        [projectId]: {
+          ...settings.projectSettingsOverrides[projectId],
+          defaultProjectScripts: scripts,
         },
-      });
+      },
     });
+  });
 
   const syncProject = Effect.fn("T3ProjectFileSync.syncProject")(function* (
     project: Project,

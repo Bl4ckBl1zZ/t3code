@@ -4,9 +4,11 @@ import * as NodeUtil from "node:util";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
-  type OrchestrationV2DomainEvent,
+  ProjectId,
+  ProviderInstanceId,
   ScheduledTaskError,
   ScheduledTaskId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -15,8 +17,8 @@ import * as Logger from "effect/Logger";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Context from "effect/Context";
+import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
-import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
@@ -25,6 +27,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
@@ -39,7 +42,6 @@ const insertRow = (
     status: string;
     scheduleJson?: string;
     prompt?: string;
-    threadId?: string | null;
   },
   now: string,
 ) =>
@@ -50,7 +52,7 @@ const insertRow = (
     enabled: row.enabled,
     schedule_json: row.scheduleJson ?? '{"type":"interval","everyMs":60000}',
     project_id: "project:test",
-    thread_id: row.threadId ?? null,
+    thread_id: null,
     workspace_strategy_json: '{"type":"root"}',
     model_selection_json: '{"instanceId":"codex","model":"gpt-5"}',
     runtime_mode: "full-access",
@@ -203,6 +205,10 @@ it.effect(
                       Effect.andThen(Effect.die(new Error("test launch failure"))),
                     ),
                 }),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: "/projects",
+                  isScratchProject: () => Effect.succeed(false),
+                }),
                 Layer.mock(ThreadManagementService.ThreadManagementService)({}),
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 NodeCrypto.layer,
@@ -297,6 +303,10 @@ it.effect(
                       Effect.andThen(Effect.die(new Error("test launch failure"))),
                     ),
                 }),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: "/projects",
+                  isScratchProject: () => Effect.succeed(false),
+                }),
                 Layer.mock(ThreadManagementService.ThreadManagementService)({}),
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 NodeCrypto.layer,
@@ -330,72 +340,6 @@ it.effect(
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect("deletes the tasks bound to a thread when the thread is deleted", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const now = "2026-09-09T12:00:00.000Z";
-    for (const [id, threadId] of [
-      ["bound-deleted-offline", "thread:deleted-offline"],
-      ["bound-deleted-live", "thread:deleted-live"],
-      ["bound-live", "thread:live"],
-      ["unbound", null],
-    ] as const) {
-      yield* insertRow(sql, { id, threadId, next: null, enabled: 0, status: "never" }, now);
-    }
-    // Deleted while the server was down.
-    yield* sql`
-      INSERT INTO orchestration_v2_projection_threads (
-        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
-        created_at, updated_at, deleted_at, payload_json
-      )
-      VALUES (
-        'thread:deleted-offline', 'project:test', 'Deleted', 'codex', 'full-access', 'default',
-        ${now}, ${now}, ${now}, '{}'
-      )
-    `;
-    const domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
-    const watching = yield* Deferred.make<void>();
-
-    yield* Effect.gen(function* () {
-      const context = yield* Layer.build(
-        Layer.provideMerge(
-          ScheduledTaskService.layer,
-          Layer.mergeAll(
-            Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
-            Layer.mock(ThreadManagementService.ThreadManagementService)({
-              streamDomainEvents: Stream.unwrap(
-                PubSub.subscribe(domainEvents).pipe(
-                  Effect.tap(() => Deferred.succeed(watching, undefined)),
-                  Effect.map((subscription) => Stream.fromSubscription(subscription)),
-                ),
-              ),
-            }),
-            Layer.mock(SecretRequests.SecretRequests)({}),
-            NodeCrypto.layer,
-            Scheduler.layer,
-          ),
-        ),
-      );
-      const service = Context.get(context, ScheduledTaskService.ScheduledTaskService);
-      const taskIds = service
-        .list()
-        .pipe(Effect.map(({ tasks }) => tasks.map((task) => task.id).toSorted()));
-      assert.deepEqual(yield* taskIds, ["bound-deleted-live", "bound-live", "unbound"]);
-
-      yield* Deferred.await(watching);
-      yield* PubSub.publish(domainEvents, {
-        type: "thread.deleted",
-        threadId: "thread:deleted-live",
-      } as unknown as OrchestrationV2DomainEvent);
-      yield* service.subscribeList().pipe(
-        Stream.filter(({ tasks }) => !tasks.some((task) => task.id === "bound-deleted-live")),
-        Stream.runHead,
-      );
-      assert.deepEqual(yield* taskIds, ["bound-live", "unbound"]);
-    }).pipe(Effect.scoped);
-  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
-);
-
 it.effect("records a run as failed when its workspace preparation fails", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -423,10 +367,12 @@ it.effect("records a run as failed when its workspace preparation fails", () =>
                 ).pipe(Effect.as({} as ThreadLaunchService.ThreadLaunchResult));
               },
             }),
-            Layer.mock(ThreadManagementService.ThreadManagementService)({
-              streamDomainEvents: Stream.never,
-            }),
+            Layer.mock(ThreadManagementService.ThreadManagementService)({}),
             Layer.mock(SecretRequests.SecretRequests)({}),
+            Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+              namedProjectsRoot: "/projects",
+              isScratchProject: () => Effect.succeed(false),
+            }),
             NodeCrypto.layer,
             Scheduler.layer,
           ),
@@ -457,5 +403,72 @@ it.effect("records a run as failed when its workspace preparation fails", () =>
         1,
       ]);
     }).pipe(Effect.scoped);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("thread cleanup notifies subscribers and a finishing run cannot recreate the task", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const subscribed = yield* Deferred.make<void>();
+    const running = yield* Deferred.make<void>();
+    const removed = yield* Deferred.make<void>();
+    const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            sendToThread: () =>
+              Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(Effect.die("test dispatch failure")),
+              ),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            isScratchProject: () => Effect.succeed(false),
+          }),
+          NodeCrypto.layer,
+          Scheduler.layer,
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const threadId = ThreadId.make("thread:deleted-during-run");
+      const { task } = yield* service.upsert({
+        id: ScheduledTaskId.make("task:deleted-during-run"),
+        title: "Check orchestration",
+        prompt: "Check progress",
+        enabled: true,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId: ProjectId.make("project:test"),
+        threadId,
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      yield* service.subscribeList().pipe(
+        Stream.runForEach(({ tasks }) => {
+          const current = tasks.find((candidate) => candidate.id === task.id);
+          if (current === undefined) return Deferred.succeed(removed, undefined);
+          return current.lastRunStatus === "running"
+            ? Deferred.succeed(running, undefined)
+            : Deferred.succeed(subscribed, undefined);
+        }),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(subscribed);
+      const run = yield* service.runNow({ id: task.id }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Deferred.await(running);
+      yield* service.deleteForThread(threadId);
+      yield* Deferred.await(removed);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(run);
+      assert.lengthOf((yield* service.list()).tasks, 0);
+    }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

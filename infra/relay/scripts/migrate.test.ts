@@ -113,6 +113,7 @@ describe("relay migrations on a fork-migrated database", () => {
         "relay_managed_endpoint_allocations",
         "relay_managed_tunnel_limits",
         "relay_mobile_devices",
+        "relay_upstream_api_pauses",
         "relay_voice_input_settings",
         "relay_voice_transcription_requests",
         "relay_voice_usage_days",
