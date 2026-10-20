@@ -259,7 +259,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           : "You are up to date."}
                       </Text>
                     ) : null}
-                    {!supportsEnvironmentUpdate(config.environment.capabilities, releaseSource) ? (
+                    {!tracksEnvironmentReleases(config.environment.capabilities, releaseSource) ||
+                    (checkedRelease?.targetVersion &&
+                      !supportsEnvironmentUpdate(
+                        config.environment.capabilities,
+                        releaseSource,
+                      )) ? (
                       <Text className="text-sm text-foreground-muted">
                         {!tracksEnvironmentReleases(config.environment.capabilities, releaseSource)
                           ? "This build of T3 Code can't update this server. Update T3 Code on this machine."

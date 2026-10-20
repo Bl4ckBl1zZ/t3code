@@ -176,12 +176,14 @@ const readForkMigrationId = Effect.gen(function* () {
   return latest;
 });
 
-const hasColumn = (table: string, column: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql`SELECT 1 FROM pragma_table_info(${table}) WHERE name = ${column}`;
-    return rows.length > 0;
-  });
+const hasColumn = Effect.fn("forkDatabaseBridge.hasColumn")(function* (
+  table: string,
+  column: string,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql`SELECT 1 FROM pragma_table_info(${table}) WHERE name = ${column}`;
+  return rows.length > 0;
+});
 
 /**
  * Deletes T3 Work and T3 Chat, which this build does not have: the T3 Work project, every thread

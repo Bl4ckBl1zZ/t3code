@@ -8,6 +8,25 @@ import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 import { ExpandableText } from "../settings/ExpandableText";
 
+export function getThreadErrorBannerMessage(error: string): string {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(error);
+  } catch {
+    return error;
+  }
+  if (typeof payload !== "object" || payload === null || !("error" in payload)) {
+    return error;
+  }
+  const nestedError = payload.error;
+  if (typeof nestedError !== "object" || nestedError === null || !("message" in nestedError)) {
+    return error;
+  }
+  return typeof nestedError.message === "string" && nestedError.message.trim().length > 0
+    ? nestedError.message
+    : error;
+}
+
 export function getThreadErrorBannerKey(threadKey: string, error: string | null): string | null {
   return error === null ? null : `${threadKey}\u0000${error}`;
 }
@@ -45,6 +64,9 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
 }) {
   if (!error) return null;
   const presentedError = presentProviderError(error);
+  // The collapsed line reads as a next step; expanding shows the exact diagnostics.
+  const collapsedError =
+    presentedError === error.trim() ? getThreadErrorBannerMessage(error) : presentedError;
   const variant = errorClass === "usage_limit" ? "warning" : "error";
   return (
     <div className="pointer-events-auto mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
@@ -61,7 +83,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
               <p>Review your usage settings in ChatGPT to continue.</p>
             </div>
           ) : (
-            <ExpandableText text={presentedError} />
+            <ExpandableText text={error} collapsedText={collapsedError} />
           )}
         </AlertDescription>
         {(chatGptUsageLimit || onDismiss) && (
