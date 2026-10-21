@@ -27,6 +27,9 @@
         "ios-release.ts",
         "sign-macos.ts",
         "verify-windows-desktop-artifact.ts",
+        // Run by upstream's release.yml, which the fork does not carry.
+        "build-cli-archive.ts",
+        "resolve-nightly-release.ts",
       ],
       "ignoreDependencies": ["esbuild"],
       // The `t3` npm package's files: copied into the package, never imported.
