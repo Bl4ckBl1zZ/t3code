@@ -40,6 +40,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       DATABASE_HYPERDRIVE_ID: ${{ vars.DATABASE_HYPERDRIVE_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
+      # Optional Worker placement next to the database, e.g. aws:eu-central-1.
+      RELAY_PLACEMENT_REGION: ${{ vars.RELAY_PLACEMENT_REGION }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
       RELAY_TUNNEL_CLEANUP_MODE: ${{ vars.RELAY_TUNNEL_CLEANUP_MODE }}

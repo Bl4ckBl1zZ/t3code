@@ -41,7 +41,7 @@ export function releaseSourcePublishesCli(source: ReleaseSource): boolean {
   return source.repository === UPSTREAM_RELEASE_REPOSITORY;
 }
 
-function releasesPageUrl(source: ReleaseSource): string {
+export function cliReleasesPageUrl(source: ReleaseSource = UPSTREAM_RELEASE_SOURCE): string {
   return `https://github.com/${source.repository}/releases`;
 }
 
@@ -49,7 +49,7 @@ function releasesPageUrl(source: ReleaseSource): string {
 export function cliSelfUpdateUnavailableReason(source: ReleaseSource): string | null {
   return releaseSourcePublishesCli(source)
     ? null
-    : `Self-update isn't available in this build of T3 Code. Download the latest release from ${releasesPageUrl(source)}.`;
+    : `Self-update isn't available in this build of T3 Code. Download the latest release from ${cliReleasesPageUrl(source)}.`;
 }
 
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";

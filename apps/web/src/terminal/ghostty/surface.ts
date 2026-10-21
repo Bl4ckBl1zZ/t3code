@@ -18,7 +18,7 @@ import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
 import { isMonospaceFamily } from "../../appearanceFonts";
 import { observeResize } from "../../lib/observeResize";
 
-export const DEFAULT_TERMINAL_FONT_SIZE = 12;
+const DEFAULT_TERMINAL_FONT_SIZE = 12;
 const MIN_TERMINAL_FONT_SIZE = 6;
 const MAX_TERMINAL_FONT_SIZE = 32;
 const TERMINAL_GLYPH_FALLBACKS =
@@ -28,7 +28,7 @@ const TERMINAL_GLYPH_FALLBACKS =
 // The platform's own monospace faces; concrete names only, because an
 // unknown keyword (like ui-monospace) makes canvas font shorthand parsing
 // reject the whole string.
-export const DEFAULT_TERMINAL_FONT_FAMILY =
+const DEFAULT_TERMINAL_FONT_FAMILY =
   '"SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", ' + TERMINAL_GLYPH_FALLBACKS;
 const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
@@ -82,7 +82,7 @@ function uncheckedTerminalFontFamily(family?: string): string {
     : `${custom}, ${TERMINAL_GLYPH_FALLBACKS}`;
 }
 
-export function terminalFontFamily(family?: string): string {
+function terminalFontFamily(family?: string): string {
   // Quote non-ident names ("3270 Nerd Font", "M+ 1m"): an unquoted one makes
   // the whole canvas font string invalid and the assignment silently no-ops.
   const custom = family === undefined ? "" : quoteTerminalFontFamilies(family);
@@ -91,7 +91,7 @@ export function terminalFontFamily(family?: string): string {
   return uncheckedTerminalFontFamily(custom);
 }
 
-export async function loadTerminalFontFamily(
+async function loadTerminalFontFamily(
   family: string | undefined,
   size: number,
   environment?: {
@@ -112,12 +112,12 @@ export async function loadTerminalFontFamily(
   return (environment?.resolve ?? terminalFontFamily)(family);
 }
 
-export function terminalFontSize(size?: number): number {
+function terminalFontSize(size?: number): number {
   if (size === undefined || !Number.isFinite(size)) return DEFAULT_TERMINAL_FONT_SIZE;
   return Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, Math.round(size)));
 }
 
-export function shouldBlinkTerminalCursor(state: {
+function shouldBlinkTerminalCursor(state: {
   readonly focused: boolean;
   readonly cursorBlinking: boolean;
   readonly cursorVisible: boolean;
@@ -144,7 +144,7 @@ export interface TerminalScrollbarGeometry {
   readonly maxOffset: number;
 }
 
-export function terminalScrollbarGeometry(
+function terminalScrollbarGeometry(
   state: GhosttyScrollbar,
   trackHeight: number,
 ): TerminalScrollbarGeometry | null {
@@ -165,7 +165,7 @@ export function terminalScrollbarGeometry(
   };
 }
 
-export function terminalScrollbarOffsetAtPointer(
+function terminalScrollbarOffsetAtPointer(
   state: GhosttyScrollbar,
   trackHeight: number,
   pointerY: number,
@@ -179,7 +179,7 @@ export function terminalScrollbarOffsetAtPointer(
   return Math.round((thumbTop / travel) * geometry.maxOffset);
 }
 
-export function terminalGridCellAt(options: {
+function terminalGridCellAt(options: {
   bounds: { left: number; top: number };
   clientX: number;
   clientY: number;
@@ -357,7 +357,7 @@ export function applyTerminalCopyEvent(
   return { preventDefault: true, claimWriteFallback: true };
 }
 
-export function isTerminalPasteShortcut(
+function isTerminalPasteShortcut(
   event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
   platform = navigator.platform,
 ) {
@@ -378,7 +378,7 @@ function isMiddleClickPastePlatform(): boolean {
   return /linux|bsd/i.test(navigator.platform);
 }
 
-export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
+function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
   return (
     event.inputType === "" ||
     event.inputType === "insertCompositionText" ||
@@ -393,13 +393,11 @@ export function isTerminalCompositionKey(
   return event.isComposing || composing || event.key === "Process" || event.keyCode === 229;
 }
 
-export function isTerminalAltGraphText(
-  event: Pick<KeyboardEvent, "getModifierState" | "key">,
-): boolean {
+function isTerminalAltGraphText(event: Pick<KeyboardEvent, "getModifierState" | "key">): boolean {
   return event.getModifierState("AltGraph") && [...event.key].length === 1;
 }
 
-export function shouldReportTerminalMouse(
+function shouldReportTerminalMouse(
   tracking: boolean,
   event: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">,
 ): boolean {
@@ -420,7 +418,7 @@ export function resolveTerminalMouseData(
   };
 }
 
-export function resolveTerminalMouseTrackingState(
+function resolveTerminalMouseTrackingState(
   previousTracking: boolean,
   tracking: boolean,
   motionData: string,
@@ -448,7 +446,7 @@ export function terminalWheelDeltaRows(
   return { rows, remainder: total - rows };
 }
 
-export function terminalWheelArrowData(rows: number, applicationCursorKeys: boolean): string {
+function terminalWheelArrowData(rows: number, applicationCursorKeys: boolean): string {
   if (rows === 0) return "";
   const sequence =
     rows < 0
@@ -461,7 +459,7 @@ export function terminalWheelArrowData(rows: number, applicationCursorKeys: bool
   return sequence.repeat(Math.abs(rows));
 }
 
-export function ghosttyMouseButton(button: number): number | null {
+function ghosttyMouseButton(button: number): number | null {
   switch (button) {
     case 0:
       return 1;
@@ -600,7 +598,8 @@ export class GhosttyTerminalSurface {
     readonly ratio: number;
   } | null = null;
   private theme: GhosttyTheme;
-  private readonly suppressedKeyCodes = new Set<string>();
+  // App capture can hide keydowns, so only encoded presses qualify for Kitty releases.
+  private readonly encodedKeyCodes = new Set<string>();
   private pasteShortcutToken = 0;
   // Chromium can deliver native paste after the clipboard read resolves.
   // Suppress its duplicate only for the current shortcut gesture.
@@ -1082,18 +1081,12 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    // Presses handled outside the terminal must also swallow their release:
-    // beforeKey runs side effects (keybindings, navigation sends), so it cannot
-    // be consulted again on keyup, and Kitty report-event-types sessions would
-    // otherwise receive a release for a press the shell never saw.
-    if (isTerminalAltGraphText(event) || !this.options.beforeKey(event)) {
-      this.suppressedKeyCodes.add(event.code);
-      return;
-    }
+    // A consumed repeat still owes the original encoded press a release.
+    if (!event.repeat) this.encodedKeyCodes.delete(event.code);
+    if (isTerminalAltGraphText(event) || !this.options.beforeKey(event)) return;
     // IME candidates belong to the textarea, even if the key also resembles
     // a local shortcut. Safari signals the initial composition with code 229.
     if (isTerminalCompositionKey(event, this.composing)) {
-      this.suppressedKeyCodes.add(event.code);
       return;
     }
     const mac = isMacPlatform(navigator.platform);
@@ -1106,7 +1099,6 @@ export class GhosttyTerminalSurface {
     if (selectAllShortcut) {
       event.preventDefault();
       event.stopPropagation();
-      this.suppressedKeyCodes.add(event.code);
       this.selectAll();
       return;
     }
@@ -1126,7 +1118,6 @@ export class GhosttyTerminalSurface {
       if (state !== null) {
         event.preventDefault();
         event.stopPropagation();
-        this.suppressedKeyCodes.add(event.code);
         const delta =
           event.key === "Home"
             ? -state.offset
@@ -1186,11 +1177,9 @@ export class GhosttyTerminalSurface {
           });
         }
       }
-      this.suppressedKeyCodes.add(event.code);
       return;
     }
     if (isTerminalPasteShortcut(event)) {
-      this.suppressedKeyCodes.add(event.code);
       const gesture = { code: event.code, readText: "" };
       this.pasteShortcutGesture = gesture;
       const clipboard = navigator.clipboard;
@@ -1217,12 +1206,10 @@ export class GhosttyTerminalSurface {
     // Legacy encoding has no Super modifier, so Ghostty falls back to the event
     // text and an unhandled Cmd chord would type its bare letter (Cmd+S writing
     // "s"). A Kitty-mode session encodes the chord and still receives it.
-    // Leaving the default action intact keeps app and menu shortcuts working.
-    if (event.metaKey && data === event.key) {
-      this.suppressedKeyCodes.add(event.code);
-      return;
-    }
-    this.suppressedKeyCodes.delete(event.code);
+    // Leaving the default action intact keeps app and menu shortcuts working;
+    // the key stays out of encodedKeyCodes so its release is not sent either.
+    if (event.metaKey && data === event.key) return;
+    this.encodedKeyCodes.add(event.code);
     event.preventDefault();
     event.stopPropagation();
     this.options.onData(data);
@@ -1238,7 +1225,7 @@ export class GhosttyTerminalSurface {
     ) {
       this.pasteShortcutGesture = null;
     }
-    if (this.suppressedKeyCodes.delete(event.code)) return;
+    if (!this.encodedKeyCodes.delete(event.code)) return;
     if (isTerminalCompositionKey(event, this.composing)) {
       return;
     }
@@ -1251,6 +1238,17 @@ export class GhosttyTerminalSurface {
     this.options.onData(data);
   };
 
+  // A release elsewhere must not leave a press for a later app shortcut to inherit.
+  private readonly onWindowKeyUp = (event: KeyboardEvent) => {
+    if (event.composedPath().includes(this.input)) return;
+    this.encodedKeyCodes.delete(event.code);
+  };
+
+  // A fresh press proves a release was missed; repeats can span a focus round trip.
+  private readonly onWindowKeyDown = (event: KeyboardEvent) => {
+    if (!event.repeat) this.encodedKeyCodes.delete(event.code);
+  };
+
   private readonly onFocus = () => {
     this.focused = true;
     this.cursorOn = true;
@@ -1261,9 +1259,6 @@ export class GhosttyTerminalSurface {
     this.focused = false;
     this.pasteShortcutGesture = null;
     this.refreshHoveredLink();
-    // Suppressions survive blur deliberately: a shortcut that moves focus (for
-    // example terminal-toggle) must still swallow its own keyup if focus comes
-    // back before release.
     this.cursorOn = true;
     this.requestRender();
   };
@@ -1815,6 +1810,9 @@ export class GhosttyTerminalSurface {
   private installEvents(): void {
     this.input.addEventListener("keydown", this.onKeyDown);
     this.input.addEventListener("keyup", this.onKeyUp);
+    // App shortcuts stop propagation at window, so observe the same capture target.
+    window.addEventListener("keyup", this.onWindowKeyUp, { capture: true });
+    window.addEventListener("keydown", this.onWindowKeyDown, { capture: true });
     this.input.addEventListener("focus", this.onFocus);
     this.input.addEventListener("blur", this.onBlur);
     this.input.addEventListener("input", this.onInput);
@@ -1843,6 +1841,8 @@ export class GhosttyTerminalSurface {
   private removeEvents(): void {
     this.input.removeEventListener("keydown", this.onKeyDown);
     this.input.removeEventListener("keyup", this.onKeyUp);
+    window.removeEventListener("keyup", this.onWindowKeyUp, { capture: true });
+    window.removeEventListener("keydown", this.onWindowKeyDown, { capture: true });
     this.input.removeEventListener("focus", this.onFocus);
     this.input.removeEventListener("blur", this.onBlur);
     this.input.removeEventListener("input", this.onInput);

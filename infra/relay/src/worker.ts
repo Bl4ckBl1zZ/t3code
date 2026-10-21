@@ -111,12 +111,19 @@ export class Api extends Cloudflare.Worker<Api, {}>()("Api") {}
 
 export const layer = Api.make(
   RelayDeploymentConfig.pipe(
-    Effect.map(({ relayPublicDomain }) => ({
+    Effect.map(({ relayPublicDomain, placementRegion }) => ({
       main: import.meta.filename,
       compatibility: {
         date: "2026-05-22",
         flags: ["nodejs_compat"],
       },
+      // Requests run several Postgres queries in sequence. At the user's edge
+      // each one paid the round trip to the database (~300 ms from JNB); next
+      // to the database the request pays that distance once.
+      ...Option.match(placementRegion, {
+        onNone: () => ({}),
+        onSome: (region) => ({ placement: { region } }),
+      }),
       domain: relayPublicDomain,
     })),
     Effect.orDie,
