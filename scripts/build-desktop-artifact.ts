@@ -1394,8 +1394,8 @@ export function resolveMacWebAuthnEntitlements(
   };
 }
 
-// Electron's hardened-runtime defaults, plus the microphone for voice input.
-// Without audio-input, macOS denies the microphone without ever asking.
+// Electron's hardened-runtime defaults, plus the camera and microphone for
+// voice input and for commands that terminals and agents run.
 const MAC_RUNTIME_ENTITLEMENTS = `    <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>

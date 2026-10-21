@@ -1033,6 +1033,10 @@ const make = Effect.gen(function* () {
           )
         )
           return keep("settings changed since check");
+        // Submodule history can still keep the worktree, so it is checked before
+        // the teardown script runs; teardown happens only when removal follows.
+        const submodules = yield* submoduleRemoval(worktreePath, settings);
+        if (submodules.reason !== null) return keep(submodules.reason);
         // The project's teardown script sees the checkout as the user left it.
         // A failure is reported on the entry and does not keep the worktree.
         const teardownFailure = yield* teardownScripts.runBeforeRemoval({
@@ -1042,8 +1046,6 @@ const make = Effect.gen(function* () {
         // Clean only untracked files. Ordinary worktrees retain Git's final tracked-edit check.
         if (settings.worktreeKeepWhen === "tracked-changes")
           yield* cleanupGit(worktreePath, ["clean", "-ffdx"], "git clean");
-        const submodules = yield* submoduleRemoval(worktreePath, settings);
-        if (submodules.reason !== null) return keep(submodules.reason);
         if (submodules.force) {
           const changes = yield* localChangesReason(worktreePath, settings);
           if (changes !== null) return keep(changes);
@@ -1113,7 +1115,7 @@ const make = Effect.gen(function* () {
     const rows = yield* sql<{ occurredAt: string }>`
       SELECT occurred_at AS "occurredAt" FROM orchestration_events
       WHERE aggregate_kind = 'thread' AND stream_id = ${thread.id}
-        AND application_event_version = 2 AND event_type = 'thread.settled'
+        AND application_event_version IN (1, 2) AND event_type = 'thread.settled'
       ORDER BY sequence DESC LIMIT 1
     `;
     const recorded = rows[0] === undefined ? Number.NaN : Date.parse(rows[0].occurredAt);

@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
+import type { ReleaseSource } from "@t3tools/shared/cliRelease";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
@@ -15,14 +16,16 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
-import { findEnvironmentUpdate } from "./environment-maintenance";
+import { findEnvironmentUpdate, tracksEnvironmentReleases } from "./environment-maintenance";
 
 export function OutdatedServerUpdateSection({
   environmentId,
   label,
+  releaseSource,
 }: {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+  readonly releaseSource: ReleaseSource;
 }) {
   const describe = useAtomCommand(describeOutdatedServer, { reportFailure: false });
   const update = useAtomCommand(updateOutdatedServer, { reportFailure: false });
@@ -48,7 +51,13 @@ export function OutdatedServerUpdateSection({
       const description = await describe(environmentId);
       if (AsyncResult.isFailure(description)) throw squashAtomCommandFailure(description);
       const fromVersion = description.value.serverVersion;
-      const targetVersion = await findEnvironmentUpdate(fromVersion, request.signal);
+      // A build released outside upstream must not install upstream's `t3` on the host.
+      if (!tracksEnvironmentReleases(description.value.capabilities, releaseSource)) {
+        throw new Error(
+          "This build of T3 Code can't update that server. Update T3 Code on that machine.",
+        );
+      }
+      const targetVersion = await findEnvironmentUpdate(fromVersion, request.signal, releaseSource);
       if (!request.signal.aborted) setRelease({ fromVersion, targetVersion });
     });
     clearTimeout(timeout);

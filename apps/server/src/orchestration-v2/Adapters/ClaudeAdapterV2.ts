@@ -4333,6 +4333,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
         // Reports one root request's usage as the current context. Usage
         // without input is a placeholder, never a measurement.
+        // The thread's Context slider and the provider setting both cap compaction;
+        // the meter reports the tighter one, matching what the session launched with.
+        const effectiveAutoCompactWindow = (modelSelection: ModelSelection) =>
+          String(
+            claudeAutoCompactWindow(
+              compileClaudeModelSelection(modelSelection),
+              adapterOptions.settings,
+            ) ?? "",
+          );
         const emitContextUsage = Effect.fnUntraced(function* (
           context: ActiveClaudeTurnContext,
           usage: ClaudeMessageUsage,
@@ -4346,7 +4355,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             usage,
             context.input.modelSelection,
             DateTime.formatIso(now),
-            adapterOptions.settings.autoCompactWindow,
+            effectiveAutoCompactWindow(context.input.modelSelection),
             context.streamUsage?.requestedAt,
           );
           if (tokenUsage.inputTokens <= 0) return;
@@ -7848,7 +7857,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     usedTokens: afterTokenCount,
                     maxTokens,
                     ...claudeAutoCompactThreshold(
-                      adapterOptions.settings.autoCompactWindow,
+                      effectiveAutoCompactWindow(context.input.modelSelection),
                       maxTokens,
                     ),
                     updatedAt: DateTime.formatIso(now),

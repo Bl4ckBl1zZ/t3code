@@ -127,12 +127,20 @@ describe("environment release checks", () => {
       ),
     ).toBe(true);
 
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(Response.json([{ tag_name: "v9.0.0" }, { tag_name: "fork-v0.1.401" }]));
-    vi.stubGlobal("fetch", fetchMock);
+    const latest = vi.fn().mockResolvedValue(Response.json({ tag_name: "fork-v0.1.401" }));
+    vi.stubGlobal("fetch", latest);
     expect(await findEnvironmentUpdate("0.1.400", signal, fork)).toBe("0.1.401");
-    expect(fetchMock.mock.calls[0]?.[0]).toContain("/repos/owner/fork/releases");
+    expect(latest.mock.calls[0]?.[0]).toBe("https://github.com/owner/fork/releases/latest");
+
+    // A latest release under another prefix falls back to the fork's paged release index.
+    const paged = vi.fn(async (url: string) =>
+      url.endsWith("/releases/latest")
+        ? Response.json({ tag_name: "v9.0.0" })
+        : Response.json([{ tag_name: "v9.0.0" }, { tag_name: "fork-v0.1.402" }]),
+    );
+    vi.stubGlobal("fetch", paged);
+    expect(await findEnvironmentUpdate("0.1.400", signal, fork)).toBe("0.1.402");
+    expect(paged.mock.calls[1]?.[0]).toContain("api.github.com/repos/owner/fork/releases");
   });
 
   it("reports failed checks instead of claiming the server is current", async () => {

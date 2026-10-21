@@ -226,6 +226,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               <OutdatedServerUpdateSection
                 environmentId={environmentId}
                 label={environment.environmentLabel}
+                releaseSource={releaseSource}
               />
             ) : !connected ? (
               <Text className="px-2 text-sm text-foreground-muted">

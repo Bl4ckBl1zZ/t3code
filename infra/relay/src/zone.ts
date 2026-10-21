@@ -35,11 +35,18 @@ export const RelayDeploymentConfig = Effect.gen(function* () {
   const relayPublicDomain = Option.getOrElse(relayPublicDomainOverride, () =>
     relayPublicDomainForStage(stage, relayApiZoneName),
   );
+  // The fork's database is not upstream's PlanetScale `us-west`, so the Worker is
+  // placed next to it only when the deployment names that region.
+  const placementRegion = yield* Config.String("RELAY_PLACEMENT_REGION").pipe(
+    Config.option,
+    Config.map(Option.flatMap((value) => Option.liftPredicate(value.trim(), Boolean))),
+  );
 
   return {
     stage,
     relayPublicDomain,
     relayPublicOrigin: `https://${relayPublicDomain}`,
+    placementRegion,
     relayApiZoneName,
     managedEndpointZoneName,
   };
