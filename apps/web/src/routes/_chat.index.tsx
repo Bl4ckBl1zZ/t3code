@@ -19,6 +19,7 @@ import {
   useThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
+import { useUiStateStore } from "../uiStateStore";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
@@ -41,16 +42,17 @@ function IndexDraftLanding() {
   // Read at effect time: this page stays mounted while a navigation away from
   // "/" is still loading, but the router already points at the new location.
   const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
-  // One start per attempt; a retry request opens the next attempt.
   const startedAttemptRef = useRef<number | null>(null);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
   const rememberedProject = useRememberedNewThreadProject(projects);
-  const landingProject = bootstrapped
-    ? (rememberedProject ??
-      sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ??
-      null)
-    : null;
+  const rememberedProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
+  // Waits only while the remembered project's environment may still be loading.
+  const landingProject =
+    rememberedProject ??
+    (bootstrapped || rememberedProjectKey === null
+      ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
+      : null);
   const attempt = startState.retryRequest;
 
   useEffect(() => {
@@ -74,9 +76,6 @@ function IndexDraftLanding() {
       });
   }, [attempt, handleNewThread, landingProject]);
 
-  if (!bootstrapped) {
-    return null;
-  }
   if (landingProject !== null) {
     return startState.failed ? (
       <DraftStartError
@@ -89,7 +88,8 @@ function IndexDraftLanding() {
       />
     ) : null;
   }
-  return <NoProjectsHero />;
+  // A pending environment cannot prove the workspace is empty.
+  return bootstrapped ? <NoProjectsHero /> : null;
 }
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {

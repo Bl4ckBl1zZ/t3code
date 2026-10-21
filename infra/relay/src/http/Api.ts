@@ -929,10 +929,11 @@ export const layerClientApi = HttpApiBuilder.group(
                 reason: "managed_endpoint_not_configured",
                 traceId,
               }),
-            ManagedEndpointProvisioningFailed: (_error, traceId) =>
+            ManagedEndpointProvisioningFailed: (error, traceId) =>
               new RelayEnvironmentLinkUnavailableError({
                 code: "environment_link_unavailable",
                 reason: "managed_endpoint_provisioning_failed",
+                provisioningStage: error.stage,
                 traceId,
               }),
             ManagedEndpointOriginNotAllowed: (_error, traceId) =>
@@ -1155,10 +1156,12 @@ export const layerDpopClientApi = HttpApiBuilder.group(
                 reason: error.reason,
                 traceId,
               }),
-            EnvironmentMintRequestFailed: (_error, traceId) =>
+            EnvironmentMintRequestFailed: (error, traceId) =>
               new RelayEnvironmentEndpointUnavailableError({
                 code: "environment_endpoint_unavailable",
                 reason: "endpoint_request_failed",
+                ...(error.endpointFailure ? { endpointFailure: error.endpointFailure } : {}),
+                ...(error.endpointStatus ? { endpointStatus: error.endpointStatus } : {}),
                 traceId,
               }),
             EnvironmentMintRequestTimedOut: (_error, traceId) =>
@@ -1198,10 +1201,12 @@ export const layerDpopClientApi = HttpApiBuilder.group(
                 reason: error.reason,
                 traceId,
               }),
-            EnvironmentMintRequestFailed: (_error, traceId) =>
+            EnvironmentMintRequestFailed: (error, traceId) =>
               new RelayEnvironmentEndpointUnavailableError({
                 code: "environment_endpoint_unavailable",
                 reason: "endpoint_request_failed",
+                ...(error.endpointFailure ? { endpointFailure: error.endpointFailure } : {}),
+                ...(error.endpointStatus ? { endpointStatus: error.endpointStatus } : {}),
                 traceId,
               }),
             EnvironmentMintRequestTimedOut: (_error, traceId) =>
