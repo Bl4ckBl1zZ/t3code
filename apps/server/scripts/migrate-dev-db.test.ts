@@ -247,8 +247,8 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
             thread_id TEXT NOT NULL,
             parent_binding_id TEXT REFERENCES fixture_bindings (binding_id))`;
           yield* sql`INSERT INTO fixture_bindings VALUES
-            ('binding-settled', 'settled-thread', NULL),
-            ('binding-stopped', 'stopped-thread', 'binding-settled')`;
+            ('binding-archived', 'archived-thread', NULL),
+            ('binding-stopped', 'stopped-thread', 'binding-archived')`;
         }),
       );
 
