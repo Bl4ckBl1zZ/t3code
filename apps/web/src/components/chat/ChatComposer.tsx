@@ -3950,9 +3950,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   {voiceInput.target ? (
                     <ComposerVoiceButton
                       target={voiceInput.target}
-                      disabled={
-                        isConnecting || isComposerApprovalState || isChoiceOnlyPendingQuestion
-                      }
+                      disabled={isConnecting || isChoiceOnlyPendingQuestion}
                       shortcutLabel={shortcutLabelForCommand(keybindings, "composer.voiceInput")}
                       onBeforeStart={voiceInput.captureAnchor}
                     />
