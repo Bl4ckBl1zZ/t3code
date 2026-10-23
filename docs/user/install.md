@@ -33,7 +33,7 @@ for an independent server.
 ### Build a server from source
 
 To run a server without the desktop app, for example on Linux or an Intel Mac,
-build it from source with Node.js 24 and `vp`
+build it from source with `vp`, which provides the Node version it needs
 ([Install vp](https://github.com/Bl4ckBl1zZ/t3code#install-vp)):
 
 ```bash
