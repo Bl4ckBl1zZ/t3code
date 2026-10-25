@@ -57,6 +57,7 @@ import {
   latestProviderTurnForAttempt,
   orchestrationV2RunWorkStartedAt,
   ProviderInstanceId,
+  pendingGuestMessageCount,
   ProviderInteractionMode,
   resolveProviderInstanceEnabled,
   type ProviderSessionId,
@@ -11633,7 +11634,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             projection.runs.some((run) =>
               ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
             ) ||
-            projection.runtimeRequests.some((request) => request.status === "pending")
+            projection.runtimeRequests.some((request) => request.status === "pending") ||
+            // A waiting guest message is a request to the owner, like a pending question.
+            pendingGuestMessageCount(thread.guestShare) > 0
           ) {
             return yield* new OrchestratorDispatchError({
               commandId: command.commandId,

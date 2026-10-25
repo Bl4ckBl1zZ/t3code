@@ -139,7 +139,7 @@ export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now
   return thread.worktreePath !== null && threadAtRest(thread, now);
 }
 
-/** No run, queued prompt, question or background work holds the thread. */
+/** No run, queued prompt, question, guest message or background work holds the thread. */
 function threadAtRest(thread: OrchestrationV2ThreadShell, now: number): boolean {
   return (
     thread.activeRunId === null &&
@@ -151,6 +151,7 @@ function threadAtRest(thread: OrchestrationV2ThreadShell, now: number): boolean 
       thread.status === "rolled_back") &&
     (thread.pendingBackgroundTasks?.length ?? 0) === 0 &&
     thread.pendingRuntimeRequest === null &&
+    (thread.pendingGuestMessageCount ?? 0) === 0 &&
     !threadHasQueuedTurnStart(thread, now)
   );
 }
@@ -1403,11 +1404,9 @@ const make = Effect.gen(function* () {
     yield* SubscriptionRef.set(reportRef, latestReport);
     return latestReport;
   });
-  // At most one automatic sweep waits at a time. An automatic request made
-  // while one is waiting joins it, since that sweep has not read any state yet.
-  // A follow-up request, queued by the deletions a sweep makes, marks the
-  // waiting sweep so its report keeps what the previous one removed or failed.
-  // Each manual run still gets its own sweep and report.
+  // Automatic requests join the one waiting sweep, which has not read state yet. A follow-up
+  // (queued by a sweep's own deletions) marks it so its report keeps the previous results.
+  // Manual runs always get their own sweep and report.
   const queuedAutomaticSweep = yield* Ref.make<"automatic" | "follow-up" | null>(null);
   const worker = yield* makeDrainableWorker(
     (completion: Deferred.Deferred<StorageCleanupReport, ServerSettingsError> | undefined) =>

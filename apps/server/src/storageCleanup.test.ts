@@ -163,6 +163,15 @@ describe("V2 storage cleanup eligibility", () => {
     },
   );
 
+  it("retains a thread while a guest message waits for its owner", () => {
+    expect(
+      storageCleanupThreadIdle(
+        { ...candidateWithStatus("completed"), pendingGuestMessageCount: 1 },
+        NOW_MS,
+      ),
+    ).toBe(false);
+  });
+
   it("retains an active run even if the shell status is idle", () => {
     expect(
       storageCleanupThreadIdle({ ...candidate(), activeRunId: RunId.make("run") }, NOW_MS),

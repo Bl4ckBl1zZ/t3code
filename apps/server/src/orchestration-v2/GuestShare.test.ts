@@ -341,3 +341,53 @@ it.effect("brings a settled thread back when its guest sends a request", () =>
     assert.isNull(thread.settledAt);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("keeps a settled thread from automatic deletion while a guest message waits", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: CommandId.make("redeem"),
+      threadId,
+      shareId,
+      guestName: "Sam",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.guest-message.submit",
+      commandId: CommandId.make("submit"),
+      threadId,
+      shareId,
+      guestMessageId,
+      text: "Why?",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle"),
+      threadId,
+    });
+    const autoDelete = (id: string) =>
+      Effect.gen(function* () {
+        const { thread } = yield* projections.getThreadProjection(threadId);
+        return yield* Effect.exit(
+          orchestrator.dispatch({
+            type: "thread.auto-delete",
+            commandId: CommandId.make(id),
+            threadId,
+            snapshotAt: thread.updatedAt,
+          }),
+        );
+      });
+    assert.isTrue(Exit.isFailure(yield* autoDelete("auto-delete-waiting")));
+    assert.isNull((yield* projections.getThreadProjection(threadId)).thread.deletedAt);
+
+    yield* orchestrator.dispatch({
+      type: "thread.guest-message.dismiss",
+      commandId: CommandId.make("dismiss"),
+      threadId,
+      guestMessageId,
+    });
+    assert.isTrue(Exit.isSuccess(yield* autoDelete("auto-delete-answered")));
+    assert.isNotNull((yield* projections.getThreadProjection(threadId)).thread.deletedAt);
+  }).pipe(Effect.provide(layerTest)),
+);
