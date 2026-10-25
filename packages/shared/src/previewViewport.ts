@@ -51,9 +51,8 @@ const touchDesktop = (deviceScaleFactor: number): PreviewDevice => ({
   userAgent: null,
 });
 
-// Keep this in Chrome DevTools' default-device order. Dimensions are CSS
-// viewport sizes from Chromium's EmulatedDevices.ts standard catalog; scale
-// factors and browsers are the devices' own.
+// Chromium EmulatedDevices.ts CSS viewport sizes in Chrome DevTools default-device order;
+// scale factors and browsers are the devices' own.
 const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
   "iphone-se": {
     label: "iPhone SE",

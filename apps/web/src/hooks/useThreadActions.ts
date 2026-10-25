@@ -35,6 +35,7 @@ import { environmentSession, readEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -309,6 +310,10 @@ export function useThreadActions() {
   const loadSessionState = useAtomQueryRunner(environmentSession.sessionStateAtom, {
     reportFailure: false,
   });
+  const loadWorktreeThreadIds = useAtomQueryRunner(orchestrationEnvironment.worktreeThreadIds, {
+    reportFailure: false,
+    refresh: true,
+  });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
     reportFailure: false,
   });
@@ -462,13 +467,31 @@ export function useThreadActions() {
           ];
         },
       );
-      if (candidates.length === 0) continue;
+      const unshared: OrphanedWorktree[] = [];
+      for (const candidate of candidates) {
+        // A shell that leaves idle subagent children out cannot prove nobody else uses the
+        // worktree, so the server's list decides. A failed read keeps the worktree.
+        if (environmentConfig?.shellThreadFamilies === true) {
+          const occupants = await loadWorktreeThreadIds({
+            environmentId,
+            input: { worktreePath: candidate.worktreePath },
+          });
+          if (
+            occupants._tag !== "Success" ||
+            occupants.value.threadIds.some((threadId) => !deletingIds.has(threadId))
+          ) {
+            continue;
+          }
+        }
+        unshared.push(candidate);
+      }
+      if (unshared.length === 0) continue;
       const sessionResult = await loadSessionState(environmentId);
       if (
         sessionResult._tag === "Success" &&
         sessionGrantsScope(sessionResult.value, AuthSourceControlWriteScope)
       ) {
-        worktrees.push(...candidates);
+        worktrees.push(...unshared);
       }
     }
     return worktrees;
@@ -702,8 +725,7 @@ export function useThreadActions() {
       );
     }
     ThreadUndo.invalidate("settle", scopedThreadKey(target));
-    // reason "user" pins the thread active: auto-settle (PR merged /
-    // inactivity) stays suppressed until real activity clears the pin.
+    // reason "user" pins active until real activity, suppressing auto-settle.
     return unsettleThreadMutation({
       environmentId: target.environmentId,
       input: { threadId: target.threadId, reason: "user" },
@@ -738,8 +760,7 @@ export function useThreadActions() {
         ),
       );
     }
-    // orderKey rides only to servers that decode it; pre-reorder servers get the bare pin they
-    // understand and the thread stays keyless.
+    // Older servers cannot decode orderKey, so send only the pin to them.
     const orderKey = readEnvironmentSupportsPinReorder(target.environmentId)
       ? (opts.orderKey ?? topOfPinnedRunOrderKey())
       : undefined;

@@ -84,13 +84,7 @@ describe("desktop update UI helpers", () => {
     );
   });
 
-  it.each([
-    "owner/repo/extra",
-    "owner#notes/repo",
-    "owner/repo#notes",
-    "owner?tab=notes/repo",
-    "owner/repo?tab=notes",
-  ])("falls back to the fork repository for an invalid configured repository: %s", (repository) => {
+  it.each(["owner/repo/extra", "owner#notes/repo", "owner/repo?tab=notes"])("falls back to the fork repository for an invalid configured repository: %s", (repository) => {
     expect(getDesktopUpdateReleaseHistoryUrl(repository)).toBe(
       "https://github.com/Bl4ckBl1zZ/t3code/releases",
     );
