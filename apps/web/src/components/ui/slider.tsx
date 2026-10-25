@@ -6,12 +6,8 @@ import * as React from "react";
 import { cn } from "~/lib/utils";
 
 /**
- * A slider over a fixed set of stops.
- *
- * Provider option descriptors that carry `presentation: "slider"` are selects
- * whose options are an ordered scale, so this indexes into the options rather
- * than exposing a continuous range: the value is the stop's position, and the
- * caller maps it back to the option id.
+ * `presentation: "slider"` options are selects over an ordered scale, so the value is the
+ * stop's index, not a continuous range; the caller maps it back to the option id.
  */
 export function StepSlider({
   stops,

@@ -610,12 +610,9 @@ const PROJECT_MODEL_SELECTION_KEYS = [
 ] as const;
 
 /**
- * Carries a Hermes fork settings file into this build's shape. The fork's
- * token-streaming switch becomes `responseStreamingMode`: off delivered each
- * assistant message whole, which is `turn`, and token delivery is retired for
- * `paragraph`. Hermes instances go, together with the model preferences,
- * favorites and model selections that point at them. Returns `settings`
- * itself when nothing applies, so other files are never rewritten.
+ * Maps the fork's token-streaming switch to `responseStreamingMode` (off is `turn`, on is
+ * `paragraph`) and drops Hermes instances with everything pointing at them. Returns
+ * `settings` itself when nothing applies, so other files are never rewritten.
  */
 function migrateForkSettings(settings: ServerSettings, fork: ForkSettings): ServerSettings {
   let changed = false;

@@ -1,19 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalFetch:off - Release tooling runs from plain node before an Effect runtime exists.
 /**
- * The parts of the direct-to-TestFlight iOS release that are easier to get right
- * in JavaScript than in bash. Driven by `apps/mobile/scripts/ios-testflight.sh`.
- *
- *   identity        Resolve team, bundle id, App Group, profile names and the
- *                   next build number, as shell assignments to `eval`.
- *   check-config    Fail if the resolved Expo config is missing values that the
- *                   EAS hosted environment used to supply.
- *   check-build-number  Fail if the generated targets disagree on CFBundleVersion.
- *   export-options  Write the ExportOptions.plist for `xcodebuild -exportArchive`.
- *
- * `identity` exists because the alternative — a pile of `T3CODE_IOS_*` repository
- * variables kept in sync by hand with what Apple actually issued — is what the
- * EAS pipeline did, and a drifted value there fails late, during signing, with
- * an unhelpful message. The provisioning profile is the source of truth.
+ * Release helpers for `apps/mobile/scripts/ios-testflight.sh`. `identity` reads the
+ * provisioning profile as the source of truth: hand-synced `T3CODE_IOS_*` variables drift
+ * and then fail late, during signing, with an unhelpful message.
  */
 import * as NodeFS from "node:fs";
 import * as NodeUtil from "node:util";

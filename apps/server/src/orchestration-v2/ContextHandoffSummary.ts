@@ -1,16 +1,6 @@
 /**
- * ContextHandoffSummary - AI summaries of the history a context handoff could
- * not deliver verbatim.
- *
- * Handoffs carry the newest intact items that fit the target's budget. When a
- * long conversation changes provider, everything older is otherwise reachable
- * only through `t3_thread_read`. This service asks the configured text
- * generation model for a summary of those omitted items. It runs from the
- * effect worker while the target turn starts, never from the orchestrator.
- *
- * Summaries are best effort: any failure or timeout returns null, and delivery
- * proceeds exactly as it would without one.
- *
+ * Summarizes the history a context handoff omitted for budget. Runs from the effect
+ * worker, never the orchestrator. Best effort: failure or timeout returns null.
  * @module ContextHandoffSummary
  */
 import type {

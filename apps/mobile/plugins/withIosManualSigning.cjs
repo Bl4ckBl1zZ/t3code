@@ -1,13 +1,9 @@
 "use strict";
 
-// Applies target-specific provisioning profiles for archives. Xcode's
-// command-line overrides are global, so without this split the widget target
-// incorrectly receives the main app's profile (or vice versa).
-//
-// Used for both local development archives ("Apple Development") and App Store
-// releases ("Apple Distribution"), which is why the identity is a parameter: an
-// App Store archive signed with a development identity is rejected at export,
-// and the failure surfaces as an opaque profile-mismatch error.
+// Xcode's command-line signing overrides are global, so each target gets its own
+// profile here or the widget receives the app's profile (or vice versa).
+// The identity is a parameter because an App Store archive signed with a
+// development identity fails export with an opaque profile-mismatch error.
 
 const { withXcodeProject } = require("expo/config-plugins");
 

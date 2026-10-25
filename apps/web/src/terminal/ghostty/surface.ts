@@ -1155,11 +1155,9 @@ export class GhosttyTerminalSurface {
     this.clearPrimedCopy();
     const data = this.core.encodeKey(event);
     if (data.length === 0) return;
-    // Legacy encoding has no Super modifier, so Ghostty falls back to the event
-    // text and an unhandled Cmd chord would type its bare letter (Cmd+S writing
-    // "s"). A Kitty-mode session encodes the chord and still receives it.
-    // Leaving the default action intact keeps app and menu shortcuts working;
-    // the key stays out of encodedKeyCodes so its release is not sent either.
+    // Legacy encoding has no Super modifier, so an unhandled Cmd chord would type its bare
+    // letter (Cmd+S writing "s"); Kitty mode still encodes it. The default action keeps app
+    // shortcuts working, and staying out of encodedKeyCodes skips the release too.
     if (event.metaKey && data === event.key) return;
     this.encodedKeyCodes.add(event.code);
     event.preventDefault();

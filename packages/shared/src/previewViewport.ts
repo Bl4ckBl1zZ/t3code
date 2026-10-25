@@ -6,11 +6,8 @@ import type {
 import { PREVIEW_VIEWPORT_PRESET_IDS } from "@t3tools/contracts";
 
 /**
- * How a device preset presents beyond its size, as Chrome DevTools' device
- * mode does: touch input, the device's pixel ratio, mobile layout (viewport
- * meta, overlay scrollbars), and its browser's user agent. A null `userAgent`
- * keeps the browser's own, as touch laptops and smart displays get the
- * desktop site.
+ * Device emulation beyond size, as in DevTools' device mode. A null `userAgent` keeps the
+ * browser's own, since touch laptops and smart displays get the desktop site.
  */
 export interface PreviewDevice {
   readonly mobile: boolean;

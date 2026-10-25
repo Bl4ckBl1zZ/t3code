@@ -33,11 +33,9 @@ function fenceRun(line: string): FenceRun | null {
 }
 
 /**
- * Splits markdown around its closed, unindented `t3-html` fences, for
- * renderers that draw markdown as one native view and so cannot swap a single
- * code block for an embed. Fences inside other fences stay text, and an
- * unclosed one (a reply that stopped mid-embed) stays markdown, so it shows as
- * code rather than half a page.
+ * For renderers that draw markdown as one native view and cannot swap a code block for an
+ * embed. Nested fences stay text, and an unclosed one (a reply cut mid-embed) stays
+ * markdown so it shows as code rather than half a page.
  */
 export function splitLegacyHtmlEmbedMarkdown(
   markdown: string,

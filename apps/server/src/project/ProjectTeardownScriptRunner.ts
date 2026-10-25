@@ -1,13 +1,6 @@
 /**
- * ProjectTeardownScriptRunner - runs the project script flagged
- * `runOnWorktreeDelete` inside a worktree right before T3 Code removes it.
- *
- * Every removal path calls this: `GitWorkflowService.removeWorktree` (thread
- * deletion, bulk delete, abandoned launches and MCP handoff rollbacks) and
- * storage cleanup. There is no thread terminal to attach to at that point, so
- * the command runs headless with a timeout. It never fails: a failure is
- * returned for the caller to surface, and removal proceeds either way.
- *
+ * Runs the `runOnWorktreeDelete` script before every worktree removal. No thread terminal
+ * exists then, so it runs headless with a timeout, and it never fails: removal proceeds.
  * @module ProjectTeardownScriptRunner
  */
 import type { WorktreeTeardownFailure } from "@t3tools/contracts";
@@ -56,7 +49,7 @@ function outputTail(stdout: string, stderr: string): string {
   return text.trim().split(/\r?\n/).slice(-DETAIL_MAX_LINES).join("\n").slice(-DETAIL_MAX_LENGTH);
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const serverSettings = yield* ServerSettings.ServerSettingsService;

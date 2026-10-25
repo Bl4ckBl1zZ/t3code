@@ -1,32 +1,8 @@
 /**
- * In-place upgrade for databases written by the T3 Code fork that shipped Hermes, T3 Work and
- * T3 Chat.
- *
- * Accepted: a migration journal whose ids from 36 are a contiguous prefix of the fork's own
- * history (`FORK_MIGRATIONS`, 36 `OrchestrationV2` through 69 `PullRequestReviewGuides`) that
- * reaches at least 44. Fork 36..44 created exactly what the first nine setup steps of this
- * build's 055 create, so from 44 on the V2 schema is complete. A journal that records the fork's
- * 36 but breaks that history in any way is refused and left unchanged. Databases without the
- * fork's 36 are not touched.
- *
- * Why it exists: the fork recorded its migrations under ids 36..69, which this build assigns to
- * different migrations. The migrator compares ids only, so a fork database would otherwise skip
- * this build's 36..61 or be refused by `assertV2MigrationsCanRun`. This upgrade runs, in one
- * transaction:
- *
- * 1. this build's 036..054, all guarded against the columns the fork already added;
- * 2. the three 055 index steps the fork never ran, 056, and 057 unless fork 064 already added it;
- * 3. one payload upcast: fork subagent workflows were written without `agents`;
- * 4. cancellation of pending `terminal.close-idle` effects, a fork-only effect type;
- * 5. removal of T3 Work and T3 Chat: the T3 Work project with every thread in it, Hermes threads
- *    in any project, and Hermes project defaults (see `removeWorkAndHermes`);
- * 6. removal of fork-only tables and indexes;
- * 7. a journal rewrite to this build's 36..57, after which the migrator runs the rest.
- *
- * It only ever runs against `statev2.sqlite`: `initializeV2Database` copied `state.sqlite`
- * first, and that original stays untouched as the rollback copy. Disk: that copy doubles the
- * database, and this transaction's WAL grows by the rebuilt indexes and deleted pages (a few
- * hundred MB on a multi-GB store) until the next checkpoint truncates it.
+ * The old fork recorded migrations 36..69 under ids this build assigns elsewhere, and the
+ * migrator compares ids only. A journal that is a contiguous prefix of `FORK_MIGRATIONS`
+ * reaching 44 is upgraded to this build's 36..57 in one transaction; any other is untouched.
+ * Runs only on `statev2.sqlite`, so the copied `state.sqlite` stays the rollback.
  */
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
@@ -186,18 +162,10 @@ const hasColumn = Effect.fn("forkDatabaseBridge.hasColumn")(function* (
 });
 
 /**
- * Deletes T3 Work and T3 Chat, which this build does not have: the T3 Work project, every thread
- * in it (T3 Chat conversations lived there too), every Hermes thread in any other project, and
- * every thread below one of those in its lineage, with their event streams, receipts, effects,
- * projections, scheduled tasks, and import state. Links from surviving threads (context
- * transfers, subagent rows) to a removed thread go too. A thread the user already deleted that
- * linked to a removed thread is removed with it, so a projection rebuild cannot bring those links
- * back, unless a thread below it is still live. Surviving threads' own events keep any mention of
- * a removed thread id. Project defaults that name Hermes are cleared. Git worktrees and files on
- * disk are not touched.
- *
- * A thread is a Hermes thread when its provider instance is `hermes`, `hermesAcp` (Hermes in
- * Code), or any instance a stored provider session or thread recorded with either driver.
+ * Removes T3 Work, T3 Chat, and Hermes threads with their descendants and all derived rows.
+ * Deleted threads linking to a removed one go too, unless a descendant is live, so a projection
+ * rebuild cannot restore the links. Hermes means any instance recorded with a `hermes` or
+ * `hermesAcp` driver. Worktrees and files on disk are not touched.
  */
 const removeWorkAndHermes = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

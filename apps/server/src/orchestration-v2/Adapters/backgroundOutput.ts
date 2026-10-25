@@ -56,12 +56,9 @@ export function appendBackgroundOutputTail(
 }
 
 /**
- * Claude's acknowledgement for `Bash` with `run_in_background`:
- *   "Command running in background with ID: bs891h9i0. Output is being written
- *    to: /…/tasks/bs891h9i0.output. …"
- * The prose is the only place the output file is named. The path must be the
- * task's own `<id>.output`, so ordinary command output that merely looks like
- * an acknowledgement cannot point the tail at an arbitrary file.
+ * Claude's `run_in_background` acknowledgement prose is the only place the output file is
+ * named. The path must be the task's own `<id>.output`, so command output that merely
+ * looks like an acknowledgement cannot point the tail at an arbitrary file.
  */
 const CLAUDE_BACKGROUND_LAUNCH =
   /Command running in background with ID:\s*(?<taskId>[A-Za-z0-9_-]+)\.?[\s\S]*?Output is being written to:\s*(?<outputPath>\S+?)\.?(?:\s|$)/u;

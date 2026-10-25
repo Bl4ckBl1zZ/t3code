@@ -628,12 +628,9 @@ const make = Effect.gen(function* () {
   };
 
   /**
-   * Presents the page as its preset's device, as Chrome DevTools' device mode
-   * does: touch input, mobile layout, and the device browser's user agent; a
-   * desktop-rendered page also takes the device's pixel ratio. Leaving a
-   * preset restores the plain browser. Sites read the user agent when they
-   * serve a page, so a changed one reloads it. Best effort: a page that
-   * refuses keeps its size. Returns whether the identity changed.
+   * Emulates the preset's device like DevTools' device mode. Sites read the user agent
+   * when serving a page, so a change reloads it. Best effort: a refusing page keeps its
+   * size. Returns whether the identity changed.
    */
   const applyDevice = async (tab: ServerTab): Promise<boolean> => {
     const device = resolvePreviewDevice(tab.setting);

@@ -449,14 +449,9 @@ const INLINE_DOCUMENT_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'";
 
 /**
- * A document for HTML a client holds as a string rather than a published page:
- * legacy `t3-html` fences in old messages, shown through `srcdoc` (web) or a
- * WebView's `html` source (mobile). It has no URL fragment, so the theme is
- * written in up front; later changes arrive through the same bootstrap.
- *
- * The trusted head comes before every byte of the page, so its policy covers
- * all of it. A full page's own doctype, <html>, and <head> fold into this
- * document, and its head content still applies.
+ * For legacy `t3-html` strings shown via `srcdoc` or a WebView. No URL fragment exists, so
+ * the theme is written in up front. The trusted head precedes every page byte so its policy
+ * covers all of it; a full page's doctype, <html>, and <head> fold into this document.
  */
 export function htmlRenderInlineDocument(html: string, theme: HtmlRenderTheme): string {
   return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${INLINE_DOCUMENT_CSP}">${bootstrapMarkup("", theme)}</head>${html}</html>`;

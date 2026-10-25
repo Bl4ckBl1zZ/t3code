@@ -4373,11 +4373,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             for (const [taskId] of endedIds) tasks.delete(taskId);
             return [tasks, { ...current, tasks }] as const;
           });
-        // What a client watching the roster can read live: where a background
-        // Bash task writes, when it started, and when a monitor gives up.
-        // Claude streams nothing for these tasks, so the output file is the
-        // only live signal. Keyed by task id; an entry outlives its roster
-        // entry only until the notification, and the map stays small.
+        // Claude streams nothing for background Bash tasks, so their output file is the
+        // only live signal. An entry outlives its roster entry only until the
+        // notification, so the map stays small.
         const backgroundTaskOutputs = new Map<
           string,
           {
