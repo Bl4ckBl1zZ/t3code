@@ -26,11 +26,8 @@ const KIND_ICON: Record<PendingBackgroundWorkItem["kind"], LucideIcon> = {
 };
 
 /**
- * Thread details section for work a settled thread left running: commands such
- * as a dev server, monitors waiting on a condition, and subagents. Shows how
- * long each has run and the last line a command printed, so a stuck command is
- * told apart from a working one without opening a terminal. Renders nothing
- * when nothing runs.
+ * Work a settled thread left running (commands, monitors, subagents). Elapsed time and
+ * the last printed line tell a stuck command from a working one without a terminal.
  */
 export function ThreadBackgroundPanel(props: {
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;

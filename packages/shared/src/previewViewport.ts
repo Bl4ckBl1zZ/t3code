@@ -6,11 +6,8 @@ import type {
 import { PREVIEW_VIEWPORT_PRESET_IDS } from "@t3tools/contracts";
 
 /**
- * How a device preset presents beyond its size, as Chrome DevTools' device
- * mode does: touch input, the device's pixel ratio, mobile layout (viewport
- * meta, overlay scrollbars), and its browser's user agent. A null `userAgent`
- * keeps the browser's own, as touch laptops and smart displays get the
- * desktop site.
+ * Device emulation beyond size, as in DevTools' device mode. A null `userAgent` keeps the
+ * browser's own, since touch laptops and smart displays get the desktop site.
  */
 export interface PreviewDevice {
   readonly mobile: boolean;
@@ -51,9 +48,8 @@ const touchDesktop = (deviceScaleFactor: number): PreviewDevice => ({
   userAgent: null,
 });
 
-// Keep this in Chrome DevTools' default-device order. Dimensions are CSS
-// viewport sizes from Chromium's EmulatedDevices.ts standard catalog; scale
-// factors and browsers are the devices' own.
+// Chromium EmulatedDevices.ts CSS viewport sizes in Chrome DevTools default-device order;
+// scale factors and browsers are the devices' own.
 const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
   "iphone-se": {
     label: "iPhone SE",

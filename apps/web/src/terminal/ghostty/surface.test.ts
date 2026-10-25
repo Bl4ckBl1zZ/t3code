@@ -942,8 +942,7 @@ describe("isTerminalCopyAllShortcut", () => {
 describe("applyTerminalCopyEvent", () => {
   // regression: #7678 copying a terminal selection produced a blank clipboard
   it("leaves the writeText fallback alive when clipboardData is missing", () => {
-    // Electron's edit-menu Copy often delivers a copy event with no
-    // clipboardData.
+    // Electron menu Copy often omits clipboardData.
     expect(applyTerminalCopyEvent("ls -la", null)).toEqual({
       preventDefault: false,
       claimWriteFallback: false,

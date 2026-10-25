@@ -14,7 +14,6 @@ import {
   NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
-  type OrchestrationV2BackgroundTaskOutput,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
@@ -738,8 +737,7 @@ describe("CodexAdapterV2 session initialize", () => {
     Effect.gen(function* () {
       const initializeAwaitingResponse = yield* Deferred.make<void>();
       const releaseInitialize = yield* Deferred.make<void>();
-      // The transcript allows exactly one handshake: a second `initialize`
-      // frame fails the replay, as Codex rejects it with "Already initialized".
+      // Codex rejects a second initialize; the replay permits one handshake.
       const session = yield* openReplaySession(
         makeCodexReplayTranscript({
           scenario: "concurrent-initialize",
@@ -2903,27 +2901,29 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(settled?.lastLine, "ready on :3000");
         assert.isDefined(settled?.startedAt);
 
-        // Output deltas emit no events, so poll the read the way a client would.
-        const awaitOutput = (
-          predicate: (tasks: ReadonlyArray<OrchestrationV2BackgroundTaskOutput>) => boolean,
-          label: string,
-        ) =>
-          Effect.gen(function* () {
-            for (let attempt = 0; attempt < 5000; attempt++) {
-              if (
-                predicate(yield* readBackgroundOutput({ providerThread: harness.providerThread }))
-              )
-                return;
-              yield* Effect.yieldNow;
-            }
-            return yield* Effect.die(`Timed out waiting for ${label}.`);
-          });
+        // The adapter updates the tail before emitting the delta or completion event.
         yield* TestClock.adjust("10 seconds");
-        yield* awaitOutput((tasks) => tasks[0]?.lastLine === "GET / 200", "post-settle output");
+        yield* harness.until(() =>
+          harness.events.some(
+            (event) => event.type === "command_output.delta" && event.chunk === "GET / 200\n",
+          ),
+        );
+        const [live] = yield* readBackgroundOutput({ providerThread: harness.providerThread });
+        assert.equal(live?.lastLine, "GET / 200");
 
-        // The command finished, so there is nothing left to tail.
         yield* TestClock.adjust("30 seconds");
-        yield* awaitOutput((tasks) => tasks.length === 0, "command completed");
+        yield* harness.until(() =>
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === BG_COMMAND_ITEM &&
+              event.turnItem.status === "completed",
+          ),
+        );
+        assert.deepEqual(
+          yield* readBackgroundOutput({ providerThread: harness.providerThread }),
+          [],
+        );
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

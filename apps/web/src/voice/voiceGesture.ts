@@ -1,11 +1,7 @@
 /**
- * Press, hold, and release on the composer's microphone button.
- *
- * A press starts recording right away so the first words are not lost. If the
- * pointer comes up before `holdMs`, the press was a tap and the recording keeps
- * going hands-free until the user stops it. Past `holdMs` it is push-to-talk:
- * releasing transcribes, unless the pointer slid up into the cancel zone or the
- * hold was too short to hold speech.
+ * A press records immediately so the first words are not lost. Released before `holdMs`
+ * it is a tap and recording continues hands-free; past it, release transcribes unless
+ * the pointer reached the cancel zone or the hold was too short for speech.
  */
 
 export type VoiceGestureConfig = {

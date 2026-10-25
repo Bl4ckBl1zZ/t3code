@@ -49,11 +49,9 @@ function plistFirstArrayString(plist: string, key: string): string | undefined {
 }
 
 /**
- * Everything the release needs to know about an identity comes from the profile
- * itself. That matters beyond convenience: the App Group
- * (`group.com.bl4ckbl1zz.t3code.dev`) is not derivable from the bundle id
- * (`com.t3code.dev`), so any scheme that reconstructs it from convention is
- * wrong in a way that only shows up as a runtime entitlement failure.
+ * The identity comes from the profile because the App Group (`group.com.bl4ckbl1zz.t3code.dev`)
+ * is not derivable from the bundle id (`com.t3code.dev`); guessing it by convention only
+ * fails later as a runtime entitlement error.
  */
 export function parseProvisioningProfile(profile: Buffer): ProvisioningProfile {
   const plist = extractProfilePlist(profile);
@@ -151,11 +149,9 @@ export interface ResolvedAppConfig {
 }
 
 /**
- * Under EAS these values arrived from the hosted "production" environment. A
- * direct build has to supply them itself — and a missing Clerk key does not fail
- * the build, it ships a TestFlight binary that cannot sign in. Checking the
- * *resolved* config rather than env var names matters because the key may
- * legitimately arrive as `T3CODE_`, `VITE_`, or `EXPO_PUBLIC_`.
+ * A missing Clerk key does not fail the build; it ships a binary that cannot sign in.
+ * Checks the resolved config, not env var names, since the key may arrive as `T3CODE_`,
+ * `VITE_`, or `EXPO_PUBLIC_`.
  */
 export function missingAppConfigValues(config: ResolvedAppConfig): ReadonlyArray<string> {
   const missing: Array<string> = [];
@@ -170,17 +166,9 @@ export function missingAppConfigValues(config: ResolvedAppConfig): ReadonlyArray
 }
 
 /**
- * Info.plist `CFBundleVersion` values that disagree with the build number.
- *
- * The app and widget targets bake a literal at prebuild while the sharing
- * extension keeps `$(CURRENT_PROJECT_VERSION)` and resolves it later, so only
- * literals can be compared — a build setting reference is not a mismatch, it is
- * simply not known yet.
- *
- * Worth checking because the failure it catches is the one that cost the EAS
- * pipeline a dedicated "sync extension build number" step: an extension
- * archiving as CFBundleVersion 1 against an app at 42 is rejected by Xcode at
- * the very end of the archive, with an error that does not name the cause.
+ * Only literals are compared: a `$(CURRENT_PROJECT_VERSION)` reference resolves later.
+ * A mismatched extension is rejected only at the very end of the archive, with an error
+ * that does not name the cause.
  */
 export function mismatchedBundleVersions(
   buildNumber: string,
@@ -199,13 +187,9 @@ function escapeXml(value: string): string {
 }
 
 /**
- * `exportArchive` resolves every embedded target separately and fails on the
- * first one it cannot map to a profile, so the widget and sharing extensions
- * have to be named here alongside the app.
- *
- * `manageAppVersionAndBuildNumber` is false because the build number was already
- * resolved from App Store Connect before the archive; letting Xcode manage it
- * here would silently overwrite that with its own guess.
+ * `exportArchive` fails on the first embedded target without a profile, so every extension
+ * is named. `manageAppVersionAndBuildNumber` is off because Xcode would silently overwrite
+ * the build number already resolved from App Store Connect.
  */
 export function renderExportOptionsPlist(input: {
   readonly teamId: string;

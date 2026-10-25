@@ -46,12 +46,9 @@ export const RelaySchema = Drizzle.Schema("RelaySchema", {
 const RELAY_HYPERDRIVE_BINDING = "RELAY_HYPERDRIVE";
 
 /**
- * Binds the existing Hyperdrive config named by `DATABASE_HYPERDRIVE_ID` to the
- * Worker and returns an accessor for its connection string, like
- * `Cloudflare.Hyperdrive.Connect`. The config is not
- * part of this stack: it reaches the private PostgreSQL through a Workers VPC
- * service, which Alchemy's Hyperdrive resource cannot describe, and keeping it
- * outside means the database password is never bound into the Worker.
+ * Binds the existing `DATABASE_HYPERDRIVE_ID` config instead of owning it: Alchemy cannot
+ * describe its Workers VPC route to the private PostgreSQL, and keeping it outside never
+ * binds the database password into the Worker.
  */
 export const RelayHyperdrive = Effect.gen(function* () {
   const hyperdriveId = yield* Config.NonEmptyString("DATABASE_HYPERDRIVE_ID");

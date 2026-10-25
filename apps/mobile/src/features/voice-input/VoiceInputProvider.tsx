@@ -51,8 +51,7 @@ const SIGNED_OUT_VOICE_STATUS_ATOM = Atom.make(AsyncResult.initial<never>()).pip
   Atom.withLabel("voice-input:mobile:relay-status:signed-out"),
 );
 const VOICE_METERING_INTERVAL_MS = 80;
-// The native constructor takes platform-flattened options, as `useAudioRecorder`
-// builds them with expo-audio's internal `createRecordingOptions`.
+// The native constructor expects platform-flattened options, as built by useAudioRecorder.
 // iOS records 16 kHz mono PCM WAV because the relay's speech model accepts only
 // WAV and MP3 (two minutes is under 4 MB). Android's recorder cannot write WAV.
 const VOICE_RECORDING_OPTIONS =
@@ -79,8 +78,7 @@ async function releaseVoiceRecordingAudio(): Promise<void> {
   try {
     await setAudioModeAsync({ allowsRecording: false });
   } finally {
-    // Expo does not deactivate AVAudioSession when recording stops or its
-    // category changes. Explicit deactivation resumes interrupted app audio.
+    // Expo never deactivates AVAudioSession after recording; do so to resume interrupted audio.
     await setIsAudioActiveAsync(false);
   }
 }
@@ -207,9 +205,7 @@ function useVoiceInputRuntime() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
-      // iOS reports `inactive` while its permission dialog is open. Only the
-      // real background state cancels preparation; recorder status handles
-      // calls and route interruptions during capture.
+      // iOS permission dialogs report inactive; cancel preparation only on background. Recorder status handles capture interruptions.
       if (nextState === "background") controller.appMovedToBackground();
     });
     return () => subscription.remove();

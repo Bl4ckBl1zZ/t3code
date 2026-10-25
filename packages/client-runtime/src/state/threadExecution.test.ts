@@ -450,13 +450,13 @@ describe("presentPendingBackgroundWork", () => {
         { taskId: "a", kind: "subagent", description: "Review src/math.ts" },
       ])?.title,
     ).toBe("Waiting on subagent Review src/math.ts");
-    expect(presentPendingBackgroundWork([{ taskId: "a", kind: "monitor" }])?.title).toBe(
-      "Waiting on a monitor",
-    );
+    expect(
+      presentPendingBackgroundWork([{ taskId: "a", kind: "monitor", awaited: true }])?.title,
+    ).toBe("Waiting on a monitor");
     expect(presentPendingBackgroundWork([])).toBeNull();
   });
 
-  it("says only commands are running, not waited on", () => {
+  it("says commands and monitors the agent did not mark awaited are running", () => {
     expect(
       presentPendingBackgroundWork([
         { taskId: "dev", kind: "command", description: "Start the shared dev server" },
@@ -476,6 +476,12 @@ describe("presentPendingBackgroundWork", () => {
       presentPendingBackgroundWork([
         { taskId: "a", kind: "command", description: "vp run dev" },
         { taskId: "b", kind: "monitor", description: "Watch PR checks" },
+      ]),
+    ).toMatchObject({ title: "Running 1 command and 1 monitor", waiting: false });
+    expect(
+      presentPendingBackgroundWork([
+        { taskId: "a", kind: "command", description: "vp run dev" },
+        { taskId: "b", kind: "monitor", description: "Watch PR checks", awaited: true },
       ]),
     ).toMatchObject({ title: "Waiting on 1 command and 1 monitor", waiting: true });
   });

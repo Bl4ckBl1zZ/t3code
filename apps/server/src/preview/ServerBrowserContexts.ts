@@ -42,9 +42,7 @@ const chromeBrands = (major: string, fullVersion: string) => {
   };
 };
 
-/**
- * Sites block a user agent that disagrees with `Sec-CH-UA`, so both change together.
- */
+/** Change user agent and Sec-CH-UA together; sites block mismatches. */
 const chromeIdentity = (
   headlessUserAgent: string,
   host: { readonly platform: NodeJS.Platform; readonly arch: string; readonly release: string },

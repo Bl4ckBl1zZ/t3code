@@ -1,11 +1,7 @@
 /**
  * Dev-server URLs announced in terminal output ("Local: http://localhost:5173/app/").
- *
- * The port scanner already sees which listening sockets a terminal owns; what
- * it cannot see is the URL the server meant, with its base path, or a server
- * whose listener is not in the terminal's process tree (a container, a
- * detached child). The announcement fills both gaps and lands the moment the
- * server prints it.
+ * The port scanner cannot see the base path, or listeners outside the terminal's process
+ * tree (a container, a detached child); the announcement covers both.
  */
 
 /** URLs a single terminal may announce before older ones stop counting. */

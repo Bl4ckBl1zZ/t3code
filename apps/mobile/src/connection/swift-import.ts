@@ -93,16 +93,9 @@ function originOf(url: string): string | null {
 }
 
 /**
- * The connection catalog for what the SwiftUI client saved, or null when it
- * saved no catalog (a fresh install, or a device that never ran it).
- *
- * Carries over what the user paired: each direct route with its bearer token,
- * and the T3 Connect route, which reconnects after signing in to T3 Connect
- * again. Routes the server reported (learned) are left out; they are learned
- * again on the first connection. A direct route whose token is missing is
- * dropped, and so is an environment left with no route. Switched-off
- * environments stay switched off. Nothing else the Swift client stored is
- * imported.
+ * Imports only what the user paired from the SwiftUI client, or null without a catalog.
+ * Learned routes are relearned on first connection, so they are left out; a direct
+ * route without its token is dropped, and so is an environment left with no route.
  */
 export function catalogFromSwiftEnvironments(
   saved: SwiftSavedEnvironments,

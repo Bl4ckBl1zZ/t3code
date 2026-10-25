@@ -1,26 +1,7 @@
 /**
- * T3ProjectFileSync - keeps a project's actions and the `scripts` in its
- * checked-in `t3.json` the same, in both directions.
- *
- * Only projects with their own action list (the project override of
- * `defaultProjectScripts`) take part. A project that follows the environment's
- * shared list never adopts a repository's scripts on its own: commands from a
- * cloned repo first reach it through the manual import, which is the trust
- * boundary. Once a project has its own list:
- *
- * - A file edit updates the actions it names, deletes actions whose script
- *   left the file, and adds scripts new to the file. Scripts that were in the
- *   file but never imported stay an import offer. The file wins a conflict: it
- *   is the checked-in source a teammate or agent just edited.
- * - An in-app edit rewrites the scripts of the project's actions in place and
- *   removes the scripts of deleted actions, creating the file if needed. Other
- *   fields, unknown fields on each script, and scripts the project never
- *   imported survive.
- * - Once per T3 home, a project with no `t3.json` gets one. Deleting the file
- *   afterwards is respected until the next edit.
- *
- * Files are polled by mtime, so a project costs one `stat` per round.
- *
+ * Two-way sync of a project's own actions with its `t3.json` scripts. Projects on the shared
+ * list never adopt repo scripts: the manual import is the trust boundary. The file wins
+ * conflicts, never-imported scripts survive, and files are polled by mtime.
  * @module T3ProjectFileSync
  */
 import {
@@ -138,12 +119,9 @@ function scriptFromFile(fileScript: T3ProjectFileScript, id: string): ProjectScr
 }
 
 /**
- * The project's actions after a change to the file. An action takes the file
- * script with its name and keeps its id, so a `script.<id>.run` shortcut keeps
- * working. Only changes since `previousFileNames` count: an action whose
- * script left the file is deleted, and a script new to the file is added.
- * Without a previous snapshot only same-named actions update; the rest of the
- * file stays an import offer.
+ * Actions keep their id so `script.<id>.run` shortcuts keep working. Only changes since
+ * `previousFileNames` add or delete actions; without a snapshot only same-named actions
+ * update and the rest of the file stays an import offer.
  */
 function applyFileScripts(
   own: ReadonlyArray<ProjectScript>,
@@ -192,13 +170,9 @@ function renderScript(script: ProjectScript, previous: RawObject | undefined) {
 }
 
 /**
- * The `t3.json` text for a project's actions. `existing` is the file as raw
- * JSON; its other fields stay where they are. A file script named like an
- * action is replaced in place, keeping the fields the app does not own. A file
- * script that was an action at the last sync (`previouslyOwned`) and no longer
- * is gets removed, unless a renamed action with its command takes its place.
- * Every other file script was never imported and stays untouched. Actions the
- * file lacks are appended.
+ * Rewrites matching scripts in place, keeping fields the app does not own. A script in
+ * `previouslyOwned` that is no longer an action is removed unless a renamed action with its
+ * command replaces it; never-imported scripts stay untouched.
  */
 function renderProjectFile(
   existing: RawObject | null,
@@ -272,7 +246,7 @@ class T3ProjectFileSync extends Context.Service<
   }
 >()("t3/project/T3ProjectFileSync") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const settingsService = yield* ServerSettingsService.ServerSettingsService;

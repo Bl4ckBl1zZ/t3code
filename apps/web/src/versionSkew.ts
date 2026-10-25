@@ -99,11 +99,8 @@ const BUILD_RELEASE_SOURCE = resolveReleaseSource({
 });
 
 /**
- * Whether this build may offer to update a server with this capability. A
- * desktop-managed server installs from its own app's update feed. Every other
- * path (the background service, npm and relaunch commands) installs the `t3`
- * CLI, which only upstream publishes, so a build released elsewhere offers
- * none of them rather than handing its users upstream's build.
+ * Only desktop-managed servers update from this build's own feed. Every other path
+ * installs the upstream-published `t3` CLI, so builds released elsewhere offer none.
  */
 export function offersServerUpdate(
   selfUpdate: ServerSelfUpdateCapability | null | undefined,
