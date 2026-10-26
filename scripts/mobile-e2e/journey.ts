@@ -72,18 +72,18 @@ export async function runJourney(
 ): Promise<void> {
   const phone = device.pose.form === "phone";
   const tap = async (node: SnapshotNode | undefined, label: string) => {
-    if (!node?.ref || !node.rect) throw new Error(`no ${label} to tap`);
+    if (!node?.ref) throw new Error(`no ${label} to tap`);
     // agent-device refuses refs it considers covered, such as on the unfolded Duo's inner
     // display; the element's centre still takes the tap.
-    await device
-      .agent(["press", `@${node.ref}`])
-      .catch(() =>
-        device.agent([
-          "press",
-          String(Math.round(node.rect!.x + node.rect!.width / 2)),
-          String(Math.round(node.rect!.y + node.rect!.height / 2)),
-        ]),
-      );
+    await device.agent(["press", `@${node.ref}`]).catch((error: unknown) => {
+      const rect = node.rect;
+      if (!rect) throw error;
+      return device.agent([
+        "press",
+        String(Math.round(rect.x + rect.width / 2)),
+        String(Math.round(rect.y + rect.height / 2)),
+      ]);
+    });
   };
 
   /** Screenshot and check the settled screen, and record it as a step. */
