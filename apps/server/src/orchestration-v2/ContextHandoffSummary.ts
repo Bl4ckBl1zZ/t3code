@@ -147,5 +147,9 @@ export const layer = Layer.effect(ContextHandoffSummary, make);
 /** No summaries: delivery keeps only the verbatim history and recovery pointer. */
 export const layerDisabled = Layer.succeed(
   ContextHandoffSummary,
-  ContextHandoffSummary.of({ summarize: () => Effect.succeed(null) }),
+  ContextHandoffSummary.of({
+    summarize: Effect.fn("ContextHandoffSummary.summarize")(function () {
+      return Effect.succeed(null);
+    }),
+  }),
 );
