@@ -47,6 +47,7 @@ export function useBackgroundOutputClock(
 ): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const nextChangeMs = presentBackgroundTaskOutput(output, nowMs).nextChangeMs;
+  // oxlint-disable-next-line t3code/react-effect-budget -- ticks only as often as the coarsest label changes
   useEffect(() => {
     if (nextChangeMs === null) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), nextChangeMs);

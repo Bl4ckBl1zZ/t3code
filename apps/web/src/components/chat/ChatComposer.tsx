@@ -2339,6 +2339,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const toggleVoiceInput = voiceInput.toggle;
   const voiceInputEnabled = voiceInput.target !== null;
+  // oxlint-disable-next-line t3code/react-effect-budget -- the voice shortcut listens on window only while voice input is available
   useEffect(() => {
     if (!voiceInputEnabled) return;
     const handler = (event: globalThis.KeyboardEvent) => {
