@@ -27,7 +27,8 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
   return path.resolve(path.join(home, ".claude"));
 });
 
-export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
+/** Environment for a user-run Claude, such as one in a terminal; keeps the inherited entrypoint. */
+export const makeClaudeHomeEnvironment = Effect.fn("makeClaudeHomeEnvironment")(function* (
   config: Pick<ClaudeSettings, "homePath">,
   baseEnv?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
@@ -39,6 +40,28 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
     ...resolvedBaseEnv,
     // Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep login access.
     CLAUDE_CONFIG_DIR: resolvedHomePath,
+  };
+});
+
+// `cli` and `sdk-*` are labels of the Claude that launched this server; SDK-labelled
+// requests drain the 5h window faster: anthropics/claude-code#97074.
+const resolveClaudeEntrypoint = (inherited: string | undefined) =>
+  inherited === undefined ||
+  inherited.length === 0 ||
+  inherited === "cli" ||
+  inherited.startsWith("sdk-")
+    ? "t3-code"
+    : inherited;
+
+/** Environment for a Claude that T3 Code spawns. */
+export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+  baseEnv?: NodeJS.ProcessEnv,
+): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
+  const environment = yield* makeClaudeHomeEnvironment(config, baseEnv);
+  return {
+    ...environment,
+    CLAUDE_CODE_ENTRYPOINT: resolveClaudeEntrypoint(environment.CLAUDE_CODE_ENTRYPOINT),
   };
 });
 

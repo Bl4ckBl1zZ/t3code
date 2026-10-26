@@ -63,7 +63,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ServerConfig from "../config.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
-import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
+import { makeClaudeHomeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -1454,7 +1454,7 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   } else if (instance.driver === "claudeAgent") {
     const config = decodeClaudeSettings(instance.config ?? {});
     if (Option.isSome(config)) {
-      resolved = yield* makeClaudeEnvironment(config.value, resolved).pipe(
+      resolved = yield* makeClaudeHomeEnvironment(config.value, resolved).pipe(
         Effect.provideService(Path.Path, input.path),
       );
     }
