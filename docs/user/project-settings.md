@@ -225,16 +225,18 @@ Merge cleanup requires a merged pull request whose commits are included in the r
 branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
 branch and the worktree is still at the pull request's last commit.
 
-Enable **Delete worktrees with deleted threads** to remove safe worktrees after their last
-thread is deleted, including archived threads and worktrees left by earlier deletions. The
-server waits for sessions and terminals to stop and retries skipped worktrees after restart.
-Existing prompts for deleting a worktree manually remain available when this policy is off.
+**Delete worktrees with deleted threads** is on by default. When you delete a thread, its
+worktree, local branch, scratch folder, and checkpoints are removed, including uncommitted
+changes and commits that were never pushed. This also covers archived threads and worktrees
+left by earlier deletions. A worktree or branch that another thread still uses stays. The server
+waits for sessions and terminals to stop and retries skipped worktrees after restart. Turn the
+rule off to keep everything; deleting a thread then asks before removing its worktree.
 
 Turn on **Delete settled threads** under **Threads** to permanently delete threads that have
 stayed settled for a chosen number of days, counted from when each thread was settled. Their
-worktrees are removed afterwards with the same checks as **Delete worktrees with deleted
-threads**, even when that rule is off: worktrees with local changes stay, and so do the worktrees
-of projects whose cleanup is **Off**. Branches are kept, so commits that were never pushed are not
+worktrees are removed afterwards, even when **Delete worktrees with deleted threads** is off.
+Unlike a manual delete, worktrees with local changes stay, and so do the worktrees of projects
+whose cleanup is **Off**. Branches are kept, so commits that were never pushed are not
 lost. Pinned and archived threads, threads with a scheduled task, threads with a running turn,
 question, or background work, and threads whose terminal is running a command are never deleted.
 On iOS and Android, the same setting is in **Settings → Thread behavior → Auto-delete**.
