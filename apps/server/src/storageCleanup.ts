@@ -779,16 +779,25 @@ const make = Effect.gen(function* () {
         FROM orchestration_v2_projection_checkpoints WHERE thread_id = ${thread.id}
       `.pipe(NodeSqliteClient.readOnly);
       const refs = checkpoints.flatMap((row) => (row.ref === null ? [] : [row.ref]));
-      if (refs.length > 0)
-        yield* git.execute({
+      const keptRefs = (error: unknown) =>
+        Effect.logWarning("storage cleanup kept refs of a deleted thread", {
+          threadId: thread.id,
+          error,
+        });
+      if (refs.length > 0) {
+        const result = yield* git.execute({
           operation: "StorageCleanup.deleteCheckpointRefs",
           cwd: repository,
           args: ["update-ref", "--stdin"],
           stdin: refs.map((ref) => `delete ${ref}\n`).join(""),
           allowNonZeroExit: true,
         });
+        if (result.exitCode !== 0) yield* keptRefs(result.stderr.trim());
+      }
       if (thread.branch !== null && !branchInUse)
-        yield* cleanupGit(repository, ["branch", "-D", "--", thread.branch], "git branch -D");
+        yield* cleanupGit(repository, ["branch", "-D", "--", thread.branch], "git branch -D").pipe(
+          Effect.catch(keptRefs),
+        );
     },
     Effect.catch((error) =>
       Effect.logWarning("storage cleanup kept refs of a deleted thread", { error }),
@@ -799,7 +808,7 @@ const make = Effect.gen(function* () {
   const cleanDeletedScratchFolders = Effect.fn("StorageCleanup.cleanDeletedScratchFolders")(
     function* (
       deleted: ReadonlyArray<
-        Pick<OrchestrationV2ThreadShell, "id" | "title" | "worktreePath"> & {
+        Pick<OrchestrationV2ThreadShell, "id" | "projectId" | "title" | "worktreePath"> & {
           readonly workspaceRoot: string;
         }
       >,
@@ -839,6 +848,10 @@ const make = Effect.gen(function* () {
           if (hasTerminal(folder)) return keep("open terminal");
           if (yield* deletionPending(thread.id)) return keep("thread deletion is still pending");
           if (yield* liveSessionInside(folder)) return keep("provider session is still open");
+          if (
+            !deletedThreadWorktreeRule(yield* settingsService.getSettings, thread.projectId, false)
+          )
+            return keep("cleanup settings changed since check");
           const bytes = yield* measureWorktree(folder);
           yield* fs.remove(folder, { recursive: true });
           entries.push({ ...entry, outcome: "removed", reason: "Thread was deleted", bytes });
@@ -1225,11 +1238,9 @@ const make = Effect.gen(function* () {
           yield* discardThreadRefs(
             project.workspaceRoot,
             thread,
+            // Live subagents that shared the worktree recreate it from this branch on resume.
             snapshot.threads.some(
-              (other) =>
-                other.projectId === thread.projectId &&
-                other.branch === thread.branch &&
-                !group.some((member) => member.id === other.id),
+              (other) => other.projectId === thread.projectId && other.branch === thread.branch,
             ),
           );
         yield* gitManager.invalidateStatus(project.workspaceRoot);

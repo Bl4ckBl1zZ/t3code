@@ -205,8 +205,8 @@ worktree: deleting a thread shows a warning, and the storage cleanup results not
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected
-environments. Policies are off by default and run on the server at startup, when changed, and
-hourly. Offline machines keep their existing policies.
+environments. Retention policies are off by default; deleted-thread cleanup is on. Policies run
+on the server at startup, when changed, and hourly. Offline machines keep their existing policies.
 
 Select a project to set **Automatic worktree cleanup** to **Inherit**, **Off**, or **Custom**.
 Inherit follows each machine's rules; Off keeps that project's worktrees until you remove them
@@ -225,7 +225,7 @@ Merge cleanup requires a merged pull request whose commits are included in the r
 branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
 branch and the worktree is still at the pull request's last commit.
 
-**Delete worktrees with deleted threads** is on by default. When you delete a thread, its
+**Delete worktrees with deleted threads** is on by default. When you manually delete a thread, its
 worktree, local branch, scratch folder, and checkpoints are removed, including uncommitted
 changes and commits that were never pushed. This also covers archived threads and worktrees
 left by earlier deletions. A worktree or branch that another thread still uses stays. The server

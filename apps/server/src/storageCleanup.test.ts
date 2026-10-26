@@ -1045,6 +1045,27 @@ describe("deleted thread worktrees", () => {
     }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
   );
 
+  it.effect("keeps the branch a live subagent sharing the worktree still uses", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        worktreeAfterDays: null,
+      });
+      const owner = parent(fixture.worktree);
+      fixture.setDeletedThreads([owner]);
+      fixture.setThreads([subagent(owner)]);
+      const report = yield* fixture.service.runNow;
+      expect(report.entries[0]).toMatchObject({ outcome: "removed" });
+      const refs = yield* fixture.command(fixture.repo, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/feature",
+      ]);
+      expect(refs.stdout.trim()).toBe("refs/heads/feature");
+    }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
+  );
+
   it.effect("keeps the branch a live thread still uses", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);

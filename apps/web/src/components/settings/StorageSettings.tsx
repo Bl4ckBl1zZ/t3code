@@ -552,7 +552,7 @@ export function StorageSettingsPanel() {
             <SettingsRow
               title="Delete worktrees with deleted threads"
               status={ruleStatus("worktreeOnDelete")}
-              description="Deleting a thread removes its worktree, local branch, scratch folder, and checkpoints, including uncommitted changes. Worktrees other threads still use are kept."
+              description="Manually deleting a thread removes its worktree, local branch, scratch folder, and checkpoints, including uncommitted changes. Worktrees and branches other threads still use are kept."
               serverScoped={!isProjectScope}
               control={
                 <Switch
