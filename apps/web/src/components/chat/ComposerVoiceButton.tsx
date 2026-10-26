@@ -38,6 +38,7 @@ const LEVEL_STEPS = 8;
  */
 function VoiceLevelMeter() {
   const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
+  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to the level stream and writes bar styles without rendering
   useEffect(() => {
     let lastStep = -1;
     return subscribeVoiceLevel((level) => {
@@ -74,6 +75,7 @@ function formatClock(seconds: number): string {
 function VoiceRecordingClock(props: { startedAt: number; maxSeconds: number }) {
   const elapsedNow = () => (Date.now() - props.startedAt) / 1_000;
   const [elapsed, setElapsed] = useState(elapsedNow);
+  // oxlint-disable-next-line t3code/react-effect-budget -- ticks the clock once a second while it is mounted
   useEffect(() => {
     const timer = window.setInterval(
       () => setElapsed((Date.now() - props.startedAt) / 1_000),
@@ -116,6 +118,7 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
 
   // Errors surface once, as a toast; the retry stays on the button.
   const failureMessage = failed?.message ?? null;
+  // oxlint-disable-next-line t3code/react-effect-budget -- failures arrive from the shared voice session, not a handler here
   useEffect(() => {
     if (failureMessage) {
       toastManager.add({ type: "error", title: "Voice input", description: failureMessage });
@@ -123,6 +126,7 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
   }, [failureMessage]);
 
   // Esc discards an active recording unless a dialog owns the key.
+  // oxlint-disable-next-line t3code/react-effect-budget -- Escape listens on window only while recording
   useEffect(() => {
     if (!recording) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -174,6 +178,7 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
     if (next.state.type === "idle") clearHoldTimer();
   };
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- clears a pending hold timer on unmount
   useEffect(
     () => () => {
       if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current);

@@ -4,9 +4,6 @@
  * tree (a container, a detached child); the announcement covers both.
  */
 
-/** URLs a single terminal may announce before older ones stop counting. */
-const TERMINAL_ANNOUNCED_URLS_MAX = 8;
-
 /** A partial line carried between chunks; longer lines are not URLs worth keeping. */
 const PARTIAL_LINE_MAX = 1_024;
 

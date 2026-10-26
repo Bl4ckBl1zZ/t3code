@@ -1150,7 +1150,7 @@ export const layer = Layer.effect(
                       .pipe(
                         Effect.catch((error) =>
                           replay
-                            ? Effect.succeed(undefined)
+                            ? Effect.void
                             : Effect.fail(taskError(error.message, { taskId: id })),
                         ),
                       );

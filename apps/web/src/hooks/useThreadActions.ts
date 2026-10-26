@@ -469,8 +469,8 @@ export function useThreadActions() {
       );
       const unshared: OrphanedWorktree[] = [];
       for (const candidate of candidates) {
-        // A shell that leaves idle subagent children out cannot prove nobody else uses the
-        // worktree, so the server's list decides. A failed read keeps the worktree.
+        // A shell that leaves out idle subagent children or older settled threads cannot
+        // prove nobody else uses the worktree, so the server's list decides. A failed read keeps the worktree.
         if (environmentConfig?.shellThreadFamilies === true) {
           const occupants = await loadWorktreeThreadIds({
             environmentId,
@@ -820,9 +820,9 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
-    const wokeAt = resolved
-      ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
-      : null;
+    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
+    const nowIso = new Date().toISOString();
+    const wokeAt = resolved ? threadWokeAt(resolved.thread, { now: nowIso }) : null;
     const undoPlan = ThreadUndo.planThreadUndo("settle", resolved?.thread);
     // An older unpin/snooze Undo would re-pin or re-snooze, and the server
     // treats either as a promotion that un-settles; settling supersedes them.
@@ -933,6 +933,7 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
+    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
     if (resolved && !canSnooze(resolved.thread, { now: new Date().toISOString() })) {
       return AsyncResult.failure(
         Cause.fail(
