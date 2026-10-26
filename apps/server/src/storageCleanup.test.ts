@@ -300,6 +300,7 @@ const cleanupFixture = (
     let deletedRows: Array<{ payload_json: string; workspaceRoot: string; autoDeleted: number }> =
       [];
     const dispatched: Array<OrchestrationV2ServerCommand> = [];
+    let checkpointRefs: Array<string> = [];
     const rejectedThreadIds = new Set<string>();
     let terminalListener: ((event: TerminalMetadataStreamEvent) => Effect.Effect<void>) | null =
       null;
@@ -404,6 +405,8 @@ const cleanupFixture = (
       ) =>
         Effect.sync(() => {
           const text = strings.join("?");
+          if (text.includes("FROM orchestration_v2_projection_checkpoints"))
+            return checkpointRefs.map((ref) => ({ ref }));
           if (text.includes("FROM scheduled_tasks"))
             return scheduledThreadIds.map((threadId) => ({ threadId }));
           if (text.includes("'thread.settled'")) {
@@ -527,6 +530,9 @@ const cleanupFixture = (
       },
       setDeletedRows: (rows: typeof deletedRows) => {
         deletedRows = rows;
+      },
+      setCheckpointRefs: (refs: Array<string>) => {
+        checkpointRefs = refs;
       },
       dispatched,
       rejectedThreadIds,
@@ -1011,6 +1017,122 @@ describe("deleted thread worktrees", () => {
         });
         expect(yield* fixture.fs.exists(fixture.worktree)).toBe(false);
       }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
+  );
+
+  it.effect("discards a deleted thread's local changes, branch, and checkpoint refs", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        worktreeAfterDays: null,
+      });
+      const checkpointRef = "refs/t3/orchestration-v2/checkpoints/scope/ordinal/1";
+      yield* fixture.command(fixture.repo, ["update-ref", checkpointRef, "HEAD"]);
+      yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "unsaved\n");
+      fixture.setCheckpointRefs([checkpointRef]);
+      fixture.setDeletedThreads([parent(fixture.worktree)]);
+      fixture.setThreads([]);
+      const report = yield* fixture.service.runNow;
+      expect(report.entries[0]).toMatchObject({ outcome: "removed", reason: "Thread was deleted" });
+      expect(yield* fixture.fs.exists(fixture.worktree)).toBe(false);
+      const refs = yield* fixture.command(fixture.repo, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/feature",
+        checkpointRef,
+      ]);
+      expect(refs.stdout).toBe("");
+    }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
+  );
+
+  it.effect("keeps the branch a live subagent sharing the worktree still uses", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        worktreeAfterDays: null,
+      });
+      const owner = parent(fixture.worktree);
+      fixture.setDeletedThreads([owner]);
+      fixture.setThreads([subagent(owner)]);
+      const report = yield* fixture.service.runNow;
+      expect(report.entries[0]).toMatchObject({ outcome: "removed" });
+      const refs = yield* fixture.command(fixture.repo, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/feature",
+      ]);
+      expect(refs.stdout.trim()).toBe("refs/heads/feature");
+    }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
+  );
+
+  it.effect("keeps the branch a live thread still uses", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        worktreeAfterDays: null,
+      });
+      fixture.setDeletedThreads([parent(fixture.worktree)]);
+      fixture.setThreads([
+        shell({ id: ThreadId.make("other"), branch: "feature", worktreePath: null }),
+      ]);
+      const report = yield* fixture.service.runNow;
+      expect(report.entries[0]).toMatchObject({ outcome: "removed" });
+      const refs = yield* fixture.command(fixture.repo, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/feature",
+      ]);
+      expect(refs.stdout.trim()).toBe("refs/heads/feature");
+    }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
+  );
+
+  it.effect("keeps an auto-deleted thread's local changes", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        worktreeAfterDays: null,
+      });
+      yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "unsaved\n");
+      fixture.setThreads([]);
+      fixture.setDeletedRows([
+        {
+          payload_json: JSON.stringify(parent(fixture.worktree)),
+          workspaceRoot: fixture.repo,
+          autoDeleted: 1,
+        },
+      ]);
+      const report = yield* fixture.service.runNow;
+      expect(report.entries[0]).toMatchObject({
+        outcome: "kept",
+        reason: "Has uncommitted changes (1 file)",
+      });
+      expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
+  );
+
+  it.effect("removes a deleted thread's scratch folder", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        worktreeAfterDays: null,
+      });
+      const folder = `${fixture.config.baseDir}/scratch/2026-06-01-convert-pngs-a1b2c3d4`;
+      yield* fixture.fs.makeDirectory(folder, { recursive: true });
+      yield* fixture.fs.writeFileString(`${folder}/out.webp`, "image");
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([
+        shell({ worktreePath: folder, branch: null, deletedAt: at(-DAY_MS) }),
+      ]);
+      const report = yield* fixture.service.runNow;
+      expect(report.entries).toContainEqual(
+        expect.objectContaining({ path: folder, outcome: "removed" }),
+      );
+      expect(yield* fixture.fs.exists(folder)).toBe(false);
+    }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
   );
 
   it.effect("applies the remaining subagent's rules when deletion cleanup is off", () =>
