@@ -469,8 +469,8 @@ export function useThreadActions() {
       );
       const unshared: OrphanedWorktree[] = [];
       for (const candidate of candidates) {
-        // A shell that leaves idle subagent children out cannot prove nobody else uses the
-        // worktree, so the server's list decides. A failed read keeps the worktree.
+        // A shell that leaves out idle subagent children or older settled threads cannot
+        // prove nobody else uses the worktree, so the server's list decides. A failed read keeps the worktree.
         if (environmentConfig?.shellThreadFamilies === true) {
           const occupants = await loadWorktreeThreadIds({
             environmentId,

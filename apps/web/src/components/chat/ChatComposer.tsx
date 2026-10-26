@@ -56,6 +56,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  use,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
@@ -141,9 +142,8 @@ import {
 } from "../../lib/attachmentUploadQueue";
 import { attachmentUploadBlockReason } from "../../lib/attachmentUploadState";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../../keybindings";
+import { shortcutLabelForCommand } from "../../keybindings";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
-import { getTerminalFocusOwner } from "../../lib/terminalFocus";
 import { useComposerVoiceInput } from "../../voice/useComposerVoiceInput";
 import { getVoiceSessionState } from "../../voice/webVoiceSession";
 import { ComposerVoiceButton } from "./ComposerVoiceButton";
@@ -283,6 +283,8 @@ import { useDelayedStatus } from "../../hooks/useDelayedStatus";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { registerCommands } from "../../shortcuts/dispatcher";
+import { BackgroundThreadContext } from "./backgroundThread";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { readEnvironmentScope } from "../../state/session";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -2337,27 +2339,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     importContextRecords,
     expandMobileComposer: expandMobileComposerStable,
   });
-  const toggleVoiceInput = voiceInput.toggle;
   const voiceInputEnabled = voiceInput.target !== null;
-  // oxlint-disable-next-line t3code/react-effect-budget -- the voice shortcut listens on window only while voice input is available
+  const handleVoiceShortcut = useStableCallback((event: globalThis.KeyboardEvent) => {
+    if (isCommandPaletteOpen()) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    voiceInput.toggle();
+  });
+  const readVoiceShortcutContext = useStableCallback(() => ({
+    terminalOpen,
+    modelPickerOpen: isComposerModelPickerOpen,
+  }));
+  const readVoiceShortcutKeybindings = useStableCallback(() => keybindings);
+  // A thread kept mounted under the Settings modal must not record or swallow the chord.
+  const backgroundThread = use(BackgroundThreadContext);
+  // oxlint-disable-next-line t3code/react-effect-budget -- the voice shortcut registers only while voice input is available
   useEffect(() => {
-    if (!voiceInputEnabled) return;
-    const handler = (event: globalThis.KeyboardEvent) => {
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: getTerminalFocusOwner() !== null,
-          terminalOpen,
-          modelPickerOpen: isComposerModelPickerOpen,
-        },
-      });
-      if (command !== "composer.voiceInput" || isCommandPaletteOpen()) return;
-      event.preventDefault();
-      event.stopPropagation();
-      toggleVoiceInput();
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [isComposerModelPickerOpen, keybindings, terminalOpen, toggleVoiceInput, voiceInputEnabled]);
+    if (!voiceInputEnabled || backgroundThread) return;
+    return registerCommands(
+      { "composer.voiceInput": handleVoiceShortcut },
+      {
+        capture: true,
+        context: readVoiceShortcutContext,
+        keybindings: readVoiceShortcutKeybindings,
+      },
+    );
+  }, [
+    backgroundThread,
+    handleVoiceShortcut,
+    readVoiceShortcutContext,
+    readVoiceShortcutKeybindings,
+    voiceInputEnabled,
+  ]);
 
   const toggleTasksDrawer = () => {
     setIsTasksDrawerOpen((open) => !open);

@@ -44,7 +44,7 @@ daily allowance as on desktop. The recording stops at the clip limit.
 
 ## Settings
 
-**Settings → Voice Input** on web and desktop holds settings that follow your T3
+**Settings → Voice input** on web and desktop holds settings that follow your T3
 Connect account to every device:
 
 - **Language**: the language you speak. **Automatic** detects it for each recording;
