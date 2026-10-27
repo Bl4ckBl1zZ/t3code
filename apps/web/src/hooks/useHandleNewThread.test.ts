@@ -215,7 +215,7 @@ vi.mock("../uiStateStore", () => ({
     getState: () => ({ setLastNewThreadProjectKey: () => undefined }),
   }),
 }));
-vi.mock("./useSettings", () => ({ useClientSettings: () => ({}) }));
+vi.mock("./useSettings", () => ({ getClientSettings: () => ({}) }));
 
 import { useNewThreadHandler } from "./useHandleNewThread";
 

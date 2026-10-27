@@ -4,7 +4,7 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import { DEFAULT_SERVER_SETTINGS, type ScopedProjectRef, type ThreadId } from "@t3tools/contracts";
-import { useRouter } from "@tanstack/react-router";
+import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import {
   composerDraftHasUserContent,
   markPromotedDraftThreadByRef,
@@ -34,13 +34,14 @@ import {
   resolveNewDraftStartFromOrigin,
   resolveNewThreadModelSelectionOverride,
 } from "../lib/chatThreadActions";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { readT3ProjectFile } from "../lib/t3ProjectFileDefaults";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSummaries } from "../state/presentation";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
-import { useClientSettings } from "./useSettings";
+import { getClientSettings } from "./useSettings";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 
@@ -61,8 +62,12 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 }
 
 export function useNewThreadHandler() {
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const router = useRouter();
+  return createNewThreadHandler(useRouter());
+}
+
+export type NewThreadHandler = ReturnType<typeof createNewThreadHandler>;
+
+export function createNewThreadHandler(router: AnyRouter) {
   const getCurrentRouteTarget = () => {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
     return resolveThreadRouteTarget(currentRouteParams);
@@ -79,6 +84,7 @@ export function useNewThreadHandler() {
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
+    const projectGroupingSettings = selectProjectGroupingSettings(getClientSettings());
     // Read at call time; status pushes replace the config map and would recreate every sidebar handler.
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const targetServerSettings =
@@ -389,6 +395,20 @@ export function useNewThreadHandler() {
   };
 }
 
+function findRememberedProject<
+  Project extends {
+    readonly environmentId: ScopedProjectRef["environmentId"];
+    readonly id: ScopedProjectRef["projectId"];
+  },
+>(projects: ReadonlyArray<Project>, lastProjectKey: string | null): Project | null {
+  return lastProjectKey === null
+    ? null
+    : (projects.find(
+        (project) =>
+          scopedProjectKey(scopeProjectRef(project.environmentId, project.id)) === lastProjectKey,
+      ) ?? null);
+}
+
 /**
  * The project the user last started a thread in, among `projects`. Null when
  * nothing is remembered or that project is gone, so callers fall back to their
@@ -401,12 +421,28 @@ export function useRememberedNewThreadProject<
   },
 >(projects: ReadonlyArray<Project>): Project | null {
   const lastProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
-  return lastProjectKey === null
-    ? null
-    : (projects.find(
-        (project) =>
-          scopedProjectKey(scopeProjectRef(project.environmentId, project.id)) === lastProjectKey,
-      ) ?? null);
+  return findRememberedProject(projects, lastProjectKey);
+}
+
+export function resolveDefaultProjectRef(
+  projects: ReadonlyArray<EnvironmentProject>,
+  projectOrder: readonly string[],
+  lastProjectKey: string | null,
+): ScopedProjectRef | null {
+  // The last project a thread was started in is a fresher signal of where the
+  // user works than their sidebar drag order.
+  const remembered = findRememberedProject(projects, lastProjectKey);
+  if (remembered) return scopeProjectRef(remembered.environmentId, remembered.id);
+  const [defaultProject] = orderItemsByPreferredIds({
+    items: projects,
+    preferredIds: projectOrder,
+    getId: getProjectOrderKey,
+    getPreferenceIds: (project) => [
+      getProjectOrderKey(project),
+      legacyProjectCwdPreferenceKey(project.workspaceRoot),
+    ],
+  });
+  return defaultProject ? scopeProjectRef(defaultProject.environmentId, defaultProject.id) : null;
 }
 
 export function useHandleNewThread() {
@@ -425,21 +461,8 @@ export function useHandleNewThread() {
   );
   const projects = useProjects();
   const handleNewThread = useNewThreadHandler();
-  const [orderedDefaultProject] = orderItemsByPreferredIds({
-    items: projects,
-    preferredIds: projectOrder,
-    getId: getProjectOrderKey,
-    getPreferenceIds: (project) => [
-      getProjectOrderKey(project),
-      legacyProjectCwdPreferenceKey(project.workspaceRoot),
-    ],
-  });
-  // The last project a thread was started in is a fresher signal of where the
-  // user works than their sidebar drag order.
-  const defaultProject = useRememberedNewThreadProject(projects) ?? orderedDefaultProject;
-  const defaultProjectRef = defaultProject
-    ? scopeProjectRef(defaultProject.environmentId, defaultProject.id)
-    : null;
+  const lastProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
+  const defaultProjectRef = resolveDefaultProjectRef(projects, projectOrder, lastProjectKey);
 
   return {
     activeDraftThread,
