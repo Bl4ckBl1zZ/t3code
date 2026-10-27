@@ -2350,7 +2350,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     voiceInputEnabled,
   ]);
 
-
   const hasBlockingComposerTopDrawer =
     activePendingApproval !== null || pendingUserInputs.length > 0;
   const hasImageAttachmentAttention = standaloneComposerImages.some((image) => {
