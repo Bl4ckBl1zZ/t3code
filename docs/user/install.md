@@ -63,7 +63,7 @@ packages install official T3 Code.
 ### The `t3` command
 
 The desktop app includes the `t3` command-line tool. To run it from any
-terminal, open **Settings → General → About** and choose **Install** next to
+terminal, open **Settings → About** and choose **Install** next to
 **t3 command**. On macOS and Linux it adds a `t3` link to a folder on your
 `PATH`; on Windows it adds the app's command folder to your `PATH`. Open a new
 terminal afterwards. **Remove** takes it off again. If you already have `t3`
