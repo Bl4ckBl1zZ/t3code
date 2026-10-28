@@ -47,6 +47,9 @@ vi.mock("../../state/preferences", () => ({
 vi.mock("./components/AutoSettleDaysField", () => ({ AutoSettleDaysField: () => null }));
 // The fork's auto-delete days field renders a native SwiftUI control.
 vi.mock("../../components/ui/NumberField", () => ({ NumberField: () => null }));
+vi.mock("./components/SourceControlSignInSection", () => ({
+  SourceControlSignInSection: () => null,
+}));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("@react-navigation/native", () => ({ useNavigation: () => ({}) }));
 vi.mock("../../state/session", () => ({
@@ -59,6 +62,7 @@ vi.mock("../../state/session", () => ({
     ),
 }));
 vi.mock("../../state/server", () => ({ serverEnvironment: { updateSettings: {} } }));
+vi.mock("../../state/environments", () => ({ useEnvironments: () => ({ environments: [] }) }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => mocks.updateSettings,
 }));
@@ -87,7 +91,7 @@ vi.mock("./components/SettingsEnvironmentFilterHeader", () => ({
 }));
 vi.mock("./components/DatabaseStorageNotice", () => ({ DatabaseStorageNotice: () => null }));
 vi.mock("./components/SettingsSection", () => ({ SettingsSection: Children }));
-vi.mock("./components/SettingsChoiceRow", () => ({ SettingsChoiceRow: () => null }));
+vi.mock("../../components/ui/ListChoiceRow", () => ({ ListChoiceRow: () => null }));
 vi.mock("./components/SettingsSwitchRow", () => ({
   SettingsSwitchRow: ({
     label,

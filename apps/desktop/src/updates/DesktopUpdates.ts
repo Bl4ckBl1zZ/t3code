@@ -156,8 +156,6 @@ export class DesktopUpdateUnexpectedActionError extends Schema.TaggedError<Deskt
   }
 }
 
-export type DesktopUpdateConfigureError = never;
-
 export class DesktopUpdateAutoUpdatePersistenceError extends Schema.TaggedError<DesktopUpdateAutoUpdatePersistenceError>()(
   "DesktopUpdateAutoUpdatePersistenceError",
   {
@@ -192,7 +190,7 @@ export class DesktopUpdates extends Context.Service<
     >;
     readonly emitState: Effect.Effect<void>;
     readonly disabledReason: Effect.Effect<Option.Option<string>>;
-    readonly configure: Effect.Effect<void, DesktopUpdateConfigureError, Scope.Scope>;
+    readonly configure: Effect.Effect<void, never, Scope.Scope>;
     readonly setChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopUpdateState, DesktopUpdateSetChannelError>;

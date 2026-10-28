@@ -75,7 +75,7 @@ export function useComposerVoiceInput(input: {
     anchorRef.current = { value: snapshot.value, position: snapshot.expandedCursor };
   };
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- binds this composer as the transcript target for its draft
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- binds this composer as the transcript target for its draft
   useEffect(
     () =>
       bindVoiceComposer(draftKey, (text, locale) => {

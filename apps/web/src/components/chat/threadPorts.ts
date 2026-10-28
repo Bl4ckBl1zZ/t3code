@@ -16,6 +16,15 @@ export interface ThreadPortRow {
   /** From the project's `t3.json`: listed whether or not anything serves it. */
   readonly pinned: boolean;
   readonly processName: string | null;
+  /** Who started it: one of the thread's terminals, or its agent. */
+  readonly startedBy: "terminal" | "agent" | null;
+  /** The listener behind a running row, which Stop targets. */
+  readonly server: DiscoveredLocalServer | null;
+}
+
+function startedBy(server: DiscoveredLocalServer | undefined): ThreadPortRow["startedBy"] {
+  if (server?.terminal != null) return "terminal";
+  return server?.agent != null ? "agent" : null;
 }
 
 function serverKey(host: string, port: number): string {
@@ -50,8 +59,8 @@ export function isLoopbackPreviewUrl(raw: string | null | undefined): boolean {
 }
 
 /**
- * The servers a thread runs, by the terminals that started or announced them,
- * with the project's pinned `previewUrl` first.
+ * The servers a thread runs, by the terminals that started or announced them or
+ * its agent, with the project's pinned `previewUrl` first.
  */
 export function threadPortRows(input: {
   readonly threadId: ThreadId;
@@ -74,12 +83,15 @@ export function threadPortRows(input: {
       status: !local ? "pinned" : live === undefined ? "stopped" : "running",
       pinned: true,
       processName: live?.processName ?? null,
+      startedBy: startedBy(live),
+      server: live ?? null,
     });
   }
   const own = input.servers
     .filter(
       (server) =>
-        server.terminal?.threadId === input.threadId &&
+        (server.terminal?.threadId === input.threadId ||
+          server.agent?.threadId === input.threadId) &&
         serverKey(server.host, server.port) !== pinnedKey,
     )
     .toSorted((left, right) => left.port - right.port);
@@ -92,6 +104,8 @@ export function threadPortRows(input: {
       status: "running",
       pinned: false,
       processName: server.processName,
+      startedBy: startedBy(server),
+      server,
     });
   }
   return rows;

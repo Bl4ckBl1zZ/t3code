@@ -28,10 +28,15 @@ describe("threadPortRows", () => {
         server(5173, threadId, "http://localhost:5173/app/?token=secret"),
         server(3000, "other-thread"),
         server(8080, null),
+        { ...server(4321, null), agent: { threadId } },
+        { ...server(4400, null), agent: { threadId: "other-thread" as ThreadId } },
       ],
       pinnedUrl: undefined,
     });
-    expect(rows.map((row) => [row.label, row.status])).toEqual([["localhost:5173/app", "running"]]);
+    expect(rows.map((row) => [row.label, row.status, row.startedBy])).toEqual([
+      ["localhost:4321", "running", "agent"],
+      ["localhost:5173/app", "running", "terminal"],
+    ]);
   });
 
   it("pins the project's URL first and reports a stopped local server", () => {
