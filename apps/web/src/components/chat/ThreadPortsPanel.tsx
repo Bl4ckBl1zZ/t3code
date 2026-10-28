@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   AuthPreviewOperateScope,
   type DiscoveredLocalServer,
@@ -8,15 +9,16 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { CopyIcon, ExternalLinkIcon, GlobeIcon } from "lucide-react";
+import { CopyIcon, ExternalLinkIcon, GlobeIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
+import { useState } from "react";
 
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
 import { useDiscoveredPortsState } from "~/portDiscoveryState";
+import { useEnvironment } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
-import { useThreadRunningTerminalIds } from "~/state/terminalSessions";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { openDiscoveredPort } from "../preview/openDiscoveredPort";
@@ -50,32 +52,39 @@ function reportFailure(title: string, error: unknown) {
 }
 
 /**
- * Thread details section for the dev servers this thread's terminals run,
- * found by the sockets they own and the URLs they print, with the project's
- * `t3.json` `previewUrl` pinned first. Renders nothing when there is nothing
- * to list, and scans only while a terminal runs or a local URL is pinned.
+ * Thread details section for the dev servers this thread's terminals and agent
+ * run, found by the sockets they own and the URLs they print, with the
+ * project's `t3.json` `previewUrl` pinned first. Renders nothing when there is
+ * nothing to list.
  */
 export function ThreadPortsPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly pinnedUrl: string | undefined;
 }) {
-  const runningTerminalIds = useThreadRunningTerminalIds({
-    environmentId: props.environmentId,
-    threadId: props.threadId,
-  });
-  const pinnedLoopback = isLoopbackPreviewUrl(props.pinnedUrl);
   const configuredUrls =
-    pinnedLoopback && props.pinnedUrl !== undefined ? [props.pinnedUrl] : undefined;
-  const scans = runningTerminalIds.length > 0 || pinnedLoopback;
-  const { servers } = useDiscoveredPortsState(scans ? props.environmentId : null, configuredUrls);
+    isLoopbackPreviewUrl(props.pinnedUrl) && props.pinnedUrl !== undefined
+      ? [props.pinnedUrl]
+      : undefined;
+  // Always scans: a server the agent started outlives the turn and any terminal.
+  const { servers } = useDiscoveredPortsState(props.environmentId, configuredUrls);
   const rows = threadPortRows({
     threadId: props.threadId,
-    servers: scans ? servers : [],
+    servers,
     pinnedUrl: props.pinnedUrl,
   });
   const canOperatePreview = useEnvironmentScope(props.environmentId, AuthPreviewOperateScope);
+  const canStop = useAtomValue(
+    previewEnvironment.stopLocalServer.permissionAtom(props.environmentId),
+  );
+  const supportsStop =
+    useEnvironment(props.environmentId)?.serverConfig?.environment.capabilities.localServerStop ===
+    true;
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const stopServer = useAtomCommand(previewEnvironment.stopLocalServer, {
+    label: "thread server stop",
+  });
+  const [stoppingKey, setStoppingKey] = useState<string | null>(null);
 
   if (rows.length === 0) return null;
 
@@ -92,6 +101,20 @@ export function ThreadPortsPanel(props: {
     }
   };
 
+  const stop = async (row: ThreadPortRow) => {
+    const pid = row.server?.pid;
+    if (row.server === null || pid == null || stoppingKey !== null) return;
+    setStoppingKey(row.key);
+    const result = await stopServer({
+      environmentId: props.environmentId,
+      input: { pid, port: row.server.port },
+    });
+    setStoppingKey(null);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      reportFailure("Could not stop server", squashAtomCommandFailure(result));
+    }
+  };
+
   return (
     <ThreadDetailsSection
       headingId="thread-details-ports-heading"
@@ -100,9 +123,15 @@ export function ThreadPortsPanel(props: {
     >
       <ul className="m-0 list-none p-0">
         {rows.map((row) => {
-          const detail = [row.pinned ? "t3.json" : null, row.processName, STATUS_LABEL[row.status]]
+          const detail = [
+            row.pinned ? "t3.json" : null,
+            row.startedBy === "agent" ? "Agent" : null,
+            row.processName,
+            STATUS_LABEL[row.status],
+          ]
             .filter((part) => part !== null)
             .join(" · ");
+          const stoppable = canStop && supportsStop && row.server?.pid != null;
           return (
             <li key={row.key} className="group flex items-center gap-1 rounded-lg">
               <button
@@ -169,6 +198,30 @@ export function ThreadPortsPanel(props: {
                 />
                 <TooltipPopup>Copy URL</TooltipPopup>
               </Tooltip>
+              {stoppable ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <ThreadDetailsControl
+                        size="icon-xs"
+                        variant="ghost"
+                        part="icon"
+                        tone="destructive"
+                        aria-label={`Stop ${row.label}`}
+                        disabled={stoppingKey !== null}
+                        onClick={() => void stop(row)}
+                      >
+                        {stoppingKey === row.key ? (
+                          <LoaderCircleIcon aria-hidden className="size-3 animate-spin" />
+                        ) : (
+                          <SquareIcon aria-hidden className="size-3 fill-current" />
+                        )}
+                      </ThreadDetailsControl>
+                    }
+                  />
+                  <TooltipPopup>Stop server</TooltipPopup>
+                </Tooltip>
+              ) : null}
             </li>
           );
         })}

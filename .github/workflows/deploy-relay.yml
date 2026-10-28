@@ -231,6 +231,8 @@ jobs:
           FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
           # Optional: voice input stays off until this secret exists.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional: the T3 Chat account link stays off until this secret exists.
+          T3CHAT_LINK_SECRET: ${{ secrets.T3CHAT_LINK_SECRET }}
 
       - name: Verify production relay and database
         if: ${{ !inputs.dry_run }}

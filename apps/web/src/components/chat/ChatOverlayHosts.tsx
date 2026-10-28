@@ -180,7 +180,7 @@ export function BranchRestoreConfirmHost(props: {
   );
 }
 
-export const MAX_REVERT_DIALOG_FILES = 8;
+const MAX_REVERT_DIALOG_FILES = 8;
 
 interface PendingRevert {
   readonly turnCount: number;

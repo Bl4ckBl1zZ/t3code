@@ -1,7 +1,7 @@
 import type * as CloudflareRuntime from "@cloudflare/workers-types";
 import type { PgClient } from "@effect/sql-pg/PgClient";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Drizzle from "alchemy/Drizzle";
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as Drizzle from "@alchemy.run/drizzle";
 import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
