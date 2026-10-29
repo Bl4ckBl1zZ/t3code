@@ -57,8 +57,8 @@ Download the newest `fork-v*` release from this fork's
 
 The Windows installer is unsigned, so SmartScreen warns the first time you run
 it. Installed builds update themselves from this fork's releases. There are no
-Linux or Intel Mac builds of this fork; the winget, Homebrew, AUR, and `.deb`
-packages install official T3 Code.
+Linux or Intel Mac builds of this fork; the winget, Homebrew, AUR, Nix, and
+`.deb` packages install official T3 Code.
 
 ### The `t3` command
 
