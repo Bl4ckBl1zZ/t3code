@@ -503,6 +503,13 @@ export const layerHealthApi = HttpApiBuilder.group(
   }),
 );
 
+// The self-hosted relay has no telemetry backend; accept expo-observe uploads and drop them.
+export const layerMobileTelemetryApi = HttpApiBuilder.group(
+  RelayApi,
+  "mobileTelemetry",
+  (handlers) => handlers.handle("ingest", () => Effect.void),
+);
+
 const revokeEnvironmentLinkRecord = Effect.fn("relay.api.client.revokeEnvironmentLinkRecord")(
   function* (input: {
     readonly userId: string;
