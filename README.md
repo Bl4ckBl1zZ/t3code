@@ -39,8 +39,8 @@ Download the latest `fork-v*` release from this fork's
 
 Installed builds update themselves from these releases.
 
-The upstream install script, `npx t3`, and the winget, scoop, Homebrew, AUR, and `.deb` packages
-all install official T3 Code, not this fork.
+The upstream install script, `npx t3`, and the winget, scoop, Homebrew, AUR, Nix, and `.deb`
+packages all install official T3 Code, not this fork.
 
 ### Command line
 
