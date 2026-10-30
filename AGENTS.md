@@ -4,7 +4,7 @@
 
 This repository is the Bl4ckBl1zZ fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). The rest of this file is upstream's. Where it names upstream infrastructure (app.t3.codes, store apps, npm and `t3` CLI releases, upstream CI), the fork differs:
 
-- **Desktop releases:** `.github/workflows/fork-macos-release.yml` publishes `fork-v<version>` GitHub Releases (macOS arm64, Windows x64/arm64) from `main`. Installed builds update from them.
+- **Desktop releases:** `.github/workflows/fork-macos-release.yml` publishes `fork-v<version>` GitHub Releases (macOS arm64, Windows x64/arm64) from `main`. Installed builds update from them. There is one stable track and no `t3` CLI release, so upstream's fleet Stable/Nightly switch is gated off (`BUILD_OFFERS_FLEET_TRACK_SWITCH`).
 - **iOS:** `.github/workflows/mobile-ios-testflight.yml` builds `apps/mobile` and ships it to TestFlight. No Android, App Store, or OTA builds.
 - **Relay:** T3 Connect runs on the fork's self-hosted relay (`deploy-relay.yml`). Builds take the relay URL and Clerk config from repository variables. It provisions no telemetry backend, so upstream's Axiom datasets and mobile crash forwarding stay out, and the mobile app sends crash reports only when built with `T3CODE_RELAY_CRASH_REPORTS=1`.
 - **Old fork data:** databases from the pre-rework fork are upgraded in place by `apps/server/src/persistence/forkDatabaseBridge.ts`.
@@ -109,7 +109,7 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 ## Verifying
 
-- Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, and tests beside changes. CI still runs the full test suites.
+- Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, tests beside changes, and the cross-file checks those miss. CI still runs the full test suites.
 - While you iterate, run `vp test run <files>`. For big files, add `-t "<name>"`.
 - Use `vp run typecheck`, not `npx tsc`; it caches per package. Both run tsc-rs (`typescript` is the `@tsc-rs/typescript` drop-in).
 - Run `node -e` snippets from `apps/server` or the owning package. `effect` does not resolve from the repo root.
