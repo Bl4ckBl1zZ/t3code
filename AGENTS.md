@@ -4,7 +4,7 @@
 
 This repository is the Bl4ckBl1zZ fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). The rest of this file is upstream's. Where it names upstream infrastructure (app.t3.codes, store apps, npm and `t3` CLI releases, upstream CI), the fork differs:
 
-- **Desktop releases:** `.github/workflows/fork-macos-release.yml` publishes `fork-v<version>` GitHub Releases (macOS arm64, Windows x64/arm64) from `main`. Installed builds update from them.
+- **Desktop releases:** `.github/workflows/fork-macos-release.yml` publishes `fork-v<version>` GitHub Releases (macOS arm64, Windows x64/arm64) from `main`. Installed builds update from them. There is one stable track and no `t3` CLI release, so upstream's fleet Stable/Nightly switch is gated off (`BUILD_OFFERS_FLEET_TRACK_SWITCH`).
 - **iOS:** `.github/workflows/mobile-ios-testflight.yml` builds `apps/mobile` and ships it to TestFlight. No Android, App Store, or OTA builds.
 - **Relay:** T3 Connect runs on the fork's self-hosted relay (`deploy-relay.yml`). Builds take the relay URL and Clerk config from repository variables. It provisions no telemetry backend, so upstream's Axiom datasets and mobile crash forwarding stay out, and the mobile app sends crash reports only when built with `T3CODE_RELAY_CRASH_REPORTS=1`.
 - **Old fork data:** databases from the pre-rework fork are upgraded in place by `apps/server/src/persistence/forkDatabaseBridge.ts`.

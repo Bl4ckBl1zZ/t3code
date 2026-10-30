@@ -341,11 +341,17 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     yield* driver.statusDetailsRemote(cwd, { refreshUpstream: false });
     yield* driver.listRefs({ cwd });
 
-    assert.deepStrictEqual(commands, [
+    // Remote and default-branch lookups fall back on any failure, so their stderr is never parsed.
+    const parsedCommands = commands.filter(
+      ({ args }) => args[0] !== "symbolic-ref" && args[0] !== "remote",
+    );
+    // Status reads run concurrently, so their order is not stable.
+    assert.sameDeepMembers(parsedCommands, [
       { args: ["rev-parse", "--git-path", "index"], lcAll: "C" },
-      { args: ["status", "--porcelain=2", "--branch", "-z"], lcAll: "C" },
-      { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
       { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
+      { args: ["status", "--porcelain=2", "--branch", "-z"], lcAll: "C" },
+      { args: ["diff-index", "-M", "--numstat", "-z", "HEAD", "--"], lcAll: "C" },
+      { args: ["rev-parse", "--symbolic-full-name", "HEAD"], lcAll: "C" },
     ]);
   }).pipe(Effect.provide(layer));
 });
