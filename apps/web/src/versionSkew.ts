@@ -109,6 +109,9 @@ export function offersServerUpdate(
   return selfUpdate === "desktop-managed" || releaseSourcePublishesCli(source);
 }
 
+/** A fleet track switch installs upstream's CLI and Nightly builds, so only upstream builds offer it. */
+export const BUILD_OFFERS_FLEET_TRACK_SWITCH = releaseSourcePublishesCli(BUILD_RELEASE_SOURCE);
+
 export function supportsDesktopAppUpdate(
   serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
 ): boolean {
