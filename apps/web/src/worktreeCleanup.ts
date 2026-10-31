@@ -1,12 +1,6 @@
-import type { ThreadShell } from "./types";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 
-function normalizeWorktreePath(path: string | null): string | null {
-  const trimmed = path?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed;
-}
+import type { ThreadShell } from "./types";
 
 /**
  * Worktrees that deleting `deletingThreadIds` together leaves with no thread,
@@ -17,17 +11,23 @@ export function getWorktreesOrphanedByDeletion(
   threads: ReadonlyArray<Pick<ThreadShell, "id" | "worktreePath">>,
   deletingThreadIds: ReadonlySet<ThreadShell["id"]>,
 ): ReadonlyMap<string, ReadonlyArray<ThreadShell["id"]>> {
-  const ownersByPath = new Map<string, ThreadShell["id"][]>();
+  // Threads can store one worktree as `/repo/wt` and `/repo/wt/`, and
+  // confirming deletion force-removes the checkout for every thread on it.
+  const ownersByKey = new Map<
+    string,
+    { readonly worktreePath: string; readonly owners: ThreadShell["id"][] }
+  >();
   for (const thread of threads) {
-    const worktreePath = normalizeWorktreePath(thread.worktreePath);
+    const worktreePath = thread.worktreePath?.trim();
     if (!worktreePath) continue;
-    const owners = ownersByPath.get(worktreePath);
-    if (owners) owners.push(thread.id);
-    else ownersByPath.set(worktreePath, [thread.id]);
+    const key = normalizeProjectPathForComparison(worktreePath);
+    const entry = ownersByKey.get(key);
+    if (entry) entry.owners.push(thread.id);
+    else ownersByKey.set(key, { worktreePath, owners: [thread.id] });
   }
 
   const orphaned = new Map<string, ReadonlyArray<ThreadShell["id"]>>();
-  for (const [worktreePath, owners] of ownersByPath) {
+  for (const { worktreePath, owners } of ownersByKey.values()) {
     if (owners.every((id) => deletingThreadIds.has(id))) {
       orphaned.set(worktreePath, owners);
     }

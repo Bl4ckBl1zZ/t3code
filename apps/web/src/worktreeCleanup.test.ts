@@ -99,4 +99,33 @@ describe("formatOrphanedWorktreeRemovalMessage", () => {
       ].join("\n"),
     );
   });
+
+  it.each([
+    ["/tmp/repo/worktrees/feature-a", "/tmp/repo/worktrees/feature-a/"],
+    ["/tmp/repo/worktrees/feature-a", "/tmp/repo/worktrees/feature-a//"],
+    ["C:\\repo\\worktrees\\feature-a", "c:/repo/worktrees/feature-a/"],
+  ])("treats %s and %s as the same worktree", (targetPath, otherPath) => {
+    const threads = [
+      makeThread({ id: ThreadId.make("thread-1"), worktreePath: targetPath }),
+      makeThread({ id: ThreadId.make("thread-2"), worktreePath: otherPath }),
+    ];
+    const orphaned = (...ids: string[]) => [
+      ...getWorktreesOrphanedByDeletion(threads, new Set(ids.map((id) => ThreadId.make(id)))),
+    ];
+    expect(orphaned("thread-1")).toEqual([]);
+    expect(orphaned("thread-2")).toEqual([]);
+    expect(orphaned("thread-1", "thread-2")).toEqual([
+      [targetPath, [ThreadId.make("thread-1"), ThreadId.make("thread-2")]],
+    ]);
+  });
+
+  it("keeps case-sensitive POSIX worktrees apart", () => {
+    const threads = [
+      makeThread({ id: ThreadId.make("thread-1"), worktreePath: "/tmp/repo/worktrees/Feature" }),
+      makeThread({ id: ThreadId.make("thread-2"), worktreePath: "/tmp/repo/worktrees/feature" }),
+    ];
+    expect([
+      ...getWorktreesOrphanedByDeletion(threads, new Set([ThreadId.make("thread-1")])).keys(),
+    ]).toEqual(["/tmp/repo/worktrees/Feature"]);
+  });
 });
