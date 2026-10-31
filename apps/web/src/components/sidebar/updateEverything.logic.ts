@@ -68,26 +68,20 @@ export interface SkippedMachine {
   readonly reason: string;
 }
 
-/** Boot services before this build installed the server from npm, not from release archives. */
-const RELEASE_ARCHIVE_SELF_UPDATE_SINCE = "0.0.41-nightly.20260914.1700";
-
 /** Skip current and app-hosted servers; the latter update with the app and would relaunch mid-run.
- * `waitForNpm` lists targets that need `t3@<targetVersion>` on npm first. `releaseArchivesPublished`
- * means the version came from the desktop feed, whose release carries the boot services' archives.
+ * Desktop-managed servers use their own feed. Each server's updater checks that it can install the
+ * release before it restarts, so no registry precheck runs here.
  * A build released outside upstream only updates desktop-managed servers (see `offersServerUpdate`). */
 export function collectServerUpdateTargets(
   machines: ReadonlyArray<UpdateEverythingMachine>,
   targetVersion: string,
-  releaseArchivesPublished: boolean,
   releaseSource?: ReleaseSource,
 ): {
   readonly targets: ServerUpdateTarget[];
   readonly skipped: SkippedMachine[];
-  readonly waitForNpm: ServerUpdateTarget[];
 } {
   const targets: ServerUpdateTarget[] = [];
   const skipped: SkippedMachine[] = [];
-  const waitForNpm: ServerUpdateTarget[] = [];
   for (const machine of machines) {
     const config = machine.serverConfig;
     if (machine.hostedByThisApp) continue;
@@ -131,16 +125,8 @@ export function collectServerUpdateTargets(
       targetVersion,
     };
     targets.push(target);
-    if (
-      selfUpdate !== "desktop-managed" &&
-      (!releaseArchivesPublished ||
-        selfUpdate === "respawn" ||
-        compareSemverVersions(serverVersion, RELEASE_ARCHIVE_SELF_UPDATE_SINCE) < 0)
-    ) {
-      waitForNpm.push(target);
-    }
   }
-  return { targets, skipped, waitForNpm };
+  return { targets, skipped };
 }
 
 function unavailableReason(machine: UpdateEverythingMachine): string | null {
