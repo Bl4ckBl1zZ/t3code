@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { RuntimeMode } from "@t3tools/contracts";
 
 const testState = vi.hoisted(() => {
@@ -249,7 +251,7 @@ vi.mock("../uiStateStore", () => ({
 }));
 vi.mock("./useSettings", () => ({ getClientSettings: () => ({}) }));
 
-import { useNewThreadHandler } from "./useHandleNewThread";
+import { resolveDefaultProjectRef, useNewThreadHandler } from "./useHandleNewThread";
 
 describe.each([
   ["new", null],
@@ -365,5 +367,27 @@ describe("useNewThreadHandler", () => {
 
     expect(opened).toEqual({ draftId: "draft-delayed", threadId: "thread-delayed" });
     expect(testState.router.navigate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resolveDefaultProjectRef", () => {
+  it("skips a remembered project that has since been archived", () => {
+    const project = (id: string, archivedAt: string | null) =>
+      ({
+        environmentId: "environment-primary",
+        id,
+        workspaceRoot: `/${id}`,
+        archivedAt,
+      }) as unknown as EnvironmentProject;
+    const archived = project("archived", "2026-10-01T00:00:00.000Z");
+    const active = project("active", null);
+
+    expect(
+      resolveDefaultProjectRef(
+        [archived, active],
+        [],
+        scopedProjectKey(scopeProjectRef(archived.environmentId, archived.id)),
+      ),
+    ).toEqual(scopeProjectRef(active.environmentId, active.id));
   });
 });

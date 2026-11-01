@@ -135,8 +135,21 @@ function sameProjectWorktreePolicies(left: ServerSettings, right: ServerSettings
   );
 }
 
-export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
-  return thread.worktreePath !== null && threadAtRest(thread, now);
+type LimitRecoverySettings = Pick<
+  ServerSettings,
+  "autoResumeLimitedThreads" | "snoozeLimitedThreads"
+>;
+
+export function storageCleanupThreadIdle(
+  thread: OrchestrationV2ThreadShell,
+  now: number,
+  settings: LimitRecoverySettings,
+): boolean {
+  return (
+    thread.worktreePath !== null &&
+    threadAtRest(thread, now) &&
+    !heldForLimitRecovery(thread, now, settings)
+  );
 }
 
 /** No run, queued prompt, question, guest message or background work holds the thread. */
@@ -154,6 +167,36 @@ function threadAtRest(thread: OrchestrationV2ThreadShell, now: number): boolean 
     (thread.pendingGuestMessageCount ?? 0) === 0 &&
     !threadHasQueuedTurnStart(thread, now)
   );
+}
+
+// A run held for its usage-limit reset has its work still ahead of it, and a
+// fresh worktree would otherwise look unchanged and be removed before it runs.
+function heldForLimitRecovery(
+  thread: OrchestrationV2ThreadShell,
+  now: number,
+  settings: LimitRecoverySettings,
+): boolean {
+  if (
+    thread.status !== "failed" ||
+    thread.lastErrorClass !== "usage_limit" ||
+    !thread.usageLimitResetAt ||
+    thread.archivedAt !== null ||
+    thread.settledOverride === "settled"
+  )
+    return false;
+  const resetMs = Date.parse(thread.usageLimitResetAt);
+  const recovery = thread.limitRecovery;
+  if (recovery?.runId === thread.latestRunId && recovery.resetAt === thread.usageLimitResetAt)
+    // An auto-resume holds until its continuation replaces the failed run.
+    return recovery.autoResume || (recovery.snooze === true && resetMs > now);
+  // The recovery worker arms this failure on a later tick; hold it until then.
+  // Like the worker, skip a reset that had already passed when the run ended.
+  if (
+    !Number.isFinite(resetMs) ||
+    resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt)
+  )
+    return false;
+  return settings.autoResumeLimitedThreads || (settings.snoozeLimitedThreads && resetMs > now);
 }
 
 /** PR metadata refreshes must not reset the inactivity clock. */
@@ -1026,7 +1069,7 @@ const make = Effect.gen(function* () {
         if (project === undefined) return keep("project is unavailable");
         if (
           thread.branch === null ||
-          !group.every((member) => storageCleanupThreadIdle(member, now))
+          !group.every((member) => storageCleanupThreadIdle(member, now, serverSettings))
         )
           return keep(waitForStop("thread is running or has pending work"));
         if (group.some((member) => member.branch !== thread.branch))
@@ -1195,7 +1238,7 @@ const make = Effect.gen(function* () {
                 shell.branch !== thread.branch ||
                 !Equal.equals(shell.settledAt, previous.settledAt) ||
                 (shell.settledAt !== null && !Equal.equals(shell.updatedAt, previous.updatedAt)) ||
-                !storageCleanupThreadIdle(shell, now) ||
+                !storageCleanupThreadIdle(shell, now, serverSettings) ||
                 path.resolve(shell.worktreePath!) !== worktreePath ||
                 storageCleanupActivityAt(shell) !== storageCleanupActivityAt(previous)
               );
@@ -1220,11 +1263,11 @@ const make = Effect.gen(function* () {
           return keep("commit changed since check");
         const finalChanges = discard ? null : yield* localChangesReason(worktreePath, settings);
         if (finalChanges !== null) return keep(finalChanges);
-        const current = resolveWorktreeCleanup(
-          yield* settingsService.getSettings,
-          thread.projectId,
-        );
+        const currentSettings = yield* settingsService.getSettings;
+        const current = resolveWorktreeCleanup(currentSettings, thread.projectId);
         if (
+          currentSettings.autoResumeLimitedThreads !== serverSettings.autoResumeLimitedThreads ||
+          currentSettings.snoozeLimitedThreads !== serverSettings.snoozeLimitedThreads ||
           Object.keys(settings).some(
             (key) =>
               current[key as keyof typeof settings] !== settings[key as keyof typeof settings],
