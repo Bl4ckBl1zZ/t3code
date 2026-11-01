@@ -433,25 +433,28 @@ function findRememberedProject<
   Project extends {
     readonly environmentId: ScopedProjectRef["environmentId"];
     readonly id: ScopedProjectRef["projectId"];
+    readonly archivedAt?: string | null | undefined;
   },
 >(projects: ReadonlyArray<Project>, lastProjectKey: string | null): Project | null {
   return lastProjectKey === null
     ? null
     : (projects.find(
         (project) =>
+          project.archivedAt == null &&
           scopedProjectKey(scopeProjectRef(project.environmentId, project.id)) === lastProjectKey,
       ) ?? null);
 }
 
 /**
  * The project the user last started a thread in, among `projects`. Null when
- * nothing is remembered or that project is gone, so callers fall back to their
+ * nothing is remembered or that project is gone or archived, so callers fall back to their
  * own default.
  */
 export function useRememberedNewThreadProject<
   Project extends {
     readonly environmentId: ScopedProjectRef["environmentId"];
     readonly id: ScopedProjectRef["projectId"];
+    readonly archivedAt?: string | null | undefined;
   },
 >(projects: ReadonlyArray<Project>): Project | null {
   const lastProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
@@ -468,7 +471,7 @@ export function resolveDefaultProjectRef(
   const remembered = findRememberedProject(projects, lastProjectKey);
   if (remembered) return scopeProjectRef(remembered.environmentId, remembered.id);
   const [defaultProject] = orderItemsByPreferredIds({
-    items: projects,
+    items: projects.filter((project) => project.archivedAt == null),
     preferredIds: projectOrder,
     getId: getProjectOrderKey,
     getPreferenceIds: (project) => [
