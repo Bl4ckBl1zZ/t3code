@@ -60,6 +60,7 @@ import { buildUnavailableProviderSnapshot } from "../provider/unavailableProvide
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -2652,6 +2653,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.provide(SqlitePersistence.layerMemory),
           ),
         ),
+        Effect.provide(ManagedPolicy.layerTest()),
       ),
     );
   });

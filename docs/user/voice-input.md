@@ -79,6 +79,10 @@ download Apple's speech model and needs a network connection; later transcriptio
 works offline for that language. Recordings can be up to five minutes long.
 On-device audio never leaves your phone.
 
+Signed out of T3 Connect on a device without on-device transcription, the composer
+has no microphone button and **Settings → Microphone** says voice input isn't
+available.
+
 ## Microphones on iPhone
 
 Canceling, leaving the screen, or an audio interruption discards the recording and
