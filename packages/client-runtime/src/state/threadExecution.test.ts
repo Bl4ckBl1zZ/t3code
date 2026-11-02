@@ -501,7 +501,7 @@ describe("presentPendingBackgroundWork", () => {
     ]);
 
     expect(presentation).toEqual({
-      title: "Waiting on subagent Luna Window Properties",
+      title: "Waiting · Luna Window Properties",
       items: [{ taskId: "luna", kind: "subagent", label: "Luna Window Properties", childThreadId }],
       waiting: true,
     });
@@ -527,7 +527,7 @@ describe("presentPendingBackgroundWork", () => {
       presentPendingBackgroundWork([
         { taskId: "a", kind: "subagent", description: "Review src/math.ts" },
       ])?.title,
-    ).toBe("Waiting on subagent Review src/math.ts");
+    ).toBe("Waiting · Review src/math.ts");
     expect(
       presentPendingBackgroundWork([{ taskId: "a", kind: "monitor", awaited: true }])?.title,
     ).toBe("Waiting on a monitor");
@@ -539,7 +539,7 @@ describe("presentPendingBackgroundWork", () => {
       presentPendingBackgroundWork([
         { taskId: "dev", kind: "command", description: "Start the shared dev server" },
       ]),
-    ).toMatchObject({ title: "Running: Start the shared dev server", waiting: false });
+    ).toMatchObject({ title: "Running · Start the shared dev server", waiting: false });
     expect(presentPendingBackgroundWork([{ taskId: "a", kind: "command" }])).toMatchObject({
       title: "Running a command",
       waiting: false,
