@@ -39,6 +39,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as TerminalManager from "./Manager.ts";
@@ -2136,6 +2137,7 @@ it.layer(
       Effect.provide(
         ServerSettings.layer.pipe(
           Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ManagedPolicy.layerTest()),
           Layer.provide(SqlitePersistence.layerMemory),
           Layer.provide(
             ServerConfig.layerTest(process.cwd(), { prefix: "t3code-terminal-provider-restart-" }),

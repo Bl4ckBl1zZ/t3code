@@ -34,6 +34,8 @@ import {
   windowsShimTarget,
 } from "../cloud/pinnedRuntime.ts";
 import { compareExactServiceVersions, isExactServiceVersion } from "../cloud/serviceProtocol.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import { managedUpdateRefusal } from "../policy/managedUpdates.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -256,7 +258,12 @@ export const updateCommand = Command.make("update", {
         assumeYes: flags.yes,
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(CliService.layer(config), ProcessRunner.layer, FetchHttpClient.layer),
+          Layer.mergeAll(
+            CliService.layer(config),
+            ProcessRunner.layer,
+            FetchHttpClient.layer,
+            ManagedPolicy.layer,
+          ),
         ),
       );
     }),
@@ -306,7 +313,7 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   return false;
 });
 
-const runUpdate = Effect.fn("cli.update.run")(function* (input: {
+export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
   readonly logsDir: string;
   readonly serverRuntimeStatePath: string;
@@ -323,6 +330,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const environment = yield* HostProcess.Environment;
   const httpClient = yield* HttpClient.HttpClient;
   const service = yield* BootService.BootService;
+  const policy = yield* ManagedPolicy.ManagedPolicy;
 
   // A build released outside upstream has no `t3` archives of its own;
   // downloading upstream's would replace it with the official build.
@@ -331,6 +339,13 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
 
   const currentVersion = packageJson.version;
   const channel = input.channel ?? cliReleaseChannelOf(currentVersion);
+  const refusal = managedUpdateRefusal(
+    policy.document,
+    input.requestedVersion === undefined ? channel : cliReleaseChannelOf(input.requestedVersion),
+  );
+  if (refusal !== undefined) {
+    return yield* new CliUpdateError({ reason: refusal });
+  }
   if (input.requestedVersion !== undefined && !isExactServiceVersion(input.requestedVersion)) {
     return yield* new CliUpdateError({
       reason: `'${input.requestedVersion}' is not an exact t3 version.`,

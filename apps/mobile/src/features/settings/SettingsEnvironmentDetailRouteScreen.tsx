@@ -4,6 +4,7 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  managedUpdatesDenial,
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -15,7 +16,7 @@ import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
-import { View } from "react-native";
+import { Linking, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -100,6 +101,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const version = config?.environment.serverVersion;
   const checkedRelease = release?.fromVersion === version ? release : null;
   const capabilities = config?.environment.capabilities;
+  const managedPolicy = config?.managedPolicy;
+  const supportUrl = managedPolicy?.supportUrl;
+  // The server refuses checks and installs; say so instead of offering them.
+  const updatesDenial = managedUpdatesDenial(managedPolicy);
 
   async function run(label: string, action: () => Promise<void>) {
     if (pendingRef.current) return;
@@ -242,6 +247,14 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 <SettingsSection title="T3 Code">
                   <View className="gap-1 p-4">
                     <Text className="text-base text-foreground">Version {version}</Text>
+                    {managedPolicy ? (
+                      <Text className="text-sm text-foreground-muted">
+                        Managed by {managedPolicy.organization}
+                      </Text>
+                    ) : null}
+                    {updatesDenial ? (
+                      <Text className="text-sm text-foreground-muted">{updatesDenial}</Text>
+                    ) : null}
                     {running ? (
                       <Text className="text-sm text-foreground-muted">
                         {updateState.stage === "resuming"
@@ -253,19 +266,20 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                         {updateState.message}
                       </Text>
                     ) : null}
-                    {checkedRelease ? (
+                    {checkedRelease && !updatesDenial ? (
                       <Text className="text-sm text-foreground-muted">
                         {checkedRelease.targetVersion
                           ? `Version ${checkedRelease.targetVersion} is available.`
                           : "You are up to date."}
                       </Text>
                     ) : null}
-                    {!tracksEnvironmentReleases(config.environment.capabilities, releaseSource) ||
-                    (checkedRelease?.targetVersion &&
-                      !supportsEnvironmentUpdate(
-                        config.environment.capabilities,
-                        releaseSource,
-                      )) ? (
+                    {!updatesDenial &&
+                    (!tracksEnvironmentReleases(config.environment.capabilities, releaseSource) ||
+                      (checkedRelease?.targetVersion &&
+                        !supportsEnvironmentUpdate(
+                          config.environment.capabilities,
+                          releaseSource,
+                        ))) ? (
                       <Text className="text-sm text-foreground-muted">
                         {!tracksEnvironmentReleases(config.environment.capabilities, releaseSource)
                           ? "This build of T3 Code can't update this server. Update T3 Code on this machine."
@@ -275,7 +289,15 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                       </Text>
                     ) : null}
                   </View>
-                  {tracksEnvironmentReleases(config.environment.capabilities, releaseSource) ? (
+                  {supportUrl ? (
+                    <SettingsActionRow
+                      icon="questionmark.bubble"
+                      label={`Get help from ${managedPolicy.organization}`}
+                      onPress={() => void Linking.openURL(supportUrl).catch(() => undefined)}
+                    />
+                  ) : null}
+                  {!updatesDenial &&
+                  tracksEnvironmentReleases(config.environment.capabilities, releaseSource) ? (
                     <SettingsActionRow
                       icon="arrow.clockwise"
                       label="Check for updates"
@@ -296,6 +318,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                     />
                   ) : null}
                   {checkedRelease?.targetVersion &&
+                  !updatesDenial &&
                   supportsEnvironmentUpdate(config.environment.capabilities, releaseSource) ? (
                     <SettingsActionRow
                       icon="arrow.up.circle"
