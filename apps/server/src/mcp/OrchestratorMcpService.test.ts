@@ -2651,9 +2651,9 @@ describe("OrchestratorMcpService provider resolution", () => {
               ),
             ),
             Layer.provide(SqlitePersistence.layerMemory),
+            Layer.provideMerge(ManagedPolicy.layerTest()),
           ),
         ),
-        Effect.provide(ManagedPolicy.layerTest()),
       ),
     );
   });
