@@ -1,7 +1,8 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -684,7 +685,7 @@ const pausedMeasurementFixture = (storageCleanup?: StorageCleanupSettings) =>
   });
 const cleanupTestLayer = GitVcsDriver.layer.pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "storage-cleanup-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const runCleanupTest = <A, E>(
   effect: Effect.Effect<
@@ -695,7 +696,7 @@ const runCleanupTest = <A, E>(
     | GitVcsDriver.GitVcsDriver
     | Path.Path
     | Scope.Scope
-    | Crypto.Crypto
+    | SecureRandom.SecureRandom
   >,
 ) => effect.pipe(Effect.provide(cleanupTestLayer), Effect.scoped);
 
