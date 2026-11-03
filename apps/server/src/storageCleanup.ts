@@ -22,7 +22,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -284,7 +284,7 @@ const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const terminals = yield* TerminalManager.TerminalManager;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const teardownScripts = yield* ProjectTeardownScriptRunner.ProjectTeardownScriptRunner;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1451,9 +1451,7 @@ const make = Effect.gen(function* () {
         const deleted = yield* engine
           .dispatch({
             type: "thread.auto-delete",
-            commandId: CommandId.make(
-              `server:auto-delete:${thread.id}:${yield* crypto.randomUUIDv4()}`,
-            ),
+            commandId: CommandId.make(`server:auto-delete:${thread.id}:${yield* random.uuidV4()}`),
             threadId: thread.id,
             snapshotAt: thread.updatedAt,
           })
