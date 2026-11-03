@@ -329,16 +329,16 @@ it.effect.each(["root", "nested", "worktree"] as const)(
 );
 
 it.effect("uses stable diagnostics for every parsed non-repository command", () => {
-  const commands: Array<{ readonly args: ReadonlyArray<string>; readonly lcAll?: string }> = [];
+  const commands: Array<{ readonly args: ReadonlyArray<string>; readonly language?: string }> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.sync(() => {
       if (!ChildProcess.isStandardCommand(command)) {
         return assert.fail("expected a standard Git command");
       }
-      const lcAll = command.options.env?.LC_ALL;
+      const language = command.options.env?.LANGUAGE;
       commands.push({
         args: command.args.map(String),
-        ...(typeof lcAll === "string" ? { lcAll } : {}),
+        ...(typeof language === "string" ? { language } : {}),
       });
       return makeNonRepositoryHandle();
     }),
@@ -367,11 +367,11 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     );
     // Status reads run concurrently, so their order is not stable.
     assert.sameDeepMembers(parsedCommands, [
-      { args: ["rev-parse", "--git-path", "index"], lcAll: "C" },
-      { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
-      { args: ["status", "--porcelain=2", "--branch", "-z"], lcAll: "C" },
-      { args: ["diff-index", "-M", "--numstat", "-z", "HEAD", "--"], lcAll: "C" },
-      { args: ["rev-parse", "--symbolic-full-name", "HEAD"], lcAll: "C" },
+      { args: ["rev-parse", "--git-path", "index"], language: "C" },
+      { args: ["rev-parse", "--git-common-dir"], language: "C" },
+      { args: ["status", "--porcelain=2", "--branch", "-z"], language: "C" },
+      { args: ["diff-index", "-M", "--numstat", "-z", "HEAD", "--"], language: "C" },
+      { args: ["rev-parse", "--symbolic-full-name", "HEAD"], language: "C" },
     ]);
   }).pipe(Effect.provide(layer));
 });
