@@ -30,6 +30,7 @@ import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3t
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
+import { promptLinkOrigin } from "../prompt-links/prompt-link-actions";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
 import { Platform, Pressable, useWindowDimensions, View } from "react-native";
@@ -993,6 +994,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         const target = threadChipCopyTarget(
           { environmentId: thread.environmentId, threadId: thread.id },
           thread.title,
+          promptLinkOrigin,
         );
         void copyThreadReference(target).then((didCopy) => {
           if (!didCopy) Dialog.alert(target.failureTitle, "Try copying this thread again.");
