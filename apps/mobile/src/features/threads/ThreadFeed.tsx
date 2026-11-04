@@ -3081,7 +3081,8 @@ export const ThreadFeed = memo(function ThreadFeed({
       const thread = resolveLinkedThread(href);
       if (thread) {
         if (actionId === "open-thread") onMarkdownLinkPress(href);
-        else if (actionId === "copy-thread-link") copyTextWithHaptic(copiedThreadLink(thread, promptLinkOrigin));
+        else if (actionId === "copy-thread-link")
+          copyTextWithHaptic(copiedThreadLink(thread, promptLinkOrigin));
         return;
       }
       const target = resolveFileChipTarget(href, props.workspaceRoot);

@@ -7,19 +7,16 @@ import type { ThreadPortRow } from "./threadPorts";
 vi.mock(import("./threadPorts"), async (importOriginal) => ({
   ...(await importOriginal()),
   threadPortRows: () =>
-    Array.from(
-      { length: 10 },
-      (_, index): ThreadPortRow => ({
-        key: `loopback:${3000 + index}`,
-        url: `http://localhost:${3000 + index}`,
-        label: `localhost:${3000 + index}`,
-        status: "running",
-        pinned: false,
-        processName: "node",
-        startedBy: "agent",
-        server: null,
-      }),
-    ),
+    Array.from({ length: 10 }, (_, index): ThreadPortRow => ({
+      key: `loopback:${3000 + index}`,
+      url: `http://localhost:${3000 + index}`,
+      label: `localhost:${3000 + index}`,
+      status: "running",
+      pinned: false,
+      processName: "node",
+      startedBy: "agent",
+      server: null,
+    })),
 }));
 
 import { render } from "../../../test/render";

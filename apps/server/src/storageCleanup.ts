@@ -154,10 +154,7 @@ function threadIdle(
   now: number,
   settings: LimitRecoverySettings,
 ): boolean {
-  return (
-    threadAtRest(thread, now) &&
-    !heldForLimitRecovery(thread, now, settings)
-  );
+  return threadAtRest(thread, now) && !heldForLimitRecovery(thread, now, settings);
 }
 
 /** No run, queued prompt, question, guest message or background work holds the thread. */
