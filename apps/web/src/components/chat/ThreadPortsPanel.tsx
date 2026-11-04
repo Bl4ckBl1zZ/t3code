@@ -9,6 +9,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { ChevronDown, ChevronUp } from "lucide";
 import { CopyIcon, ExternalLinkIcon, GlobeIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -21,6 +22,7 @@ import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "../../lib/utils";
+import { MorphIcon } from "../MorphIcon";
 import { openDiscoveredPort } from "../preview/openDiscoveredPort";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -28,6 +30,8 @@ import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { THREAD_DETAILS_PANEL_ICON_CLASS } from "./threadDetailsPanelStyles";
 import { isLoopbackPreviewUrl, threadPortRows, type ThreadPortRow } from "./threadPorts";
+
+const PORT_PAGE_COUNT = 4;
 
 const STATUS_DOT_CLASS: Record<ThreadPortRow["status"], string> = {
   running: "bg-emerald-500",
@@ -57,11 +61,17 @@ function reportFailure(title: string, error: unknown) {
  * project's `t3.json` `previewUrl` pinned first. Renders nothing when there is
  * nothing to list.
  */
-export function ThreadPortsPanel(props: {
+export function ThreadPortsPanel(props: ThreadPortsPanelProps) {
+  return <ThreadPortsList key={`${props.environmentId}:${props.threadId}`} {...props} />;
+}
+
+interface ThreadPortsPanelProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly pinnedUrl: string | undefined;
-}) {
+}
+
+function ThreadPortsList(props: ThreadPortsPanelProps) {
   const configuredUrls =
     isLoopbackPreviewUrl(props.pinnedUrl) && props.pinnedUrl !== undefined
       ? [props.pinnedUrl]
@@ -85,8 +95,10 @@ export function ThreadPortsPanel(props: {
     label: "thread server stop",
   });
   const [stoppingKey, setStoppingKey] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PORT_PAGE_COUNT);
 
   if (rows.length === 0) return null;
+  const hiddenCount = Math.max(0, rows.length - visibleCount);
 
   const threadRef = { environmentId: props.environmentId, threadId: props.threadId };
   // Loopback means the environment's machine: a remote client reaches it at
@@ -122,7 +134,7 @@ export function ThreadPortsPanel(props: {
       data-thread-ports-panel
     >
       <ul className="m-0 list-none p-0">
-        {rows.map((row) => {
+        {rows.slice(0, visibleCount).map((row, index) => {
           const detail = [
             row.pinned ? "t3.json" : null,
             row.startedBy === "agent" ? "Agent" : null,
@@ -133,7 +145,11 @@ export function ThreadPortsPanel(props: {
             .join(" · ");
           const stoppable = canStop && supportsStop && row.server?.pid != null;
           return (
-            <li key={row.key} className="group flex items-center gap-1 rounded-lg">
+            <li
+              key={row.key}
+              data-thread-details-server-overflow={index >= PORT_PAGE_COUNT || undefined}
+              className="group flex items-center gap-1 rounded-lg"
+            >
               <button
                 type="button"
                 className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left hover:bg-black/[0.035] disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-white/[0.08]"
@@ -226,6 +242,25 @@ export function ThreadPortsPanel(props: {
           );
         })}
       </ul>
+      {rows.length > PORT_PAGE_COUNT ? (
+        <ThreadDetailsControl
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            setVisibleCount(hiddenCount > 0 ? visibleCount + PORT_PAGE_COUNT : PORT_PAGE_COUNT)
+          }
+          part="row"
+          tone="muted"
+          className="w-full active:scale-100"
+        >
+          <MorphIcon
+            aria-hidden
+            className="size-4 shrink-0"
+            icon={hiddenCount > 0 ? ChevronDown : ChevronUp}
+          />
+          {hiddenCount > 0 ? `Show ${Math.min(hiddenCount, PORT_PAGE_COUNT)} more` : "Show less"}
+        </ThreadDetailsControl>
+      ) : null}
     </ThreadDetailsSection>
   );
 }

@@ -5,14 +5,14 @@ sends anything by itself, so you can review and edit the text before sending.
 
 Signed in to T3 Connect, voice input works in the web app, the desktop app, and
 the mobile app, using your account's settings. Signed out, only supported
-iPhones can dictate, on the device.
+iPhones and Android devices can dictate, on the device.
 
 ## Before you start
 
 Open **Settings → Connections** and sign in to T3 Connect. The microphone then
 appears in the composer. If it does not, the T3 Connect service you use has voice
 input turned off. Mobile apps that are signed out, or whose service has voice input
-off, fall back to [on-device dictation](#on-device-dictation-on-iphone).
+off, fall back to [on-device dictation](#on-device-dictation).
 
 The first recording asks for microphone access. If you declined, allow it in your
 browser's site settings, or on macOS in **System Settings → Privacy & Security →
@@ -71,27 +71,33 @@ audio. It keeps the resulting text for up to a day so a retried request returns 
 same transcript, then deletes it. Daily usage totals are kept for a week. Your
 settings are stored with your account until you change them.
 
-## On-device dictation on iPhone
+## On-device dictation
 
-Without T3 Connect, iPhones with iOS 26 or later transcribe on the device. Use the
-composer's microphone to record, then confirm to transcribe. The first use may
-download Apple's speech model and needs a network connection; later transcription
-works offline for that language. Recordings can be up to five minutes long.
+Without T3 Connect, iPhones with iOS 26 or later and Android devices with Android 12
+or later transcribe on the device: Apple's speech transcription on iOS, compatible
+Google speech services on Android. Use the composer's microphone to record, then
+confirm to transcribe. The first use may download a speech model and needs a network
+connection; later transcription works offline for that language. Recordings can be up
+to five minutes long. On Android, keep T3 Code open while recording and transcribing;
+transcription processes the full recording at roughly its original duration.
 On-device audio never leaves your phone.
 
 Signed out of T3 Connect on a device without on-device transcription, the composer
 has no microphone button and **Settings → Microphone** says voice input isn't
 available.
 
-## Microphones on iPhone
+## Microphones on mobile
 
-Canceling, leaving the screen, or an audio interruption discards the recording and
-preserves your existing draft. While recording, the screen stays awake. T3 Code
+Canceling or an audio interruption discards the recording and preserves your existing
+draft. Navigating to another screen keeps dictation active; use the floating controls
+to finish or cancel. While recording, the screen stays awake. T3 Code
 deletes the temporary audio after transcription or cancellation.
 
 Voice input records from the first connected microphone in **Settings → Microphone**.
-The list mixes kinds (built-in, other wired, other Bluetooth, CarPlay) with wired and
+The list mixes kinds (built-in, other wired, other Bluetooth, and CarPlay on iOS) with wired and
 Bluetooth devices you have dictated with, listed by name. Drag to rank them together:
 for example, put **Other Bluetooth** above your AirPods so a new headset is preferred
 while the AirPods microphone stays low. By default, CarPlay comes after the built-in
-microphone. Swipe a device left to forget it.
+microphone on iOS. Swipe a device left to forget it. Android may use another input when
+the preferred microphone cannot be routed. Devices with the same name may share a saved
+preference, but simultaneous same-name inputs remain separately selectable.

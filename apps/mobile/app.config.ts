@@ -187,6 +187,13 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 }
 
 const variant = VARIANT_CONFIG[APP_VARIANT];
+// Copied thread links open the app; the hosted app's .well-known lists every variant's
+// identifiers. A build without a hosted app (`none`) copies t3-thread:// links instead.
+const hostedAppHost = (() => {
+  const value = repoEnv.T3CODE_HOSTED_APP_URL?.trim() ?? "";
+  if (value.toLowerCase() === "none") return null;
+  return new URL(value || "https://app.t3.codes").host;
+})();
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
   : (iosIdentityOverrides.bundleIdentifier ?? variant.iosBundleIdentifier);
@@ -331,10 +338,10 @@ const config: ExpoConfig = {
     ...(iosIdentityOverrides.buildNumber ? { buildNumber: iosIdentityOverrides.buildNumber } : {}),
     // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
     appleTeamId: iosIdentityOverrides.appleTeamId ?? "ARK85ZXQ4Z",
-    associatedDomains: iosAssociatedDomainHosts.flatMap((host) => [
-      `applinks:${host}`,
-      `webcredentials:${host}`,
-    ]),
+    associatedDomains: [
+      ...iosAssociatedDomainHosts.flatMap((host) => [`applinks:${host}`, `webcredentials:${host}`]),
+      ...(hostedAppHost === null ? [] : [`applinks:${hostedAppHost}`]),
+    ],
     entitlements: {
       "keychain-access-groups": [iosKeychainAccessGroup],
     },
@@ -384,6 +391,17 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: true,
     // expo-sensors declares this for its pedometer, which the app does not use.
     blockedPermissions: ["android.permission.ACTIVITY_RECOGNITION"],
+    intentFilters:
+      hostedAppHost === null
+        ? []
+        : [
+            {
+              action: "VIEW",
+              autoVerify: true,
+              data: [{ scheme: "https", host: hostedAppHost, pathPrefix: "/threads/" }],
+              category: ["BROWSABLE", "DEFAULT"],
+            },
+          ],
   },
   web: {
     favicon: variant.assets.appIcon,
@@ -465,7 +483,7 @@ const config: ExpoConfig = {
       "expo-audio",
       {
         microphonePermission: "Allow T3 Code to use your microphone for voice input.",
-        recordAudioAndroid: false,
+        recordAudioAndroid: true,
         enableBackgroundPlayback: false,
         enableBackgroundRecording: false,
       },
@@ -479,7 +497,14 @@ const config: ExpoConfig = {
         recordAudioAndroid: false,
       },
     ],
-    ["expo-image-picker", { photosPermission: false, microphonePermission: false }],
+    [
+      "expo-image-picker",
+      {
+        photosPermission: false,
+        // `false` makes this plugin add RECORD_AUDIO to blockedPermissions, breaking Android dictation.
+        microphonePermission: "Allow T3 Code to use your microphone for voice input.",
+      },
+    ],
     [
       "expo-splash-screen",
       {

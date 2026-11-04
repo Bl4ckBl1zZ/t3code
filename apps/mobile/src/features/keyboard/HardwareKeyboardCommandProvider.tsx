@@ -1,6 +1,7 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { Platform } from "react-native";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
+import { promptLinkOrigin } from "../prompt-links/prompt-link-actions";
 import {
   createContext,
   use,
@@ -67,6 +68,7 @@ export function HardwareKeyboardCommandProvider({
             pullRequests: activeThread?.pullRequests,
             linkedPullRequestUrl:
               (activeThread?.linkedPullRequest ?? activeThread?.branchPullRequest)?.url ?? null,
+            hostedAppUrl: promptLinkOrigin,
           }),
     [activeThread, activeThreadRef],
   );
