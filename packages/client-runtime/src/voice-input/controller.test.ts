@@ -120,10 +120,10 @@ describe("VoiceInputController", () => {
     expect(unsupported.controller.currentState.error).toContain("not available");
     expect(unsupported.recorder.record).not.toHaveBeenCalled();
 
-    const reason = new VoiceTranscriptionError(
-      "unavailable",
-      "This device requires iOS 26 or later.",
-    );
+    const reason = new VoiceTranscriptionError({
+      code: "unavailable",
+      message: "This device requires iOS 26 or later.",
+    });
     const unavailable = createHarness({
       getTranscriber: () => ({
         prepare: async () => {
@@ -262,7 +262,10 @@ describe("VoiceInputController", () => {
   it("records up to a service's clip limit, reports the length, and shows its rejection", async () => {
     let clock = 1_000;
     const transcribe = vi.fn<PreparedVoiceTranscription["transcribe"]>(async () => {
-      throw new VoiceTranscriptionError("rejected", "You reached today's voice input limit.");
+      throw new VoiceTranscriptionError({
+        code: "rejected",
+        message: "You reached today's voice input limit.",
+      });
     });
     const harness = createHarness({
       now: () => clock,

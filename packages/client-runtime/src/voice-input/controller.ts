@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import { replaceTextRange } from "@t3tools/shared/composerTrigger";
 
 import {
@@ -5,6 +6,8 @@ import {
   type PreparedVoiceTranscription,
   type VoiceTranscriber,
 } from "./transcription.ts";
+
+const isVoiceTranscriptionError = Schema.is(VoiceTranscriptionError);
 
 export const VOICE_RECORDING_LIMIT_SECONDS = 5 * 60;
 
@@ -171,9 +174,7 @@ function errorCode(error: unknown): string | null {
 }
 
 function rejectedMessage(error: unknown): string | null {
-  return error instanceof VoiceTranscriptionError && error.code === "rejected"
-    ? error.message
-    : null;
+  return isVoiceTranscriptionError(error) && error.code === "rejected" ? error.message : null;
 }
 
 function preparationErrorMessage(error: unknown): string {
@@ -185,7 +186,7 @@ function preparationErrorMessage(error: unknown): string {
   if (errorCode(error) === "unsupported-locale") {
     return "Voice transcription is not available for this language.";
   }
-  return error instanceof VoiceTranscriptionError
+  return isVoiceTranscriptionError(error)
     ? error.message
     : "Could not prepare voice transcription.";
 }
@@ -194,9 +195,7 @@ function transcriptionErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message === "voice-operation-busy") {
     return "Voice transcription is still finishing. Try again shortly.";
   }
-  return error instanceof VoiceTranscriptionError
-    ? error.message
-    : "Could not transcribe this recording.";
+  return isVoiceTranscriptionError(error) ? error.message : "Could not transcribe this recording.";
 }
 
 const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
@@ -218,8 +217,7 @@ export class VoiceInputController {
 
   constructor(dependencies: VoiceInputControllerDependencies) {
     this.dependencies = dependencies;
-    // @effect-diagnostics-next-line globalDate:off -- the controller runs outside an Effect runtime.
-    this.now = dependencies.now ?? (() => Date.now());
+    this.now = dependencies.now ?? Date.now;
   }
 
   get currentState(): VoiceInputState {

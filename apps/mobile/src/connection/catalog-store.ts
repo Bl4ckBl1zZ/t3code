@@ -16,6 +16,7 @@ import {
   catalogFromSwiftEnvironments,
   SWIFT_IMPORT_MARKER_KEY,
   type SwiftSavedEnvironments,
+  type SwiftSavedEnvironmentsReadError,
 } from "./swift-import";
 
 export const CONNECTION_CATALOG_KEY = "t3code.connection-catalog.v1";
@@ -58,7 +59,10 @@ export interface CatalogStoreOptions {
    * Reads what the SwiftUI client saved under the same bundle id. When given,
    * the first load imports it once, replacing whatever catalog is stored.
    */
-  readonly readSwiftSavedEnvironments?: Effect.Effect<SwiftSavedEnvironments | null, unknown>;
+  readonly readSwiftSavedEnvironments?: Effect.Effect<
+    SwiftSavedEnvironments | null,
+    SwiftSavedEnvironmentsReadError
+  >;
 }
 
 export const make = Effect.fn("mobile.connectionStorage.makeCatalogStore")(function* (
@@ -100,7 +104,9 @@ export const make = Effect.fn("mobile.connectionStorage.makeCatalogStore")(funct
   // client and was already imported into it. A failed read sets no marker, so
   // the next launch tries again; it never blocks loading the catalog.
   const importSwiftCatalogOnce = Effect.fn("mobile.connectionStorage.importSwiftCatalog")(
-    function* (readSaved: Effect.Effect<SwiftSavedEnvironments | null, unknown>) {
+    function* (
+      readSaved: Effect.Effect<SwiftSavedEnvironments | null, SwiftSavedEnvironmentsReadError>,
+    ) {
       if ((yield* getItem(SWIFT_IMPORT_MARKER_KEY)) !== null) return;
       const saved = yield* readSaved;
       const catalog = saved === null ? null : catalogFromSwiftEnvironments(saved);

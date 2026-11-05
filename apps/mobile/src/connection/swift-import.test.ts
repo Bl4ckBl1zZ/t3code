@@ -15,7 +15,11 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import { CONNECTION_CATALOG_KEY, make } from "./catalog-store";
-import { catalogFromSwiftEnvironments, SWIFT_IMPORT_MARKER_KEY } from "./swift-import";
+import {
+  catalogFromSwiftEnvironments,
+  SWIFT_IMPORT_MARKER_KEY,
+  SwiftSavedEnvironmentsReadError,
+} from "./swift-import";
 import * as MobileSecureStorage from "../persistence/mobile-secure-storage";
 
 // Shapes as the Swift client's JSONEncoder writes them (sorted keys, unescaped
@@ -238,7 +242,9 @@ describe("Swift import in the catalog store", () => {
     Effect.gen(function* () {
       const memory = makeStorage({ [CONNECTION_CATALOG_KEY]: staleReactNativeCatalog });
       const catalog = yield* make({
-        readSwiftSavedEnvironments: Effect.fail(new Error("errSecInteractionNotAllowed")),
+        readSwiftSavedEnvironments: Effect.fail(
+          new SwiftSavedEnvironmentsReadError({ cause: new Error("errSecInteractionNotAllowed") }),
+        ),
       }).pipe(Effect.provideService(MobileSecureStorage.MobileSecureStorage, memory.storage));
 
       expect((yield* catalog.read).disabledEnvironmentIds).toEqual(["stale"]);

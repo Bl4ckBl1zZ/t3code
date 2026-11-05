@@ -23,6 +23,11 @@ export const SWIFT_IMPORT_MARKER_KEY = "t3code.swift-import.v1";
  * `T3SwiftImport` native module: its `environments.json` and the raw Keychain
  * credentials keyed by credential id.
  */
+export class SwiftSavedEnvironmentsReadError extends Schema.TaggedError<SwiftSavedEnvironmentsReadError>()(
+  "SwiftSavedEnvironmentsReadError",
+  { cause: Schema.Defect() },
+) {}
+
 export interface SwiftSavedEnvironments {
   readonly catalog?: string;
   readonly credentials: Readonly<Record<string, string>>;
