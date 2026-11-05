@@ -1,7 +1,7 @@
 import { requireOptionalNativeModule } from "expo";
 import * as Effect from "effect/Effect";
 
-import type { SwiftSavedEnvironments } from "./swift-import";
+import { type SwiftSavedEnvironments, SwiftSavedEnvironmentsReadError } from "./swift-import";
 
 interface T3SwiftImportModule {
   readonly readSavedEnvironments: () => Promise<SwiftSavedEnvironments>;
@@ -16,5 +16,8 @@ export const readSwiftSavedEnvironments = Effect.suspend(() => {
   const module = requireOptionalNativeModule<T3SwiftImportModule>("T3SwiftImport");
   return module === null
     ? Effect.succeed(null)
-    : Effect.tryPromise(() => module.readSavedEnvironments());
+    : Effect.tryPromise({
+        try: () => module.readSavedEnvironments(),
+        catch: (cause) => new SwiftSavedEnvironmentsReadError({ cause }),
+      });
 });

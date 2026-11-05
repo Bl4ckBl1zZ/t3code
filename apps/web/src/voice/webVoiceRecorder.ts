@@ -1,18 +1,21 @@
+import * as Schema from "effect/Schema";
+
 import { bytesToBase64, encodeMonoWav, VOICE_WAV_SAMPLE_RATE } from "./wavEncoding";
 
 // Twelve level readings a second is smooth enough for a meter and cheap to draw.
 const LEVEL_INTERVAL_MS = 80;
 
-export type MicrophoneFailure = "unsupported" | "denied" | "no-device" | "failed";
+const MicrophoneFailure = Schema.Literals(["unsupported", "denied", "no-device", "failed"]);
+export type MicrophoneFailure = typeof MicrophoneFailure.Type;
 
-class MicrophoneError extends Error {
-  readonly reason: MicrophoneFailure;
+class MicrophoneError extends Schema.TaggedError<MicrophoneError>()("MicrophoneError", {
+  reason: MicrophoneFailure,
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
-  constructor(reason: MicrophoneFailure, options?: ErrorOptions) {
-    super(microphoneFailureMessage(reason), options);
-    this.name = "MicrophoneError";
-    this.reason = reason;
-  }
+function microphoneError(reason: MicrophoneFailure, cause?: unknown): MicrophoneError {
+  return new MicrophoneError({ reason, message: microphoneFailureMessage(reason), cause });
 }
 
 function microphoneFailureMessage(reason: MicrophoneFailure): string {
@@ -44,13 +47,13 @@ export interface WebVoiceRecording {
 function openMicrophoneError(cause: unknown): MicrophoneError {
   if (cause instanceof DOMException) {
     if (cause.name === "NotAllowedError" || cause.name === "SecurityError") {
-      return new MicrophoneError("denied", { cause });
+      return microphoneError("denied", cause);
     }
     if (cause.name === "NotFoundError" || cause.name === "OverconstrainedError") {
-      return new MicrophoneError("no-device", { cause });
+      return microphoneError("no-device", cause);
     }
   }
-  return new MicrophoneError("failed", { cause });
+  return microphoneError("failed", cause);
 }
 
 async function encodeClip(blob: Blob): Promise<WebVoiceClip> {
@@ -86,7 +89,7 @@ export async function startWebVoiceRecording(input: {
     !navigator.mediaDevices?.getUserMedia ||
     typeof MediaRecorder === "undefined"
   ) {
-    throw new MicrophoneError("unsupported");
+    throw microphoneError("unsupported");
   }
   let stream: MediaStream;
   try {
@@ -145,12 +148,12 @@ export async function startWebVoiceRecording(input: {
           return;
         }
         recorder.addEventListener("stop", finish, { once: true });
-        recorder.addEventListener("error", () => reject(new MicrophoneError("failed")), {
+        recorder.addEventListener("error", () => reject(microphoneError("failed")), {
           once: true,
         });
         recorder.stop();
       }).finally(release);
-      if (blob.size === 0) throw new MicrophoneError("failed");
+      if (blob.size === 0) throw microphoneError("failed");
       return encodeClip(blob);
     },
     cancel: () => {

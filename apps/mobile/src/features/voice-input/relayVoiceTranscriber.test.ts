@@ -72,10 +72,10 @@ describe("createRelayVoiceTranscriber", () => {
   });
 
   it("passes the relay's refusal through and reports cancellation over late failures", async () => {
-    const refusal = new VoiceTranscriptionError(
-      "rejected",
-      "You reached today's voice input limit.",
-    );
+    const refusal = new VoiceTranscriptionError({
+      code: "rejected",
+      message: "You reached today's voice input limit.",
+    });
     const abort = new AbortController();
     const { transcriber: relay } = transcriber({
       transcribe: async () => {

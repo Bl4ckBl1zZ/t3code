@@ -21,7 +21,7 @@ import { createRelayVoiceTranscriber } from "./relayVoiceTranscriber";
 
 function rejected(cause: Cause.Cause<unknown>): VoiceTranscriptionError {
   const failure = describeManagedRelayVoiceFailure(Cause.squash(cause));
-  return new VoiceTranscriptionError("rejected", failure.message, { cause });
+  return new VoiceTranscriptionError({ code: "rejected", message: failure.message, cause });
 }
 
 /**

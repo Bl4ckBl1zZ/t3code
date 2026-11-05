@@ -63,7 +63,10 @@ export function createRelayVoiceTranscriber(
       throwIfVoiceTranscriptionAborted(signal);
       const status = await settleUnlessAborted(signal, () => dependencies.loadStatus(signal));
       if (!status.available) {
-        throw new VoiceTranscriptionError("rejected", "Voice input is unavailable right now.");
+        throw new VoiceTranscriptionError({
+          code: "rejected",
+          message: "Voice input is unavailable right now.",
+        });
       }
       return {
         locale: status.settings.language ?? dependencies.deviceLocale(),
