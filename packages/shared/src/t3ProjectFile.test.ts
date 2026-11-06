@@ -57,6 +57,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "runOnWorktreeCreate",
       "runOnWorktreeDelete",
       "singleRun",
+      "stopOnSettle",
     ]);
   });
 
