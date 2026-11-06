@@ -2195,8 +2195,15 @@ describe("storage cleanup reports and local file policies", () => {
             worktreeOnDelete,
           });
           fixture.setThreads([]);
-          fixture.setDeletedThreads([
-            shell({ branch: "feature", worktreePath: fixture.worktree, deletedAt: at(0) }),
+          // A manual delete discards local changes in this fork; an auto-delete keeps the worktree.
+          fixture.setDeletedRows([
+            {
+              payload_json: JSON.stringify(
+                shell({ branch: "feature", worktreePath: fixture.worktree, deletedAt: at(0) }),
+              ),
+              workspaceRoot: fixture.repo,
+              autoDeleted: 1,
+            },
           ]);
           yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "agent edit\n");
           const events = yield* Queue.unbounded<{
