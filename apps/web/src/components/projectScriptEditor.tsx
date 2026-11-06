@@ -88,6 +88,7 @@ export interface NewProjectScriptInput {
   runOnWorktreeDelete: boolean;
   /** At most one run per thread; running it again restarts it. */
   singleRun: boolean;
+  stopOnSettle?: boolean;
   /** Omit to preserve the current shortcut when the form did not edit it. */
   keybinding?: string | null;
   previewUrl: string | null;
@@ -105,6 +106,7 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   runOnSettle: false,
   runOnWorktreeDelete: false,
   singleRun: false,
+  stopOnSettle: false,
   keybinding: null,
   previewUrl: null,
   autoOpenPreview: false,
@@ -131,6 +133,7 @@ export function editorRequestForScript(
       runOnSettle: script.runOnSettle ?? false,
       runOnWorktreeDelete: script.runOnWorktreeDelete ?? false,
       singleRun: script.singleRun ?? false,
+      stopOnSettle: script.stopOnSettle ?? false,
       keybinding: keybindingValueForCommand(keybindings, commandForProjectScript(script.id)),
       previewUrl: script.previewUrl ?? null,
       autoOpenPreview: script.autoOpenPreview ?? false,
@@ -286,6 +289,7 @@ function ProjectScriptEditorForm({
     request.initial.runOnWorktreeDelete,
   );
   const [singleRun, setSingleRun] = useState(request.initial.singleRun);
+  const [stopOnSettle, setStopOnSettle] = useState(request.initial.stopOnSettle ?? false);
   const [keybinding, setKeybinding] = useState(request.initial.keybinding ?? "");
   const [previewUrl, setPreviewUrl] = useState(request.initial.previewUrl ?? "");
   const [autoOpenPreview, setAutoOpenPreview] = useState(request.initial.autoOpenPreview);
@@ -372,6 +376,7 @@ function ProjectScriptEditorForm({
         runOnSettle,
         runOnWorktreeDelete,
         singleRun,
+        stopOnSettle,
         ...((request.scriptId === null && canChangeKeybinding) || changesKeybinding
           ? { keybinding: keybindingRule?.key ?? null }
           : {}),
@@ -546,6 +551,13 @@ function ProjectScriptEditorForm({
               <Switch
                 checked={runOnWorktreeDelete}
                 onCheckedChange={(checked) => setRunOnWorktreeDelete(Boolean(checked))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+              <span>Stop this action when the thread settles</span>
+              <Switch
+                checked={stopOnSettle}
+                onCheckedChange={(checked) => setStopOnSettle(Boolean(checked))}
               />
             </label>
             <label

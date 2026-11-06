@@ -1834,9 +1834,12 @@ const make = Effect.gen(function* () {
         const deleteRule = anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete);
         // Worktrees of auto-deleted threads wait for the deletion's cleanup to finish.
         const autoDelete = lastSettings.autoDeleteSettledAfterDays !== null;
-        return deleteRule || (event.type === "thread.deleted" && autoDelete)
-          ? requestSweep("follow-up")
-          : Effect.void;
+        if (!deleteRule && !(event.type === "thread.deleted" && autoDelete)) return Effect.void;
+        return event.type === "provider-session.updated" && event.payload.status === "error"
+          ? providerSessions
+              .isLive(event.payload.id)
+              .pipe(Effect.flatMap((live) => (live ? Effect.void : requestSweep("follow-up"))))
+          : requestSweep("follow-up");
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Storage cleanup event stream failed", { cause }),

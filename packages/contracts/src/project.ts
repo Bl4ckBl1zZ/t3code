@@ -42,6 +42,7 @@ export const ProjectScript = Schema.Struct({
   runOnWorktreeDelete: Schema.optional(Schema.Boolean),
   /** At most one run per thread; running it again restarts that run. */
   singleRun: Schema.optional(Schema.Boolean),
+  stopOnSettle: Schema.optional(Schema.Boolean),
   async: Schema.optional(Schema.Boolean),
   previewUrl: Schema.optional(TrimmedNonEmptyString),
   autoOpenPreview: Schema.optional(Schema.Boolean),

@@ -59,6 +59,12 @@ export const T3ProjectFileScript = Schema.Struct({
         "When true, a thread runs at most one instance of the script, in its own terminal. Running it again while it runs restarts it there instead of starting a second copy, which suits dev servers.",
     }),
   ),
+  stopOnSettle: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, T3 stops this action's terminal and child processes when its thread settles.",
+    }),
+  ),
   async: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
