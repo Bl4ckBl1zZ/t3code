@@ -92,6 +92,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
       readonly terminalId?: string;
       readonly location?: TerminalLaunchLocation | null;
       readonly extraEnv?: Record<string, string>;
+      readonly stopOnSettle?: boolean;
     } & (
       | {
           readonly size?: { readonly cols: number; readonly rows: number };
@@ -115,6 +116,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
         worktreePath: location.worktreePath,
         ...(input.extraEnv ? { extraEnv: input.extraEnv } : {}),
       }),
+      ...(input.stopOnSettle !== undefined ? { stopOnSettle: input.stopOnSettle } : {}),
     };
     const result = input.restart
       ? restartTerminalCommand({

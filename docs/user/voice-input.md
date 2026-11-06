@@ -1,24 +1,144 @@
 # Voice input
 
-Dictate a message instead of typing it. Voice input fills the composer; it never
-sends anything by itself, so you can review and edit the text before sending.
+Dictate into the composer instead of typing. The transcript lands in your draft
+for review, and only sending the message sends anything to an agent. Dictation
+also works in citation comments, diff and file annotations, pull request
+comments, replies, and review summaries, and in the desktop app's browser
+annotation editor.
 
-Signed in to T3 Connect, voice input works in the web app, the desktop app, and
-the mobile app, using your account's settings. Signed out, only supported
-iPhones and Android devices can dictate, on the device.
+Audio goes to one place for each recording:
 
-## Before you start
+1. An environment you chose in **Settings → Voice**, if any. T3 Code never falls back
+   from it to anything else.
+2. Otherwise, signed in to T3 Connect, your account's [T3 Connect voice input](#t3-connect-voice-input).
+3. Otherwise, on iPhone and Android, the device itself. Web and desktop then have no
+   microphone button.
+
+To opt in to a named environment on a phone, open **Settings → Voice → Transcribe on**.
+See [Voice input on mobile](./composer.md#voice-input-on-mobile).
+
+## Choose where audio goes
+
+On web and desktop, transcription runs on one of your T3 Code environments.
+Nothing is sent until you choose one: open **Settings → Voice** and set
+**Send microphone audio to** the environment that should transcribe for you.
+Microphone audio recorded on this device is sent to that environment over your
+authenticated connection, transcribed there, and discarded. The choice is saved
+on this device only, so every computer and browser you use asks for it once.
+Set it back to **Off** at any time; a recording in progress is discarded.
+
+If the chosen environment goes offline, voice input waits for it. T3 Code never
+substitutes another environment.
+
+## Set up a model
+
+The first time you dictate, T3 Code offers to download the recommended English
+model to the chosen environment. In **Settings → Voice → Transcription**, select
+the languages you dictate in to compare models that support all of them.
+Accuracy shows how often the model got words or characters wrong in each
+language; speed is the time to transcribe 30 seconds on a reference GPU. Choose
+**All languages** to browse the full catalog. Filtering does not switch your model.
+
+**Advanced** controls GPU or CPU use and when an idle model is unloaded. With hardware set to
+**Auto**, a recording that fails on the GPU is retried once on that same
+environment's CPU; a GPU you picked yourself reports the error instead. Nothing
+is ever retried on another environment. Models marked **Live preview** show
+text while you speak. Other models can process long recordings in chunks at pauses
+while you record; models with built-in long-form support transcribe when you stop.
+
+## Dictate
+
+Press the microphone in the composer, or `mod+shift+d` (`mod` is Command on
+macOS and Ctrl elsewhere). Press again, or the check mark, to finish; `Esc`
+discards the recording and leaves your draft unchanged. Recordings last up to
+five minutes. Text is inserted at the cursor or replaces the selection you had
+when recording started, and the editor is read-only while dictation runs.
+
+Pressing Send while dictating finishes the recording and sends the draft once
+the transcript has been inserted. Cancelling also cancels that queued send. In
+the other editors, Save, Comment, Reply, Submit review, or Attach works the
+same way, and the shortcut targets the editor that has focus, or the composer
+when none does. In the desktop browser's annotation editor, the microphone and
+the shortcut work while the page has focus; the page you are annotating never
+sees the recording, which runs in T3 Code itself.
+
+**Dictation shortcut** in Voice settings picks how the keybinding behaves:
+**Auto** tap-toggles or records while held, **Hold** records only while the keys
+are down, and **Toggle** always needs a second press. Change the chord itself in
+[Keybindings settings](./keybindings.md).
+
+## Improve recognition
+
+- **Language** picks what you speak. **Auto** lets a multilingual model detect
+  it. Models that translate offer **Translate to English**.
+- **Dictionary** holds names and terms the model should get right. Add an alias
+  under a term when transcription keeps producing a particular misspelling.
+  Your dictionary is saved on this device. The name of the project you dictate
+  in is sent along as a hint.
+- **Project dictionary** is vocabulary saved with a project on its environment,
+  so everyone who dictates in that project gets the same spellings. Pick the
+  project at the top of Settings to edit it; with an environment selected, the
+  entries apply to every project there. Project spellings win when they overlap
+  your personal dictionary. Each recording carries up to 100 entries from the
+  two combined.
+- **Silence filtering** is on by default. Your chosen environment skips non-speech
+  audio before transcription. Turn it off to keep those sections. Filtering happens
+  after upload: it does not grant permission to send audio or reduce how much is sent.
+- **Remove filler words** drops hesitation sounds from finished transcripts.
+
+Language and these preferences travel with each recording to the chosen
+environment; nothing else about the project is sent.
+
+## Clean up transcripts with a provider
+
+**Transcript cleanup** is a separate choice and is off by default. When on, the
+finished transcript and up to 1,024 characters each from before, inside, and
+after your selection are sent to the
+text generation provider configured on the draft's environment, which fixes
+punctuation, numbers, and spoken corrections such as "make it 42, sorry, 24".
+Depending on the provider, that can involve an external service. Audio is never
+sent to it. Use the built-in instructions or write your own, press **Skip**
+while cleanup runs to insert the raw transcript, and if cleanup fails the raw
+transcript is inserted.
+
+Cleanup uses the environment's text generation model unless you pick a
+**Cleanup model** for that environment, for example a cheaper or faster one.
+
+If cleanup misses the way you correct yourself, set a **Correction cue**: the
+word or phrase you say to flag a correction, such as "scratch that". Cleanup
+applies the correction only where the context shows one and drops the cue, and
+the model hears the cue as a dictionary hint.
+
+## Test and troubleshoot
+
+In **Settings → Voice**, **Test microphone** beside the microphone selector
+records up to ten seconds and plays it back in your browser;
+the audio stays on this device and is never transcribed, so silent playback
+points at the microphone. **Test model** on the selected model shows a transcript using the
+same environment, language, and dictionary as the composer, but skips transcript
+cleanup even when it is on, so you see what the model heard. Browser recording
+needs HTTPS or localhost and microphone permission; for a remote server over
+plain HTTP, use the desktop app. If the selected microphone is missing, choose
+another or the system default.
+
+## T3 Connect voice input
+
+Signed in to T3 Connect, voice input works in the web app, the desktop app, and the
+mobile app, using your account's settings, unless you chose an environment in
+**Settings → Voice**.
+
+### Sign in
 
 Open **Settings → Connections** and sign in to T3 Connect. The microphone then
 appears in the composer. If it does not, the T3 Connect service you use has voice
 input turned off. Mobile apps that are signed out, or whose service has voice input
-off, fall back to [on-device dictation](#on-device-dictation).
+off, fall back to on-device dictation.
 
 The first recording asks for microphone access. If you declined, allow it in your
 browser's site settings, or on macOS in **System Settings → Privacy & Security →
 Microphone**, then try again.
 
-## Dictate on web and desktop
+### Dictate on web and desktop with T3 Connect
 
 - **Tap** the microphone to start, then click it again to transcribe.
 - **Hold** the microphone to talk, and release to transcribe. Slide up before
@@ -36,15 +156,15 @@ another length; the composer counts down the last ten seconds. If transcription
 fails for a temporary reason, use the retry button next to the microphone. Retrying
 sends the same recording and is not counted twice.
 
-## Dictate on mobile
+### Dictate on mobile with T3 Connect
 
 Use the composer's microphone as usual. Signed in to T3 Connect, iPhone and Android
 transcribe through your account, with the same language, cleanup, dictionary, and
 daily allowance as on desktop. The recording stops at the clip limit.
 
-## Settings
+### T3 Connect settings
 
-**Settings → Voice input** on web and desktop holds settings that follow your T3
+**Settings → T3 Connect voice** on web and desktop holds settings that follow your T3
 Connect account to every device:
 
 - **Language**: the language you speak. **Automatic** detects it for each recording;
@@ -55,7 +175,7 @@ Connect account to every device:
 
 The same page shows how much of today's allowance you have used.
 
-## Daily allowance
+### Daily allowance
 
 Each account can transcribe 30 minutes of audio per day unless the service sets
 another amount. The allowance resets at midnight UTC. A recording counts for its
@@ -63,41 +183,10 @@ length; recordings in which no speech was found still count, and transcriptions 
 fail on the service's side do not. When you reach the limit, T3 Code tells you when it
 resets.
 
-## Privacy
+### Privacy
 
 Recordings travel through T3 Connect to OpenRouter and on to the speech model
 provider, OpenAI, which return the text. T3 Connect does not store
 audio. It keeps the resulting text for up to a day so a retried request returns the
 same transcript, then deletes it. Daily usage totals are kept for a week. Your
 settings are stored with your account until you change them.
-
-## On-device dictation
-
-Without T3 Connect, iPhones with iOS 26 or later and Android devices with Android 12
-or later transcribe on the device: Apple's speech transcription on iOS, compatible
-Google speech services on Android. Use the composer's microphone to record, then
-confirm to transcribe. The first use may download a speech model and needs a network
-connection; later transcription works offline for that language. Recordings can be up
-to five minutes long. On Android, keep T3 Code open while recording and transcribing;
-transcription processes the full recording at roughly its original duration.
-On-device audio never leaves your phone.
-
-Signed out of T3 Connect on a device without on-device transcription, the composer
-has no microphone button and **Settings → Microphone** says voice input isn't
-available.
-
-## Microphones on mobile
-
-Canceling or an audio interruption discards the recording and preserves your existing
-draft. Navigating to another screen keeps dictation active; use the floating controls
-to finish or cancel. While recording, the screen stays awake. T3 Code
-deletes the temporary audio after transcription or cancellation.
-
-Voice input records from the first connected microphone in **Settings → Microphone**.
-The list mixes kinds (built-in, other wired, other Bluetooth, and CarPlay on iOS) with wired and
-Bluetooth devices you have dictated with, listed by name. Drag to rank them together:
-for example, put **Other Bluetooth** above your AirPods so a new headset is preferred
-while the AirPods microphone stays low. By default, CarPlay comes after the built-in
-microphone on iOS. Swipe a device left to forget it. Android may use another input when
-the preferred microphone cannot be routed. Devices with the same name may share a saved
-preference, but simultaneous same-name inputs remain separately selectable.

@@ -225,6 +225,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     const singleRunTerminalId = script.singleRun ? singleRunScriptTerminalId(script.id) : null;
     const reusableTerminalId =
       singleRunTerminalId !== null ||
+      script.stopOnSettle ||
       options?.preferNewTerminal ||
       !canReuseTerminal ||
       !readEnvironmentScope(environmentId, AuthTerminalReadScope)
@@ -269,6 +270,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
           ? { size: scriptTerminalSize }
           : { terminalId: reusableTerminalId }),
       location: { cwd: targetCwd, worktreePath: targetWorktreePath },
+      stopOnSettle: script.stopOnSettle ?? false,
       ...(options?.env ? { extraEnv: options.env } : {}),
     });
     if (!launched) return;

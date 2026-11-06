@@ -145,6 +145,7 @@ export default function ProjectScriptsControl({
       runOnSettle: fileScript.runOnSettle ?? false,
       runOnWorktreeDelete: fileScript.runOnWorktreeDelete ?? false,
       singleRun: fileScript.singleRun ?? false,
+      stopOnSettle: fileScript.stopOnSettle ?? false,
       ...(readEnvironmentScope(environmentId, AuthSettingsWriteScope) ? { keybinding: null } : {}),
       previewUrl: fileScript.previewUrl ?? null,
       autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,

@@ -15,6 +15,7 @@ import {
   rememberMicrophones,
 } from "../../lib/microphonePriority";
 import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
+import { createVoiceRecorder } from "../../native/voiceRecorder";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { managedRelayQueryManager } from "../cloud/managedRelayState";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
@@ -28,6 +29,7 @@ import { getRelayVoiceTranscriber } from "./relayVoiceInput";
 import { VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 import { VoiceInputSession } from "./voiceInputSession";
 import { createVoiceRecordingPermission } from "./voiceRecordingPermission";
+import { voiceRouteAtom } from "./voiceDestination";
 import { makePermissionStatusAtom } from "../../lib/permissionStatusAtom";
 import {
   acquireAudioSession,
@@ -80,8 +82,10 @@ export const localVoiceTranscriberAtom = makePermissionStatusAtom<
   read: () => getLocalVoiceTranscriber().catch(() => null),
 }).pipe(Atom.keepAlive);
 
-// Each foreground re-probe yields a new transcriber; composers re-render only when availability flips.
-const localVoiceInputAvailableAtom = Atom.make((get) => {
+/** A chosen environment decides alone: its audio never falls back to T3 Connect or the device. */
+const voiceInputAvailableAtom = Atom.make((get): boolean | "route-unavailable" => {
+  const route = get(voiceRouteAtom);
+  if (route) return route.transcriber !== null || "route-unavailable";
   const transcriber = get(localVoiceTranscriberAtom);
   return transcriber !== null && transcriber !== "checking";
 });
@@ -95,7 +99,6 @@ const voiceInputAtom = Atom.make((get) => {
   // Mounted so the recorder can read and remember microphones synchronously.
   get.mount(mobilePreferencesAtom);
   get.mount(updateMobilePreferencesAtom);
-  get.mount(localVoiceTranscriberAtom);
   const audioLevels = makeMutable<ReadonlyArray<number>>(
     Array<number>(VOICE_WAVEFORM_SAMPLE_COUNT).fill(0),
   );
@@ -105,7 +108,11 @@ const voiceInputAtom = Atom.make((get) => {
     void session.controller.appMovedToBackground();
   });
   const recorder = createLazyVoiceRecorder({
-    create: () => new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS),
+    getDestination: () => (registry.get(voiceRouteAtom) === null ? "local" : "environment"),
+    create: (destination) =>
+      destination === "local"
+        ? createVoiceRecorder(VOICE_RECORDING_OPTIONS)
+        : new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS),
     onStatus: (status: RecordingStatus) => {
       session.controller.handleRecorderStatus({
         isFinished: status.isFinished,
@@ -133,6 +140,9 @@ const voiceInputAtom = Atom.make((get) => {
   const session: VoiceInputSession = new VoiceInputSession({
     recorder,
     getTranscriber: () => {
+      // An environment the user chose beats the T3 Connect default; on-device is the fallback.
+      const route = registry.get(voiceRouteAtom);
+      if (route) return route.transcriber;
       const local = registry.get(localVoiceTranscriberAtom);
       return getRelayVoiceTranscriber(registry) ?? (local === "checking" ? null : local);
     },
@@ -161,6 +171,7 @@ const voiceInputAtom = Atom.make((get) => {
     publishAudioLevels: (levels) => audioLevels.set(levels),
     keepAwake: () => keepScreenAwake(`voice-input:${++keepAwakeSequence}`),
   });
+  get.subscribe(voiceRouteAtom, () => session.controller.cancel());
   get.addFinalizer(() => {
     permission.dispose();
     session.dispose();
@@ -171,7 +182,7 @@ const voiceInputAtom = Atom.make((get) => {
 
 export function useGlobalVoiceInput() {
   const { session, audioLevels } = useAtomValue(voiceInputAtom);
-  const isTranscriberAvailable = useAtomValue(localVoiceInputAvailableAtom);
+  const isTranscriberAvailable = useAtomValue(voiceInputAvailableAtom);
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
   // Signed-in T3 Connect accounts dictate through the relay; load its status
   // early so the first recording knows its clip limit and language.
@@ -189,7 +200,11 @@ export function useGlobalVoiceInput() {
     ...snapshot,
     // T3 Connect voice input works on any device; on-device dictation needs
     // iOS 26 or Android 12. Store screenshots show the button even on simulators.
-    isAvailable: relayVoiceAvailable || isTranscriberAvailable || getNativeShowcaseScene() !== null,
+    isAvailable:
+      isTranscriberAvailable === "route-unavailable"
+        ? false
+        : relayVoiceAvailable || isTranscriberAvailable || getNativeShowcaseScene() !== null,
+    relayVoiceAvailable,
     audioLevels,
     isBusy: voiceInputBlocksSubmission(snapshot.state),
     session,
