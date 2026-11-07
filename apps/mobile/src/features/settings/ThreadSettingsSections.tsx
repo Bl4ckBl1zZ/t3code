@@ -53,7 +53,7 @@ export function SettingsLabsRouteScreen() {
   );
 }
 
-const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
+const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 7;
 /** Matches the web Storage setting's starting value. */
 const AUTO_DELETE_DEFAULT_DAYS = 8;
 

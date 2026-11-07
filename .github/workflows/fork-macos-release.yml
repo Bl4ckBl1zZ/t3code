@@ -139,15 +139,9 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.version.outputs.version }}"
 
-      - uses: ./.github/actions/setup-apt-mirrors
-
-      # @t3tools/desktop#build compiles the Linux browser secret helper on a
-      # Linux host, and that needs libsecret headers.
-      - name: Install browser secret helper build libraries
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
-
+      # The bundle skips the Linux browser secret helper; the fork ships no Linux build.
       - name: Build JS bundle
-        run: vp run build:desktop
+        run: vp run build:desktop:bundle
 
       # Two paths under apps/ so the artifact root is apps/; the packaging jobs
       # download into `apps` to restore both at their build paths.
