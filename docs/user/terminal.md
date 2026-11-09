@@ -19,6 +19,9 @@ output. Ctrl+A still moves to the beginning of shell input, and Ctrl+C without a
 selection still interrupts the running program, on Windows and Linux.
 Jump to latest in the context menu returns to the current output.
 
+On iPhone and iPad, long-press the terminal to paste or to choose Select Text.
+Select Text shows the visible output, where you can copy text or tap a link.
+
 ## fish
 
 T3 Code starts fish with `no-query-term`, avoiding startup waits for terminal
