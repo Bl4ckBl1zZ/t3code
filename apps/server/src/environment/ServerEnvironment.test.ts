@@ -257,9 +257,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
         return yield* serverEnvironment.getDescriptor;
       }).pipe(
-        Effect.provide(layerServerEnvironment(baseDir)),
         Effect.provide(
-          ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_HOSTED_APP_URL: "none" } })),
+          layerServerEnvironment(baseDir).pipe(
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({ env: { T3CODE_HOSTED_APP_URL: "none" } }),
+              ),
+            ),
+          ),
         ),
       );
       expect(withoutHostedApp.capabilities.mcpHostedApproval).toBeUndefined();
