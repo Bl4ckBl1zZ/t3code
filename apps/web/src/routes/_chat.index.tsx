@@ -12,7 +12,11 @@ import { HostedEmptyState } from "../components/HostedEmptyState";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
-import { useNewThreadHandler, useRememberedNewThreadProject } from "../hooks/useHandleNewThread";
+import {
+  useLastUsedProjectKey,
+  useNewThreadHandler,
+  useRememberedNewThreadProject,
+} from "../hooks/useHandleNewThread";
 import {
   readProject,
   useAllEnvironmentShellsBootstrapped,
@@ -20,7 +24,6 @@ import {
   useVisibleThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
-import { useUiStateStore } from "../uiStateStore";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
@@ -46,7 +49,7 @@ function IndexDraftLanding() {
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
   const rememberedProject = useRememberedNewThreadProject(projects);
-  const rememberedProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
+  const rememberedProjectKey = useLastUsedProjectKey();
   // Waits only while the remembered project's environment may still be loading.
   const landingProject =
     rememberedProject ??

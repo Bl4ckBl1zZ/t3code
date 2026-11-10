@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, RuntimeMode } from "@t3tools/contracts";
 
 const testState = vi.hoisted(() => {
   let completeProjectFileRead: (value: null) => void = () => undefined;
@@ -147,7 +145,8 @@ vi.mock("@effect/atom-react", () => ({
       : testServerConfigs(),
 }));
 vi.mock("@t3tools/client-runtime/environment", () => ({
-  scopedProjectKey: () => "remote-project",
+  scopedProjectKey: (ref: { environmentId: string; projectId: string }) =>
+    `${ref.environmentId}:${ref.projectId}`,
   scopeProjectRef: (environmentId: string, projectId: string) => ({ environmentId, projectId }),
   scopeThreadRef: (environmentId: string, threadId: string) => ({ environmentId, threadId }),
 }));
@@ -185,7 +184,9 @@ vi.mock("react", () => ({
   useCallback: <T>(callback: T) => callback,
   useMemo: <T>(factory: () => T) => factory(),
 }));
-vi.mock("../components/Sidebar.logic", () => ({ orderItemsByPreferredIds: () => [] }));
+vi.mock("../components/Sidebar.logic", () => ({
+  orderItemsByPreferredIds: ({ items }: { items: unknown[] }) => items,
+}));
 vi.mock("../composerDraftStore", () => {
   const useComposerDraftStore = Object.assign(() => null, {
     getState: () => testState.draftStore,
@@ -232,6 +233,7 @@ vi.mock("../state/entities", () => {
     useThread: () => null,
   };
 });
+vi.mock("../state/projects", () => ({ defaultProjectFallbackReadyAtom: () => true }));
 vi.mock("../state/olderSettledShelf", () => ({ readUnloadedThreadCount: () => 0 }));
 vi.mock("../state/presentation", () => ({
   environmentSummaries: { connectedEnvironmentIdsAtom: "connected-environment-ids" },
@@ -370,24 +372,38 @@ describe("useNewThreadHandler", () => {
   });
 });
 
-describe("resolveDefaultProjectRef", () => {
-  it("skips a remembered project that has since been archived", () => {
-    const project = (id: string, archivedAt: string | null) =>
-      ({
-        environmentId: "environment-primary",
-        id,
-        workspaceRoot: `/${id}`,
-        archivedAt,
-      }) as unknown as EnvironmentProject;
-    const archived = project("archived", "2026-10-01T00:00:00.000Z");
-    const active = project("active", null);
-
+describe("default project selection", () => {
+  it("prefers the last used project in its environment and falls back when unavailable", () => {
+    const projects = [
+      { id: "project", environmentId: "first", workspaceRoot: "/first" },
+      { id: "project", environmentId: "last-used", workspaceRoot: "/last-used" },
+    ].map((project) => ({
+      ...project,
+      id: project.id as ProjectId,
+      environmentId: project.environmentId as EnvironmentId,
+      title: project.environmentId,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-11-09T00:00:00.000Z",
+      updatedAt: "2026-11-09T00:00:00.000Z",
+    }));
+    expect(resolveDefaultProjectRef(projects, [], "last-used:project")).toEqual({
+      environmentId: "last-used",
+      projectId: "project",
+    });
+    expect(
+      resolveDefaultProjectRef(projects.slice(0, 1), [], "last-used:project", false),
+    ).toBeNull();
+    expect(resolveDefaultProjectRef(projects.slice(0, 1), [], "last-used:project")).toEqual({
+      environmentId: "first",
+      projectId: "project",
+    });
     expect(
       resolveDefaultProjectRef(
-        [archived, active],
+        [projects[0]!, { ...projects[1]!, archivedAt: "2026-11-09T00:00:00.000Z" }],
         [],
-        scopedProjectKey(scopeProjectRef(archived.environmentId, archived.id)),
+        "last-used:project",
       ),
-    ).toEqual(scopeProjectRef(active.environmentId, active.id));
+    ).toEqual({ environmentId: "first", projectId: "project" });
   });
 });
