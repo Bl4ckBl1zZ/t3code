@@ -3229,6 +3229,8 @@ function collectUnpackedAsarFiles(
 const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  // Only native-host builds generate the compile cache; the budget was set on cross-builds without it.
+  const compileCacheDir = path.join(root, "resources", "server-compile-cache");
   const pendingDirectories = [root];
   let count = 0;
 
@@ -3240,7 +3242,7 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
       const entryPath = path.join(directory, entry);
       const stat = yield* fs.stat(entryPath);
       if (stat.type === "Directory") {
-        pendingDirectories.push(entryPath);
+        if (entryPath !== compileCacheDir) pendingDirectories.push(entryPath);
       } else if (stat.type === "File") {
         count += 1;
       }
