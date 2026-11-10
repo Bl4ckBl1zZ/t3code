@@ -42,10 +42,28 @@ import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { getClientSettings } from "./useSettings";
+import { getLocalStorageItem, useLocalStorage } from "./useLocalStorage";
+import * as Schema from "effect/Schema";
+import { useAtomValue } from "@effect/atom-react";
+import { defaultProjectFallbackReadyAtom } from "../state/projects";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
+
+export const LAST_USED_PROJECT_STORAGE_KEY = "t3code:last-used-project:v1";
+export const lastUsedProjectKeySchema = Schema.NullOr(Schema.String);
+
+/** The project of the thread or draft last open, else the one a thread was last started in. */
+export function readLastUsedProjectKey(): string | null {
+  let stored: string | null = null;
+  try {
+    stored = getLocalStorageItem(LAST_USED_PROJECT_STORAGE_KEY, lastUsedProjectKeySchema);
+  } catch {
+    stored = null;
+  }
+  return stored ?? useUiStateStore.getState().lastNewThreadProjectKey;
+}
 
 interface NewThreadWorkspaceOptions {
   branch?: string | null;
@@ -445,8 +463,15 @@ function findRememberedProject<
       ) ?? null);
 }
 
+/** Reactive {@link readLastUsedProjectKey}. */
+export function useLastUsedProjectKey(): string | null {
+  const [stored] = useLocalStorage(LAST_USED_PROJECT_STORAGE_KEY, null, lastUsedProjectKeySchema);
+  const lastNewThreadProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
+  return stored ?? lastNewThreadProjectKey;
+}
+
 /**
- * The project the user last started a thread in, among `projects`. Null when
+ * The project the user last worked in (see {@link readLastUsedProjectKey}), among `projects`. Null when
  * nothing is remembered or that project is gone or archived, so callers fall back to their
  * own default.
  */
@@ -457,19 +482,19 @@ export function useRememberedNewThreadProject<
     readonly archivedAt?: string | null | undefined;
   },
 >(projects: ReadonlyArray<Project>): Project | null {
-  const lastProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
-  return findRememberedProject(projects, lastProjectKey);
+  return findRememberedProject(projects, useLastUsedProjectKey());
 }
 
 export function resolveDefaultProjectRef(
   projects: ReadonlyArray<EnvironmentProject>,
   projectOrder: readonly string[],
-  lastProjectKey: string | null,
+  lastUsedProjectKey: string | null,
+  fallbackReady = true,
 ): ScopedProjectRef | null {
-  // The last project a thread was started in is a fresher signal of where the
-  // user works than their sidebar drag order.
-  const remembered = findRememberedProject(projects, lastProjectKey);
+  // The last project the user worked in is a fresher signal than their sidebar drag order.
+  const remembered = findRememberedProject(projects, lastUsedProjectKey);
   if (remembered) return scopeProjectRef(remembered.environmentId, remembered.id);
+  if (!fallbackReady) return null;
   const [defaultProject] = orderItemsByPreferredIds({
     items: projects.filter((project) => project.archivedAt == null),
     preferredIds: projectOrder,
@@ -484,6 +509,10 @@ export function resolveDefaultProjectRef(
 
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const lastUsedProjectKey = useLastUsedProjectKey();
+  const defaultProjectFallbackReady = useAtomValue(
+    defaultProjectFallbackReadyAtom(lastUsedProjectKey),
+  );
   const routeTarget = useThreadRouteTarget();
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
@@ -498,13 +527,18 @@ export function useHandleNewThread() {
   );
   const projects = useProjects();
   const handleNewThread = useNewThreadHandler();
-  const lastProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
-  const defaultProjectRef = resolveDefaultProjectRef(projects, projectOrder, lastProjectKey);
+  const defaultProjectRef = resolveDefaultProjectRef(
+    projects,
+    projectOrder,
+    lastUsedProjectKey,
+    defaultProjectFallbackReady,
+  );
 
   return {
     activeDraftThread,
     activeThread,
     defaultProjectRef,
+    defaultProjectFallbackReady,
     handleNewThread,
     routeDraftId,
     routeThreadRef,

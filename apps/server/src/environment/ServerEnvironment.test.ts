@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -250,6 +251,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
       expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.projectProviderInstanceOverrides).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
+      expect(second.capabilities.mcpHostedApproval).toBe(true);
+
+      const withoutHostedApp = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(
+          layerServerEnvironment(baseDir).pipe(
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({ env: { T3CODE_HOSTED_APP_URL: "none" } }),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(withoutHostedApp.capabilities.mcpHostedApproval).toBeUndefined();
     }),
   );
 

@@ -17,6 +17,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { resolveServerInstallation } from "../cli/invocation.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
+import { hostedAppUrlConfig } from "../cloud/publicConfig.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
@@ -207,6 +208,8 @@ export const make = Effect.gen(function* () {
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
 
   const databaseMigration = databaseMigrationHead(serverConfig.dbPath);
+  // Agent sign-ins are approved on the hosted app only when the build has one.
+  const hostedAppUrl = yield* hostedAppUrlConfig.pipe(Effect.orElseSucceed(() => null));
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
     label,
@@ -250,6 +253,7 @@ export const make = Effect.gen(function* () {
       environmentThemes: true,
       usageLimitSources: true,
       providerWorkspaceSnapshotsOnDemand: true,
+      modelCatalogRefresh: true,
       usagePriceOverrides: true,
       usageModelAliases: true,
       threadPinning: true,
@@ -289,6 +293,8 @@ export const make = Effect.gen(function* () {
       peerLinks: true,
       mcpModeLimitHeader: true,
       linkFence: true,
+      mcpApprovalCodes: true,
+      ...(hostedAppUrl === null ? {} : { mcpHostedApproval: true }),
     },
   };
 
