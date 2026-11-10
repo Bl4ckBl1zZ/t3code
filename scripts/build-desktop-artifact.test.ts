@@ -1347,6 +1347,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "file-limit-exceeded");
         assert.isAbove(error.fileCount ?? 0, 2);
+
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const compileCacheDir = path.join(fixture.packagedAppDir, "resources/server-compile-cache");
+        yield* fs.makeDirectory(compileCacheDir, { recursive: true });
+        for (const file of ["manifest.json", "05831047", "1c7dc616"]) {
+          yield* fs.writeFileString(path.join(compileCacheDir, file), "cache");
+        }
+        const withCompileCache = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+          fileLimit: 2,
+        }).pipe(Effect.flip);
+        assert.instanceOf(withCompileCache, WindowsPackagedPayloadValidationError);
+        assert.equal(withCompileCache.fileCount, error.fileCount);
       }),
     ),
   );
