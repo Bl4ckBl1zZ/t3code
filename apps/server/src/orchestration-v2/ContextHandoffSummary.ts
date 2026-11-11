@@ -115,6 +115,7 @@ const make = Effect.gen(function* () {
               : input.fromProviderInstanceIds.join(", "),
           toProvider: input.toProviderInstanceId,
           modelSelection: settings.textGenerationModelSelection,
+          projectId: input.projectId,
         })
         .pipe(Effect.timeoutOption(SUMMARY_TIMEOUT));
       if (Option.isNone(generated)) {
