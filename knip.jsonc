@@ -28,6 +28,10 @@
         "linux-after-pack.ts",
         "mobile-behavior/run.ts",
         "mobile-native-client.ts",
+        // e2e loads its config and the scenarios by path, and starts the app script.
+        "e2e.config.ts",
+        "prove-scenario.ts",
+        "scenarios/*.ts",
         "setup-worktree.ts",
         "ios-release.ts",
         "sign-macos.ts",
@@ -38,7 +42,7 @@
         "build-cli-archive.ts",
         "resolve-nightly-release.ts",
       ],
-      "ignoreDependencies": ["agent-device", "esbuild"],
+      "ignoreDependencies": ["esbuild"],
       // The `t3` npm package's files: copied into the package, never imported.
       // knip-schemas.test.ts writes a throwaway project to .knip-test-*, which a
       // knip run beside it in check:changed must not report.
