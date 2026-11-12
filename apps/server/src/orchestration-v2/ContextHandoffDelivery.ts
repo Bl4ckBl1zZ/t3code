@@ -75,7 +75,7 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       .join("\n");
     if (historyCost([], coverage) > Math.min(4_000, budget / 2)) {
       const strategies = Array.from(new Set(pending.map((handoff) => handoff.strategy)));
-      coverage = `Context handoff (${strategies.join(", ")}). ${pending.length} handoff records; detailed coverage references omitted. Recover history with t3_thread_read({threadId:"${input.providerThread.appThreadId ?? pending[0]!.threadId}",view:"activity",limit:20,maxCharsPerItem:4000}); paginate with afterPosition=nextPosition. Follow fork/handoff source references in activity. For long items use itemId and textOffset=nextTextOffset until null.`;
+      coverage = `Context handoff (${strategies.join(", ")}). ${pending.length} handoff records; detailed coverage references omitted. Recover an omitted item only when the request needs it, with t3_thread_read({threadId:"${input.providerThread.appThreadId ?? pending[0]!.threadId}",view:"activity",itemId:"<omitted item ID>",maxCharsPerItem:4000}); continue long text with textOffset=nextTextOffset until null. Follow fork/handoff source references in activity. Items included below need no read.`;
     }
     const seen = new Set(input.alreadyDeliveredItemIds);
     const messages = pending
@@ -97,10 +97,12 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       (sum, handoff) => sum + (handoff.history?.omittedItems ?? 0),
       0,
     );
+    const priorOmittedItemIds = pending.flatMap((handoff) => handoff.history?.omittedItemIds ?? []);
     let selected = selectHistory({
       messages,
       coverage: fullCoverage,
       omittedItems: priorOmittedItems,
+      omittedItemIds: priorOmittedItemIds,
       budget,
     });
     // Whatever does not fit verbatim is summarized into space reserved ahead of
@@ -113,13 +115,14 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
         messages,
         coverage: fullCoverage,
         omittedItems: priorOmittedItems,
+        omittedItemIds: priorOmittedItemIds,
         budget: budget - reserve,
       });
       const roomOmitted = new Set(room.omittedItemIds);
       const summary =
         storedSummary ??
         (yield* input.summarize!({
-          omittedItemIds: pending.flatMap((handoff) => handoff.history?.omittedItemIds ?? []),
+          omittedItemIds: priorOmittedItemIds,
           omittedMessages: messages.filter((message) => roomOmitted.has(message.itemId)),
         }));
       const coverageSummary =
@@ -129,6 +132,7 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
           messages: room.messages,
           coverage: coverageSummary,
           omittedItems: room.omittedItems,
+          omittedItemIds: [...priorOmittedItemIds, ...room.omittedItemIds],
           budget,
         });
         if (historyCost(summarized.messages, summarized.context) <= budget) {

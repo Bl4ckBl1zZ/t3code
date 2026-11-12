@@ -11,6 +11,7 @@
       "entry": [
         // CodeRabbit loads its configuration by filename.
         ".coderabbit.config.ts",
+        ".github/scripts/pr-limits.cjs",
       ],
     },
     "scripts": {
