@@ -310,7 +310,7 @@ export function HtmlRenderDocument(
     }
     const imageRequest = readHtmlRenderImageRequest(event.data);
     if (imageRequest !== undefined) {
-      setExpandedImage({ images: [{ src: imageRequest.src, name: imageRequest.name }], index: 0 });
+      setExpandedImage({ images: [...imageRequest.images], index: imageRequest.index });
     }
   });
   // Attach at commit because a fast page may post its initial height before passive effects run.
