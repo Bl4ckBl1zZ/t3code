@@ -1,0 +1,16 @@
+diff --git a/build/platforms/apple/moduleScanner.js b/build/platforms/apple/moduleScanner.js
+index 093a8f5a3bf5c7b0578b64ea112e9606d201779b..592f2652027b6a3a70077a9d168601615afd5d4d 100644
+--- a/build/platforms/apple/moduleScanner.js
++++ b/build/platforms/apple/moduleScanner.js
+@@ -136,8 +136,10 @@ async function scanExpoModulesAsync(scanner, packageRoots) {
+     }
+     let output;
+     try {
++        // A cold scan of every package root takes longer than 5s on CI macOS runners, and a
++        // timed-out scan drops module classes from the provider, which fails the archive.
+         output = await scanner.scanModules(roots, {
+-            timeout: 5000
++            timeout: 120000
+         });
+     } catch (error) {
+         console.warn(`warning: Scanning for Expo modules failed, only modules declared in expo-module.config.json will be linked: ${error.message ?? error}`);

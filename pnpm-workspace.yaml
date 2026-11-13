@@ -276,6 +276,8 @@ patchedDependencies:
   "@legendapp/list@3.7.2": patches/@legendapp__list@3.7.2.patch
   # Android: double-tap zoom no longer cancels itself, and taps near a link open it.
   react-native-pdf-jsi@6.1.0: patches/react-native-pdf-jsi@6.1.0.patch
+  # iOS archives: the module scan gets 2 minutes instead of 5s, so a slow CI runner keeps module classes.
+  expo-modules-autolinking@58.0.17: patches/expo-modules-autolinking@58.0.17.patch
 
 # Unmet peers fail resolution, so a pin outside a dependency's peer range is
 # caught when the lockfile changes instead of scrolling past as a warning.
