@@ -487,7 +487,10 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
 
     // Remote and default-branch lookups fall back on any failure, so their stderr is never parsed.
     const parsedCommands = commands.filter(
-      ({ args }) => args[0] !== "symbolic-ref" && args[0] !== "remote",
+      ({ args }) =>
+        args[0] !== "symbolic-ref" &&
+        args[0] !== "remote" &&
+        !args.includes("refs/remotes/origin/HEAD"),
     );
     // Status reads run concurrently, so their order is not stable.
     assert.sameDeepMembers(parsedCommands, [
