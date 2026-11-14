@@ -279,6 +279,7 @@ export const make = Effect.gen(function* () {
       vcsLocalStatusRefresh: true,
       projectOrganization: true,
       ignoredFileListing: true,
+      ignoredFileSearch: true,
       triage: true,
       oneTimeSchedules: true,
       freshContext: true,

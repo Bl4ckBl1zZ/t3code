@@ -395,8 +395,15 @@ export const DesktopTelemetrySetAgentActivity = Schema.Struct({
   busy: Schema.Boolean,
 });
 export type DesktopTelemetrySetAgentActivity = typeof DesktopTelemetrySetAgentActivity.Type;
+/** The server accepts requests; the desktop treats this as backend readiness. */
+export const DesktopTelemetryServerReady = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("serverReady"),
+});
+export type DesktopTelemetryServerReady = typeof DesktopTelemetryServerReady.Type;
 
 export const DesktopTelemetryControlMessage = Schema.Union([
+  DesktopTelemetryServerReady,
   DesktopTelemetrySetDiagnosticsDemand,
   DesktopTelemetrySetHostPowerIntervals,
   DesktopTelemetryRequestDesktopUpdate,

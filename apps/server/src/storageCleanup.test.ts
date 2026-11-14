@@ -2620,6 +2620,114 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
+  it.effect("removes an idle No project thread's scratch folder past the retention", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* cleanupFixture();
+        const scratchRoot = `${fixture.config.baseDir}/scratch`;
+        const folder = `${scratchRoot}/quiet-otter`;
+        yield* fixture.fs.makeDirectory(folder, { recursive: true });
+        yield* fixture.fs.writeFileString(`${folder}/notes.md`, "scratch\n");
+        fixture.setProjectRoots([scratchRoot]);
+        fixture.setStoredWorktreePaths([]);
+        // Only this rule lets cleanup delete untracked files, which is all a scratch folder has.
+        fixture.setPolicy("tracked-changes");
+        fixture.setThreads([
+          shell({ worktreePath: folder, settledAt: at(-20 * DAY_MS), status: "completed" }),
+        ]);
+        const report = yield* fixture.service.runNow;
+        expect(report.entries).toEqual([
+          expect.objectContaining({ path: folder, outcome: "removed" }),
+        ]);
+        expect(yield* fixture.fs.exists(folder)).toBe(false);
+      }),
+    ),
+  );
+  it.effect.each([
+    {
+      name: "a Git repository in a subfolder",
+      policy: "tracked-changes",
+      repository: "clone/.git",
+      reason: "Contains a nested Git repository",
+    },
+    {
+      name: "a Git repository of its own",
+      policy: "tracked-changes",
+      repository: ".git",
+      reason: "Contains a nested Git repository",
+    },
+    { name: "files under the default keep rule", reason: "Has local files (notes.md)" },
+    {
+      name: "a scheduled task",
+      policy: "tracked-changes",
+      scheduled: true,
+      reason: "Thread has a scheduled task",
+    },
+  ] as const)(
+    "keeps an idle No project thread's scratch folder with $name",
+    ({
+      policy,
+      repository,
+      scheduled,
+      reason,
+    }: {
+      readonly policy?: WorktreeKeepWhen;
+      readonly repository?: string;
+      readonly scheduled?: boolean;
+      readonly reason: string;
+    }) =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(NOW_MS);
+          const fixture = yield* cleanupFixture();
+          const scratchRoot = `${fixture.config.baseDir}/scratch`;
+          const folder = `${scratchRoot}/quiet-otter`;
+          yield* fixture.fs.makeDirectory(
+            repository === undefined ? folder : `${folder}/${repository}`,
+            { recursive: true },
+          );
+          yield* fixture.fs.writeFileString(`${folder}/notes.md`, "scratch\n");
+          // No thread owns this one, so it is listed and never removed.
+          const leftover = `${scratchRoot}/leftover`;
+          yield* fixture.fs.makeDirectory(leftover);
+          yield* fixture.fs.utimes(leftover, 1, 1);
+          fixture.setProjectRoots([scratchRoot]);
+          fixture.setStoredWorktreePaths([]);
+          if (policy !== undefined) fixture.setPolicy(policy);
+          if (scheduled) fixture.setScheduledThreadIds(["thread-1"]);
+          fixture.setThreads([
+            shell({ worktreePath: folder, settledAt: at(-20 * DAY_MS), status: "completed" }),
+          ]);
+          const report = yield* fixture.service.runNow;
+          expect(
+            report.entries.map(({ path, outcome, reason }) => ({ path, outcome, reason })),
+          ).toEqual([
+            { path: leftover, outcome: "kept", reason: "No thread uses this folder" },
+            { path: folder, outcome: "kept", reason },
+          ]);
+          expect(yield* fixture.fs.exists(`${folder}/notes.md`)).toBe(true);
+        }),
+      ),
+  );
+  it.effect("keeps a thread's worktree folder that lost its .git link", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* cleanupFixture();
+        fixture.setThreads([
+          shell({ branch: "feature", worktreePath: fixture.worktree, archivedAt: at(-DAY_MS) }),
+        ]);
+        yield* fixture.fs.remove(`${fixture.worktree}/.git`);
+        yield* fixture.fs.makeDirectory(`${fixture.worktree}/node_modules`);
+        const report = yield* fixture.service.runNow;
+        expect(report.entries).toEqual([
+          expect.objectContaining({ path: fixture.worktree, outcome: "kept" }),
+        ]);
+        expect(yield* fixture.fs.exists(`${fixture.worktree}/node_modules`)).toBe(true);
+      }),
+    ),
+  );
   it.live("skips a stored worktree path whose parent is a regular file", () =>
     runCleanupTest(
       Effect.gen(function* () {
