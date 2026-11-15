@@ -24,7 +24,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   OrchestrationV2AppThreadJson,
   StorageCleanupReport,
-  type OrchestrationV2ServerCommand,
   type TerminalMetadataStreamEvent,
   type WorktreeKeepWhen,
   type StorageCleanupSettings,
@@ -531,52 +530,53 @@ const cleanupFixture = (
         SqlClient.SqlClient,
         sqlOverride ??
           (((strings: TemplateStringsArray, ...values: Array<unknown>) =>
-        Effect.sync(() => {
-          const text = strings.join("?");
-          if (text.includes("retained_checkpoint_threads")) return [];
-          if (text.includes("FROM orchestration_v2_projection_checkpoints"))
-            return checkpointRefs.map((ref) => ({ ref }));
-          if (text.includes("FROM scheduled_tasks"))
-            return scheduledThreadIds.map((threadId) => ({ threadId }));
-          if (text.includes("'thread.settled'")) {
-            const occurredAt = settledEvents.get(String(values[0]));
-            return occurredAt === undefined ? [] : [{ occurredAt }];
-          }
-          if (text.includes("deleted_at IS NOT NULL"))
-            return [
-              ...deletedRows,
-              ...deletedThreads.map((thread) => ({
-                payload_json: JSON.stringify(thread),
-                workspaceRoot: repo,
-                autoDeleted: 0,
-              })),
-            ];
-          return openSessionCwd !== null && text.includes("projection_provider_sessions")
-            ? [
-                {
-                  payload_json: JSON.stringify({
-                    id: "session-1",
-                    driver: "codex",
-                    providerInstanceId: "codex",
-                    status: "ready",
-                    cwd: openSessionCwd,
-                    model: null,
-                    capabilities: CodexProviderCapabilitiesV2,
-                    createdAt: "2026-06-01T12:00:00.000Z",
-                    updatedAt: "2026-06-01T12:00:00.000Z",
-                    lastError: null,
-                  }),
-                },
-              ]
-            : outboxStatus !== null && text.includes("orchestration_v2_effect_outbox")
-              ? [{ status: outboxStatus }]
-              : text.includes('AS "worktreePath"')
+            Effect.sync(() => {
+              const text = strings.join("?");
+              if (text.includes("retained_checkpoint_threads")) return [];
+              if (text.includes("FROM orchestration_v2_projection_checkpoints"))
+                return checkpointRefs.map((ref) => ({ ref }));
+              if (text.includes("FROM scheduled_tasks"))
+                return scheduledThreadIds.map((threadId) => ({ threadId }));
+              if (text.includes("'thread.settled'")) {
+                const occurredAt = settledEvents.get(String(values[0]));
+                return occurredAt === undefined ? [] : [{ occurredAt }];
+              }
+              if (text.includes("deleted_at IS NOT NULL"))
+                return [
+                  ...deletedRows,
+                  ...deletedThreads.map((thread) => ({
+                    payload_json: JSON.stringify(thread),
+                    workspaceRoot: repo,
+                    autoDeleted: 0,
+                  })),
+                ];
+              return openSessionCwd !== null && text.includes("projection_provider_sessions")
                 ? [
-                    ...threads.flatMap((thread) => thread.worktreePath ?? []),
-                    ...storedWorktreePaths,
-                  ].map((worktreePath) => ({ worktreePath }))
-                : [];
-        })) as unknown as SqlClient.SqlClient)),
+                    {
+                      payload_json: JSON.stringify({
+                        id: "session-1",
+                        driver: "codex",
+                        providerInstanceId: "codex",
+                        status: "ready",
+                        cwd: openSessionCwd,
+                        model: null,
+                        capabilities: CodexProviderCapabilitiesV2,
+                        createdAt: "2026-06-01T12:00:00.000Z",
+                        updatedAt: "2026-06-01T12:00:00.000Z",
+                        lastError: null,
+                      }),
+                    },
+                  ]
+                : outboxStatus !== null && text.includes("orchestration_v2_effect_outbox")
+                  ? [{ status: outboxStatus }]
+                  : text.includes('AS "worktreePath"')
+                    ? [
+                        ...threads.flatMap((thread) => thread.worktreePath ?? []),
+                        ...storedWorktreePaths,
+                      ].map((worktreePath) => ({ worktreePath }))
+                    : [];
+            })) as unknown as SqlClient.SqlClient),
+      ),
       Effect.provideService(GitManager.GitManager, {
         invalidateStatus: () => Effect.void,
       } as unknown as GitManager.GitManager["Service"]),
@@ -1851,7 +1851,6 @@ describe("deleted thread worktrees", () => {
       expect(fixture.threadBranches()).toEqual(["feature"]);
     }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
   );
-
 
   it.effect("removes a deleted thread's scratch folder", () =>
     Effect.gen(function* () {

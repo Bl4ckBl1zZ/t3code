@@ -1285,7 +1285,6 @@ it.layer(
     }),
   );
 
-
   it.effect("restores a log tail that starts inside a control sequence without its remainder", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
