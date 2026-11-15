@@ -45,6 +45,7 @@ import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { announce } from "../lib/announce";
 import { readLocalApi } from "../localApi";
 import {
+  readDelegatedUnderParent,
   readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentThreadRefs,
@@ -476,10 +477,18 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
+      // Deleting a thread also deletes its side chats, which share its worktree.
+      const removedIds = new Set(deletingIds);
+      for (const thread of threads) {
+        const parentId = thread.lineage.parentThreadId;
+        if (thread.lineage.sideChat === true && parentId !== null && deletingIds.has(parentId)) {
+          removedIds.add(thread.id);
+        }
+      }
       const environmentConfig = appAtomRegistry
         .get(environmentServerConfigsAtom)
         .get(environmentId);
-      const candidates = [...getWorktreesOrphanedByDeletion(threads, deletingIds)].flatMap(
+      const candidates = [...getWorktreesOrphanedByDeletion(threads, removedIds)].flatMap(
         ([worktreePath, ownerIds]) => {
           const owner = threads.find((thread) => thread.id === ownerIds[0]);
           const project = owner ? readProject({ environmentId, projectId: owner.projectId }) : null;
@@ -497,8 +506,10 @@ export function useThreadActions() {
               environmentId,
               projectCwd: project.workspaceRoot,
               worktreePath,
-              ownerKeys: ownerIds.map((threadId) =>
-                scopedThreadKey(scopeThreadRef(environmentId, threadId)),
+              ownerKeys: ownerIds.flatMap((threadId) =>
+                deletingIds.has(threadId)
+                  ? [scopedThreadKey(scopeThreadRef(environmentId, threadId))]
+                  : [],
               ),
             },
           ];
@@ -515,7 +526,7 @@ export function useThreadActions() {
           });
           if (
             occupants._tag !== "Success" ||
-            occupants.value.threadIds.some((threadId) => !deletingIds.has(threadId))
+            occupants.value.threadIds.some((threadId) => !removedIds.has(threadId))
           ) {
             continue;
           }
@@ -679,6 +690,7 @@ export function useThreadActions() {
       deletedThreadIds: batchThreadIds,
       sortOrder: sidebarThreadSortOrder,
       now: new Date().toISOString(),
+      delegatedUnderParent: readDelegatedUnderParent(),
     });
     let navigatedDuringDelete = false;
     // The missing-thread redirect and the index draft replace this entry; any other history
@@ -794,7 +806,7 @@ export function useThreadActions() {
   ): Promise<AtomCommandResult<unknown, unknown>> =>
     (await deleteThreads([target])).lastResult ?? AsyncResult.success(undefined);
 
-  const unsettleThread = async (target: ScopedThreadRef) => {
+  const unsettleThread = async (target: ScopedThreadRef, restoreUnsettledAt?: string | null) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
         Cause.fail(
@@ -809,7 +821,11 @@ export function useThreadActions() {
     // reason "user" pins active until real activity, suppressing auto-settle.
     return unsettleThreadMutation({
       environmentId: target.environmentId,
-      input: { threadId: target.threadId, reason: "user" },
+      input: {
+        threadId: target.threadId,
+        reason: "user",
+        ...(restoreUnsettledAt === undefined ? {} : { restoreUnsettledAt }),
+      },
     });
   };
 
@@ -1052,11 +1068,13 @@ export function useThreadActions() {
       async (step) => {
         switch (step.action) {
           case "unsettle":
-            return unsettleThread(target);
+            return unsettleThread(target, step.restoreUnsettledAt);
           case "unsnooze":
             return unsnoozeThread(target);
           case "pin":
             return sendPin(target, step.orderKey === undefined ? {} : { orderKey: step.orderKey });
+          case "reorderActive":
+            return reorderActiveThread(target, step.orderKey);
           case "snooze":
             return snoozeThreadMutation({
               environmentId: target.environmentId,

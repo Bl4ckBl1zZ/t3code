@@ -15,7 +15,6 @@ import {
   CopyIcon,
   ExternalLinkIcon,
   GlobeIcon,
-  LoaderCircleIcon,
   SquareIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -30,6 +29,7 @@ import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { openDiscoveredPort } from "../preview/openDiscoveredPort";
+import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -234,7 +234,7 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                         onClick={() => void stop(row)}
                       >
                         {stoppingKey === row.key ? (
-                          <LoaderCircleIcon aria-hidden className="size-3 animate-spin" />
+                          <Spinner aria-hidden size="xs" />
                         ) : (
                           <SquareIcon aria-hidden className="size-3 fill-current" />
                         )}
