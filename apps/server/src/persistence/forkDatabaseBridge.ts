@@ -354,6 +354,8 @@ export const upgradeForkDatabase = Effect.fn("upgradeForkDatabase")(function* <E
   >,
 ) {
   const sql = yield* SqlClient.SqlClient;
+  // The transaction takes the write lock, which a current or read-only database must not need.
+  if ((yield* readForkMigrationId) === undefined) return [];
   return yield* sql.withTransaction(
     Effect.gen(function* () {
       const forkMigrationId = yield* readForkMigrationId;
