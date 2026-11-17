@@ -47,8 +47,9 @@ vi.mock("../../state/preferences", () => ({
 vi.mock("./components/AutoSettleDaysField", () => ({ AutoSettleDaysField: () => null }));
 // The fork's auto-delete days field renders a native SwiftUI control.
 vi.mock("../../components/ui/NumberField", () => ({ NumberField: () => null }));
-vi.mock("./components/SourceControlSignInSection", () => ({
-  SourceControlSignInSection: () => null,
+vi.mock("./components/IssueTrackerSection", () => ({ IssueTrackerSection: () => null }));
+vi.mock("./components/SourceControlProvidersSection", () => ({
+  SourceControlProvidersSection: () => null,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("@react-navigation/native", () => ({ useNavigation: () => ({}) }));
