@@ -363,11 +363,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    name: Test Web
+    name: Test Web ${{ matrix.shard }}
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test_web != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # One runner's Chromium drops its page partway through the full browser suite.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -412,9 +417,10 @@ jobs:
       # 4 vCPU runners it times out while other browser files run beside it, so it runs alone.
       - name: Test
         working-directory: apps/web
-        run: vp test run --passWithNoTests --project unit --project browser --exclude src/components/files/AttachmentFilePreview.browser.test.tsx --exclude src/components/files/AttachmentFilePreview.office.browser.test.tsx
+        run: vp test run --passWithNoTests --shard ${{ matrix.shard }}/${{ strategy.job-total }} --project unit --project browser --exclude src/components/files/AttachmentFilePreview.browser.test.tsx --exclude src/components/files/AttachmentFilePreview.office.browser.test.tsx
 
       - name: Test document previews
+        if: matrix.shard == 1
         working-directory: apps/web
         run: vp test run --project browser src/components/files/AttachmentFilePreview.browser.test.tsx src/components/files/AttachmentFilePreview.office.browser.test.tsx
 
