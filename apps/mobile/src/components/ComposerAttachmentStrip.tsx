@@ -6,7 +6,8 @@ import { videoMimeType } from "@t3tools/shared/video";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { Paths } from "expo-file-system";
-import { Image, Pressable, ScrollView, View } from "react-native";
+import { useEffect, useRef } from "react";
+import { Image, Pressable, ScrollView, View, type ViewInstance } from "react-native";
 
 import { AppText as Text } from "./ui/AppText";
 import { MaterializedPreviewKey, materializedPreviewAtom } from "../lib/composerImagePreview";
@@ -19,6 +20,10 @@ import {
 } from "../lib/composerImages";
 import { resolveOwnedComposerAttachmentFileUri } from "../lib/composerAttachmentFiles";
 import { rememberDraftImage } from "../lib/sentImageHandoff";
+import {
+  reportComposerAttachmentFlightTarget,
+  useComposerAttachmentInFlight,
+} from "../lib/composerAttachmentFlight";
 import { VideoAttachmentTile } from "./VideoAttachmentTile";
 import { type MediaActionsSource } from "../lib/mediaActionsSource";
 import { PresentationSource } from "./ui/NativePresentation";
@@ -61,8 +66,19 @@ type ComposerAttachmentThumbnailProps = {
 
 export function ComposerAttachmentThumbnail(props: ComposerAttachmentThumbnailProps) {
   const upload = useComposerAttachmentUploadState(props.environmentId, props.attachment.id);
+  const attachmentId = props.attachment.id;
+  const inFlight = useComposerAttachmentInFlight(attachmentId);
+  const frame = useRef<ViewInstance>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the native frame a captured photo flies into
+  useEffect(() => {
+    if (inFlight) reportFlightTarget(frame.current, attachmentId);
+  }, [inFlight, attachmentId]);
   return (
-    <View style={{ width: props.size, height: props.size }}>
+    <View
+      ref={frame}
+      onLayout={inFlight ? () => reportFlightTarget(frame.current, attachmentId) : undefined}
+      style={{ width: props.size, height: props.size, opacity: inFlight ? 0 : 1 }}
+    >
       <ComposerAttachmentContent {...props} />
       {upload && upload.status !== "ready" ? (
         <Pressable
@@ -94,6 +110,12 @@ export function ComposerAttachmentThumbnail(props: ComposerAttachmentThumbnailPr
         </Pressable>
       ) : null}
     </View>
+  );
+}
+
+function reportFlightTarget(view: ViewInstance | null, attachmentId: string) {
+  view?.measureInWindow((x, y, width, height) =>
+    reportComposerAttachmentFlightTarget(attachmentId, { x, y, width, height }),
   );
 }
 

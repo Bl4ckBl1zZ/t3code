@@ -1125,6 +1125,7 @@ function ThreadRouteContent(
           onChangeDraftMessage={composer.onChangeDraftMessage}
           onPickDraftMedia={composer.onPickDraftMedia}
           onPickDraftFiles={composer.onPickDraftFiles}
+          onAddDraftMediaAssets={composer.onAddDraftMediaAssets}
           onNativePasteImages={composer.onNativePasteImages}
           onNativePasteText={composer.onNativePasteText}
           onRemoveDraftImage={composer.onRemoveDraftImage}

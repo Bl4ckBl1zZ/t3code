@@ -284,6 +284,7 @@ export interface ThreadDetailScreenProps {
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
+  readonly onAddDraftMediaAssets: ThreadComposerProps["onAddDraftMediaAssets"];
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
@@ -1861,6 +1862,7 @@ function ThreadDetailBody(
                         onChangeDraftMessage={props.onChangeDraftMessage}
                         onPickDraftMedia={props.onPickDraftMedia}
                         onPickDraftFiles={props.onPickDraftFiles}
+                        onAddDraftMediaAssets={props.onAddDraftMediaAssets}
                         onNativePasteImages={props.onNativePasteImages}
                         onNativePasteText={props.onNativePasteText}
                         onRemoveDraftImage={props.onRemoveDraftImage}
