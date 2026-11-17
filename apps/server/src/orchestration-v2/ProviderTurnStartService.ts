@@ -1834,7 +1834,7 @@ export const layer: Layer.Layer<
                 cwd: resolvedRuntimePolicy.cwd,
                 fromProviderInstanceIds: Array.from(
                   new Set(
-                    [...effectiveHandoffs, ...retryHandoff].flatMap((handoff) =>
+                    [...effectiveHandoffs, ...retryHandoff.handoffs].flatMap((handoff) =>
                       handoff.fromProviderThreadIds.flatMap((id) => {
                         const source = projection.providerThreads.find(
                           (candidate) => candidate.id === id,
