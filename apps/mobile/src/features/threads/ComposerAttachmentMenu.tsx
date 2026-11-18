@@ -87,6 +87,7 @@ export function ComposerAttachmentMenu(props: {
   const flightHeight = useSharedValue(0);
   const flightRadius = useSharedValue(PANEL_RADIUS);
   const flightOpacity = useSharedValue(0);
+  const flightProgress = useSharedValue(0);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the native open animation once the overlay mounts
   useEffect(() => {
@@ -138,8 +139,14 @@ export function ComposerAttachmentMenu(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the overlay floats above every screen, so leaving this one closes it
   useEffect(() => navigation.addListener("blur", () => onDismissed()), [navigation, onDismissed]);
 
-  const addAssets = async (assets: ReadonlyArray<ComposerMediaAsset>) => {
-    const result = await props.onAddMediaAssets(assets).catch(() => null);
+  const addAssets = async (assets: ReadonlyArray<ComposerMediaAsset>, unreadable: number) => {
+    const error =
+      unreadable === 0
+        ? undefined
+        : unreadable === 1
+          ? "A photo could not be read from your library."
+          : `${unreadable} photos could not be read from your library.`;
+    const result = await props.onAddMediaAssets(assets, { error }).catch(() => null);
     dismiss(result?.showProblems);
   };
 
@@ -190,8 +197,11 @@ export function ComposerAttachmentMenu(props: {
     flightHeight.set(withTiming(destination.height, FLIGHT_TIMING));
     // Composer thumbnails round their corners to about a fifth of their size.
     flightRadius.set(withTiming(rect ? rect.width * 0.22 : destination.width / 2, FLIGHT_TIMING));
-    flightOpacity.set(
-      withTiming(rect ? 1 : 0, FLIGHT_TIMING, () => {
+    flightOpacity.set(withTiming(rect ? 1 : 0, FLIGHT_TIMING));
+    // Reanimated completes at once when a value already equals its target, so land on a 0 → 1 run.
+    flightProgress.set(0);
+    flightProgress.set(
+      withTiming(1, FLIGHT_TIMING, () => {
         scheduleOnRN(land);
       }),
     );
@@ -295,7 +305,7 @@ export function ComposerAttachmentMenu(props: {
                   height={panel.height}
                   onBack={backToMenu}
                   onOpenLibrary={() => dismiss(() => void props.onPickMedia())}
-                  onAdd={(assets) => void addAssets(assets)}
+                  onAdd={addAssets}
                 />
               )}
             </Animated.View>

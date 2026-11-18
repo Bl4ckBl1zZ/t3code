@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Linking, Platform, Pressable, StyleSheet, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { subscribeAppActive } from "../../lib/appState";
 import { AppText as Text } from "../../components/ui/AppText";
 import type { ComposerMediaAsset } from "../../lib/composerImages";
 import { ComposerOverlayButton } from "./ComposerOverlayButton";
@@ -27,10 +28,11 @@ export function ComposerPhotoGridPanel(props: {
   readonly height: number;
   readonly onBack: () => void;
   readonly onOpenLibrary: () => void;
-  readonly onAdd: (assets: ReadonlyArray<ComposerMediaAsset>) => void;
+  /** `unreadable` counts selected photos the library could not hand over. */
+  readonly onAdd: (assets: ReadonlyArray<ComposerMediaAsset>, unreadable: number) => Promise<void>;
 }) {
   const gt = useGT();
-  const [permission, requestPermission] = usePermissions({
+  const [permission, requestPermission, getPermission] = usePermissions({
     request: true,
     granularPermissions: ["photo"],
   });
@@ -59,6 +61,9 @@ export function ComposerPhotoGridPanel(props: {
     };
   }, [granted]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- access granted in Settings is only visible after re-reading it on return
+  useEffect(() => subscribeAppActive(() => void getPermission()), [getPermission]);
+
   const toggle = (asset: Asset) =>
     setSelected((current) =>
       current.includes(asset.id)
@@ -73,8 +78,10 @@ export function ComposerPhotoGridPanel(props: {
     setAdding(true);
     const chosen = selected.flatMap((id) => page.assets.find((asset) => asset.id === id) ?? []);
     const assets = await Promise.all(chosen.map(resolvePhoto));
+    const resolved = assets.flatMap((asset) => asset ?? []);
+    // Stays disabled until the append settles, so a second tap cannot add the same photos again.
+    await props.onAdd(resolved, assets.length - resolved.length);
     setAdding(false);
-    props.onAdd(assets.flatMap((asset) => asset ?? []));
   };
 
   return (

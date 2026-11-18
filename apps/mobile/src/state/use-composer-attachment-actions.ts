@@ -79,10 +79,18 @@ export function useComposerAttachmentActions(props: {
   /** For in-app capture: problems are returned, not alerted, so the caller can close its overlay first. */
   const onAddDraftMediaAssets = async (
     assets: ReadonlyArray<ComposerMediaAsset>,
-    options?: { readonly beforeAppend?: (attachmentIds: ReadonlyArray<string>) => void },
+    options?: {
+      readonly beforeAppend?: (attachmentIds: ReadonlyArray<string>) => void;
+      /** A problem the caller hit before conversion, reported with the rest. */
+      readonly error?: string;
+    },
   ): Promise<ComposerMediaAssetsResult> => {
     const key = props.draftKey;
-    if (!key || props.locked || !assets.length) return { attachmentIds: [], showProblems: noop };
+    if (!key || props.locked) return { attachmentIds: [], showProblems: noop };
+    const title = "Could not attach photo";
+    if (!assets.length) {
+      return { attachmentIds: [], showProblems: () => report(title, options?.error, 0) };
+    }
     const insertion = captureComposerDraftInsertion(key);
     let attachmentIds: ReadonlyArray<string> = [];
     let showProblems: () => void = noop;
@@ -95,7 +103,8 @@ export function useComposerAttachmentActions(props: {
       const rejected = await append(key, signal, result.attachments, insertion);
       const added = new Set(getComposerDraftSnapshot(key).attachments.map(({ id }) => id));
       attachmentIds = result.attachments.flatMap(({ id }) => (added.has(id) ? [id] : []));
-      showProblems = () => report("Could not attach photo", result.error, rejected);
+      const error = [options?.error, result.error].filter(Boolean).join("\n\n") || null;
+      showProblems = () => report(title, error, rejected);
     });
     return { attachmentIds, showProblems };
   };

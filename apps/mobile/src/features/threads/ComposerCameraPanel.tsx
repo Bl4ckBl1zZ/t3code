@@ -2,10 +2,11 @@ import { CameraView, useCameraPermissions, type CameraType } from "expo-camera";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { useGT } from "gt-react-native";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Linking, Pressable, StyleSheet, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { subscribeAppActive } from "../../lib/appState";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ComposerOverlayButton } from "./ComposerOverlayButton";
 
@@ -22,7 +23,9 @@ export function ComposerCameraPanel(props: {
 }) {
   const gt = useGT();
   const camera = useRef<CameraView>(null);
-  const [permission, requestPermission] = useCameraPermissions({ request: true });
+  const [permission, requestPermission, getPermission] = useCameraPermissions({ request: true });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- access granted in Settings is only visible after re-reading it on return
+  useEffect(() => subscribeAppActive(() => void getPermission()), [getPermission]);
   const [facing, setFacing] = useState<CameraType>("back");
   const [ready, setReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
