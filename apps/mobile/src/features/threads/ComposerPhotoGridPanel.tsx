@@ -8,6 +8,7 @@ import {
   usePermissions,
   type Asset,
 } from "expo-media-library/legacy";
+import { useGT } from "gt-react-native";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Linking, Platform, Pressable, StyleSheet, View } from "react-native";
 
@@ -30,6 +31,7 @@ export function ComposerPhotoGridPanel(props: {
   /** `unreadable` counts selected photos the library could not hand over. */
   readonly onAdd: (assets: ReadonlyArray<ComposerMediaAsset>, unreadable: number) => Promise<void>;
 }) {
+  const gt = useGT();
   const [permission, requestPermission, getPermission] = usePermissions({
     request: true,
     granularPermissions: ["photo"],
@@ -128,7 +130,7 @@ export function ComposerPhotoGridPanel(props: {
         <View className="flex-1 items-center justify-center gap-4 px-8 pb-16">
           <SymbolView name="photo" size={34} tintColor="#ffffff" type="monochrome" />
           <Text className="text-center text-[15px] text-white">
-            Allow photo access to see your recent photos here.
+            {gt("Allow photo access to see your recent photos here.")}
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -138,7 +140,7 @@ export function ComposerPhotoGridPanel(props: {
             }
           >
             <Text className="text-[15px] font-t3-bold text-black">
-              {permission.canAskAgain ? "Allow Photos" : "Open Settings"}
+              {permission.canAskAgain ? gt("Allow Photos") : gt("Open Settings")}
             </Text>
           </Pressable>
         </View>
@@ -148,7 +150,7 @@ export function ComposerPhotoGridPanel(props: {
         className="absolute inset-x-0 bottom-0 flex-row items-center justify-between px-5 pb-5"
       >
         <ComposerOverlayButton
-          accessibilityLabel="Back"
+          accessibilityLabel={gt("Back")}
           symbol="chevron.left"
           onPress={props.onBack}
         />
@@ -163,7 +165,9 @@ export function ComposerPhotoGridPanel(props: {
               <ActivityIndicator color="#000000" />
             ) : (
               <Text className="text-[17px] font-t3-bold text-black">
-                {selected.length === 1 ? "Add 1 photo" : `Add ${selected.length} photos`}
+                {gt("{count, plural, one {Add {count} photo} other {Add {count} photos}}", {
+                  count: selected.length,
+                })}
               </Text>
             )}
           </Pressable>
@@ -176,7 +180,7 @@ export function ComposerPhotoGridPanel(props: {
             {Platform.OS === "ios" ? (
               <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
             ) : null}
-            <Text className="text-[17px] font-t3-bold text-white">All Photos</Text>
+            <Text className="text-[17px] font-t3-bold text-white">{gt("All Photos")}</Text>
           </Pressable>
         )}
       </View>

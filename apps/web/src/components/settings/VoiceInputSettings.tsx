@@ -6,6 +6,7 @@ import {
   type VoiceInputSettingsPatch,
 } from "@t3tools/contracts/relay";
 import { useNavigate } from "@tanstack/react-router";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { useState } from "react";
 
 import {
@@ -19,33 +20,35 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { m, type MessageResolver } from "../../i18n/messages";
+import { useSearchableSetting } from "./settingsSearch";
 
 const AUTOMATIC_LANGUAGE = "auto";
 
 /** Spoken-language hints offered in the picker. The model handles others on automatic. */
 const VOICE_LANGUAGES: ReadonlyArray<{ readonly code: string; readonly label: string }> = [
-  { code: "en", label: "English" },
-  { code: "de", label: "German" },
-  { code: "es", label: "Spanish" },
-  { code: "fr", label: "French" },
-  { code: "it", label: "Italian" },
-  { code: "pt", label: "Portuguese" },
-  { code: "nl", label: "Dutch" },
-  { code: "pl", label: "Polish" },
-  { code: "sv", label: "Swedish" },
-  { code: "tr", label: "Turkish" },
-  { code: "uk", label: "Ukrainian" },
-  { code: "ru", label: "Russian" },
-  { code: "ja", label: "Japanese" },
-  { code: "ko", label: "Korean" },
-  { code: "zh", label: "Chinese" },
-  { code: "hi", label: "Hindi" },
+  { code: "en", label: msg("English") },
+  { code: "de", label: msg("German") },
+  { code: "es", label: msg("Spanish") },
+  { code: "fr", label: msg("French") },
+  { code: "it", label: msg("Italian") },
+  { code: "pt", label: msg("Portuguese") },
+  { code: "nl", label: msg("Dutch") },
+  { code: "pl", label: msg("Polish") },
+  { code: "sv", label: msg("Swedish") },
+  { code: "tr", label: msg("Turkish") },
+  { code: "uk", label: msg("Ukrainian") },
+  { code: "ru", label: msg("Russian") },
+  { code: "ja", label: msg("Japanese") },
+  { code: "ko", label: msg("Korean") },
+  { code: "zh", label: msg("Chinese") },
+  { code: "hi", label: msg("Hindi") },
 ];
 
-function languageLabel(code: string | null): string {
-  if (code === null) return "Automatic";
-  return VOICE_LANGUAGES.find((language) => language.code === code)?.label ?? code;
+function languageLabel(code: string | null, resolve: MessageResolver = m): string {
+  if (code === null) return resolve(msg("Automatic"));
+  const label = VOICE_LANGUAGES.find((language) => language.code === code)?.label;
+  return label === undefined ? code : resolve(label);
 }
 
 /** One entry per line, trimmed, without blanks or repeats. */
@@ -73,10 +76,11 @@ function VoiceInputUnavailable(props: {
   readonly showConnect?: boolean;
 }) {
   const navigate = useNavigate();
+  const gt = useGT();
   return (
-    <SettingsSection title="Voice input">
+    <SettingsSection title={gt("Voice input")}>
       <SettingsRow
-        title="Voice input"
+        title={gt("Voice input")}
         description={props.message}
         control={
           props.showConnect ? (
@@ -85,7 +89,7 @@ function VoiceInputUnavailable(props: {
               variant="outline"
               onClick={() => void navigate({ to: "/settings/connections" })}
             >
-              Open Connections
+              <T>Open Connections</T>
             </Button>
           ) : null
         }
@@ -98,17 +102,20 @@ function DictionaryRow(props: {
   readonly dictionary: ReadonlyArray<string>;
   readonly onCommit: (dictionary: string[]) => void;
 }) {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const saved = props.dictionary.join("\n");
   const [draft, setDraft] = useState<string | null>(null);
   return (
     <SettingsRow
       {...searchableSetting("voice-input-dictionary")}
-      description="Names and terms to spell exactly, one per line."
+      description={gt("Names and terms to spell exactly, one per line.")}
     >
       <div className="px-3 pb-3 sm:px-4">
         <Textarea
-          aria-label="Voice dictionary"
+          aria-label={gt("Voice dictionary")}
           rows={4}
+          // oxlint-disable-next-line t3code/no-untranslated-copy -- example vocabulary entries, not UI copy
           placeholder={"T3 Code\nKubernetes\nuseEffect"}
           value={draft ?? saved}
           onFocus={() => setDraft(saved)}
@@ -125,6 +132,9 @@ function DictionaryRow(props: {
 }
 
 export function VoiceInputSettingsPanel() {
+  const gt = useGT();
+  const messages = useMessages();
+  const searchableSetting = useSearchableSetting();
   const session = useAtomValue(managedRelaySessionAtom);
   const voice = useManagedRelayVoiceInput();
   const updateSettings = useAtomCommand(updateManagedRelayVoiceInputSettingsCommand, {
@@ -142,13 +152,19 @@ export function VoiceInputSettingsPanel() {
   const content = (() => {
     if (!hasCloudPublicConfig()) {
       return (
-        <VoiceInputUnavailable message="Voice input transcribes through T3 Connect, which this build does not include." />
+        <VoiceInputUnavailable
+          message={gt(
+            "Voice input transcribes through T3 Connect, which this build does not include.",
+          )}
+        />
       );
     }
     if (!session) {
       return (
         <VoiceInputUnavailable
-          message="Sign in to T3 Connect to use voice input. Your settings and daily allowance follow your account."
+          message={gt(
+            "Sign in to T3 Connect to use voice input. Your settings and daily allowance follow your account.",
+          )}
           showConnect
         />
       );
@@ -157,19 +173,23 @@ export function VoiceInputSettingsPanel() {
       return <VoiceInputUnavailable message={voice.error} />;
     }
     if (!voice.data) {
-      return <VoiceInputUnavailable message="Loading…" />;
+      return <VoiceInputUnavailable message={gt("Loading…")} />;
     }
     const status = voice.data;
     const settings = { ...status.settings, ...pending };
     return (
       <>
         {status.available ? null : (
-          <VoiceInputUnavailable message="Voice input is turned off for T3 Connect right now. Your settings are kept." />
+          <VoiceInputUnavailable
+            message={gt(
+              "Voice input is turned off for T3 Connect right now. Your settings are kept.",
+            )}
+          />
         )}
-        <SettingsSection title="Transcription">
+        <SettingsSection title={gt("Transcription")}>
           <SettingsRow
             {...searchableSetting("voice-input-language")}
-            description="The language you speak. Automatic detects it per recording."
+            description={gt("The language you speak. Automatic detects it per recording.")}
             control={
               <Select
                 value={settings.language ?? AUTOMATIC_LANGUAGE}
@@ -178,16 +198,20 @@ export function VoiceInputSettingsPanel() {
                   void save({ language: value === AUTOMATIC_LANGUAGE ? null : value });
                 }}
               >
-                <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Spoken language">
-                  <SelectValue>{languageLabel(settings.language ?? null)}</SelectValue>
+                <SelectTrigger
+                  size="sm"
+                  className="w-full sm:w-44"
+                  aria-label={gt("Spoken language")}
+                >
+                  <SelectValue>{languageLabel(settings.language ?? null, messages)}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   <SelectItem hideIndicator value={AUTOMATIC_LANGUAGE}>
-                    Automatic
+                    <T>Automatic</T>
                   </SelectItem>
                   {VOICE_LANGUAGES.map((language) => (
                     <SelectItem key={language.code} hideIndicator value={language.code}>
-                      {language.label}
+                      {messages(language.label)}
                     </SelectItem>
                   ))}
                 </SelectPopup>
@@ -196,10 +220,10 @@ export function VoiceInputSettingsPanel() {
           />
           <SettingsRow
             {...searchableSetting("voice-input-cleanup")}
-            description="Fix punctuation and casing and drop filler words, without rewording."
+            description={gt("Fix punctuation and casing and drop filler words, without rewording.")}
             control={
               <Switch
-                aria-label="Clean up transcripts"
+                aria-label={gt("Clean up transcripts")}
                 checked={settings.cleanup ?? true}
                 onCheckedChange={(checked) => void save({ cleanup: checked })}
               />
@@ -210,10 +234,19 @@ export function VoiceInputSettingsPanel() {
             onCommit={(dictionary) => void save({ dictionary })}
           />
         </SettingsSection>
-        <SettingsSection title="Allowance">
+        <SettingsSection
+          title={gt("Allowance", { $context: "settings section: daily voice input minutes" })}
+        >
           <SettingsRow
             {...searchableSetting("voice-input-usage")}
-            description={`${formatMinutes(status.usedSecondsToday)} of ${formatMinutes(status.limits.dailySeconds)} minutes used today (resets at midnight UTC). Recordings stop after ${formatMinutes(status.limits.maxClipSeconds)} minutes.`}
+            description={gt(
+              "{used} of {limit} minutes used today (resets at midnight UTC). Recordings stop after {clip} minutes.",
+              {
+                used: formatMinutes(status.usedSecondsToday),
+                limit: formatMinutes(status.limits.dailySeconds),
+                clip: formatMinutes(status.limits.maxClipSeconds),
+              },
+            )}
           />
         </SettingsSection>
       </>

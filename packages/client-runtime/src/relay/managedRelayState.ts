@@ -1,4 +1,12 @@
 import type { VoiceInputSettingsPatch, VoiceTranscriptionRequest } from "@t3tools/contracts/relay";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
+import {
+  MarkedText,
+  messageFromError,
+  resolveMarkedText,
+  translatableMessage,
+} from "../errors/translatable.ts";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { RelayVoiceInputError } from "@t3tools/contracts/relay";
 import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
@@ -14,6 +22,7 @@ import { findErrorTraceId } from "../errors/errorTrace.ts";
 import * as ManagedRelay from "./managedRelay.ts";
 import {
   relayProtectedErrorMessage,
+  relayProtectedErrorText,
   relayVoiceInputErrorIsRetryable,
   relayVoiceInputErrorMessage,
 } from "./errorPresentation.ts";
@@ -49,6 +58,8 @@ interface ManagedRelaySessionControl {
 export interface ManagedRelaySnapshotState<A> {
   readonly data: A | null;
   readonly error: string | null;
+  /** `error` as marked text, when the failure carries it. */
+  readonly i18nError?: MarkedText;
   readonly errorTraceId: string | null;
   readonly isPending: boolean;
 }
@@ -67,6 +78,7 @@ export class ManagedRelaySessionError extends Schema.TaggedError<ManagedRelaySes
   "ManagedRelaySessionError",
   {
     message: Schema.String,
+    i18nMessage: Schema.optionalKey(MarkedText),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -140,15 +152,15 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
           try: () => readCachedClerkToken(nowMillis),
           catch: (cause) =>
             new ManagedRelaySessionError({
-              message: "Could not obtain the T3 Connect session token.",
+              ...translatableMessage(msg("Could not obtain the T3 Connect session token.")),
               cause,
             }),
         }).pipe(Effect.timeoutOption(CLERK_TOKEN_READ_TIMEOUT_MS));
         if (Option.isSome(token)) return token.value;
       }
-      return yield* new ManagedRelaySessionError({
-        message: "Timed out obtaining the T3 Connect session token.",
-      });
+      return yield* new ManagedRelaySessionError(
+        translatableMessage(msg("Timed out obtaining the T3 Connect session token.")),
+      );
     }),
   };
   managedRelaySessionControls.set(session, {
@@ -201,23 +213,27 @@ function readSessionClerkToken(
     Effect.filterOrFail(
       (token): token is string => Boolean(token),
       () =>
-        new ManagedRelaySessionError({
-          message: "The T3 Connect session token is unavailable.",
-        }),
+        new ManagedRelaySessionError(
+          translatableMessage(msg("The T3 Connect session token is unavailable.")),
+        ),
     ),
   );
 }
 
+const SIGN_IN_BEFORE = {
+  deregister: msg("Sign in to T3 Connect before deregistering an environment."),
+  "link-t3chat": msg("Sign in to T3 Connect before linking T3 Chat."),
+  "unlink-t3chat": msg("Sign in to T3 Connect before unlinking T3 Chat."),
+};
+
 function requireSessionClerkToken(
   registry: AtomRegistry.AtomRegistry,
   accountId: string,
-  action: string,
+  action: "deregister" | "link-t3chat" | "unlink-t3chat",
 ): Effect.Effect<string, ManagedRelaySessionError> {
   const session = registry.get(managedRelaySessionAtom);
   if (!session || session.accountId !== accountId) {
-    return Effect.fail(
-      new ManagedRelaySessionError({ message: `Sign in to T3 Connect before ${action}.` }),
-    );
+    return Effect.fail(new ManagedRelaySessionError(translatableMessage(SIGN_IN_BEFORE[action])));
   }
   return readSessionClerkToken(session);
 }
@@ -228,11 +244,7 @@ export const deregisterManagedRelayEnvironment = Effect.fn(
   registry: AtomRegistry.AtomRegistry,
   input: { readonly accountId: string; readonly environmentId: EnvironmentId },
 ) {
-  const clerkToken = yield* requireSessionClerkToken(
-    registry,
-    input.accountId,
-    "deregistering an environment",
-  );
+  const clerkToken = yield* requireSessionClerkToken(registry, input.accountId, "deregister");
   const relay = yield* ManagedRelay.ManagedRelayClient;
   yield* relay.unlinkEnvironment({ clerkToken, environmentId: input.environmentId });
 });
@@ -246,14 +258,16 @@ export const updateManagedRelayVoiceInputSettings = Effect.fn(
 ) {
   const session = registry.get(managedRelaySessionAtom);
   if (!session || session.accountId !== input.accountId) {
-    return yield* new ManagedRelaySessionError({
-      message: "Sign in to T3 Connect to change voice input settings.",
-    });
+    return yield* new ManagedRelaySessionError(
+      translatableMessage(msg("Sign in to T3 Connect to change voice input settings.")),
+    );
   }
   const clerkToken = yield* readSessionClerkToken(session);
   const relay = yield* ManagedRelay.ManagedRelayClient;
   return yield* relay.updateVoiceInputSettings({ clerkToken, patch: input.patch });
 });
+
+const SIGN_IN_FOR_VOICE = msg("Sign in to T3 Connect to use voice input.");
 
 /** Transcribes a clip with the signed-in account's relay voice input. */
 export const transcribeManagedRelayVoice = Effect.fn(
@@ -261,9 +275,7 @@ export const transcribeManagedRelayVoice = Effect.fn(
 )(function* (registry: AtomRegistry.AtomRegistry, request: VoiceTranscriptionRequest) {
   const session = registry.get(managedRelaySessionAtom);
   if (!session) {
-    return yield* new ManagedRelaySessionError({
-      message: "Sign in to T3 Connect to use voice input.",
-    });
+    return yield* new ManagedRelaySessionError(translatableMessage(SIGN_IN_FOR_VOICE));
   }
   const clerkToken = yield* readSessionClerkToken(session);
   const relay = yield* ManagedRelay.ManagedRelayClient;
@@ -271,47 +283,48 @@ export const transcribeManagedRelayVoice = Effect.fn(
 });
 
 /** What to tell the user when `transcribeManagedRelayVoice` fails, and whether resending the clip can help. */
-export function describeManagedRelayVoiceFailure(cause: unknown): {
+export function describeManagedRelayVoiceFailure(
+  cause: unknown,
+  resolve: MFunctionType = mFallback,
+): {
   readonly message: string;
   readonly canRetry: boolean;
 } {
   if (isRelayVoiceInputError(cause)) {
     return {
-      message: relayVoiceInputErrorMessage(cause),
+      message: relayVoiceInputErrorMessage(cause, resolve),
       canRetry: relayVoiceInputErrorIsRetryable(cause),
     };
   }
   if (isManagedRelaySessionError(cause)) {
-    return { message: "Sign in to T3 Connect to use voice input.", canRetry: false };
+    return { message: resolve(SIGN_IN_FOR_VOICE), canRetry: false };
   }
   if (isManagedRelayRequestTimeoutError(cause)) {
-    return { message: "Transcription timed out.", canRetry: true };
+    return { message: resolve(msg("Transcription timed out.")), canRetry: true };
   }
   if (isManagedRelayRequestFailedError(cause)) {
     return {
-      message: cause.relayError ? relayProtectedErrorMessage(cause.relayError) : cause.message,
+      message: cause.relayError
+        ? relayProtectedErrorMessage(cause.relayError, resolve)
+        : resolveMarkedText(cause.i18nMessage, resolve),
       canRetry: cause.transportFailed === true || cause.relayError === undefined,
     };
   }
-  return { message: "Transcription failed.", canRetry: true };
+  return { message: resolve(msg("Transcription failed.")), canRetry: true };
 }
 
 /** Returns the T3 Chat page URL where the signed-in user confirms the link. */
 export const createManagedRelayT3ChatLinkRequest = Effect.fn(
   "clientRuntime.managedRelaySession.createT3ChatLinkRequest",
 )(function* (registry: AtomRegistry.AtomRegistry, input: { readonly accountId: string }) {
-  const clerkToken = yield* requireSessionClerkToken(registry, input.accountId, "linking T3 Chat");
+  const clerkToken = yield* requireSessionClerkToken(registry, input.accountId, "link-t3chat");
   const relay = yield* ManagedRelay.ManagedRelayClient;
   return (yield* relay.createT3ChatLinkRequest({ clerkToken })).url;
 });
 
 export const unlinkManagedRelayT3Chat = Effect.fn("clientRuntime.managedRelaySession.unlinkT3Chat")(
   function* (registry: AtomRegistry.AtomRegistry, input: { readonly accountId: string }) {
-    const clerkToken = yield* requireSessionClerkToken(
-      registry,
-      input.accountId,
-      "unlinking T3 Chat",
-    );
+    const clerkToken = yield* requireSessionClerkToken(registry, input.accountId, "unlink-t3chat");
     const relay = yield* ManagedRelay.ManagedRelayClient;
     yield* relay.unlinkT3Chat({ clerkToken });
   },
@@ -324,9 +337,9 @@ function requireClerkToken(
   const session = get(managedRelaySessionAtom);
   if (!session || session.accountId !== accountId) {
     return Effect.fail(
-      new ManagedRelaySessionError({
-        message: "Sign in to T3 Connect before loading relay data.",
-      }),
+      new ManagedRelaySessionError(
+        translatableMessage(msg("Sign in to T3 Connect before loading relay data.")),
+      ),
     );
   }
   return readSessionClerkToken(session);
@@ -334,18 +347,17 @@ function requireClerkToken(
 
 function describeManagedRelayFailure(cause: Cause.Cause<unknown>): {
   readonly message: string;
+  readonly i18nMessage?: MarkedText;
   readonly traceId: string | null;
 } {
   const error = Cause.squash(cause);
-  return {
-    message:
-      isManagedRelayRequestFailedError(error) && error.relayError
-        ? relayProtectedErrorMessage(error.relayError)
-        : error instanceof Error
-          ? error.message
-          : "Could not load T3 Connect data.",
-    traceId: findErrorTraceId(error),
-  };
+  const traceId = findErrorTraceId(error);
+  if (isManagedRelayRequestFailedError(error) && error.relayError) {
+    return { ...translatableMessage(...relayProtectedErrorText(error.relayError)), traceId };
+  }
+  return error instanceof Error
+    ? { ...messageFromError(error), traceId }
+    : { ...translatableMessage(msg("Could not load T3 Connect data.")), traceId };
 }
 
 export function readManagedRelaySnapshotState<A>(
@@ -355,6 +367,7 @@ export function readManagedRelaySnapshotState<A>(
   return {
     data: AsyncResult.getOrElse(result, () => null),
     error: failure?.message ?? null,
+    ...(failure?.i18nMessage !== undefined ? { i18nError: failure.i18nMessage } : {}),
     errorTraceId: failure?.traceId ?? null,
     isPending: result.waiting,
   };

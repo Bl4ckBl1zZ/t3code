@@ -1,4 +1,5 @@
 import { clampHtmlRenderHeight } from "@t3tools/shared/htmlRender";
+import { T, useGT } from "gt-react";
 import { useState } from "react";
 
 import { LRUCache } from "~/lib/lruCache";
@@ -19,6 +20,7 @@ const reportedHeights = new LRUCache<number>(64, 1 << 20);
  */
 export function LegacyHtmlEmbedFrame(props: { readonly html: string }) {
   const { html } = props;
+  const gt = useGT();
   const [contentHeight, setContentHeight] = useState(() => reportedHeights.get(html));
   const handleContentHeight = (height: number) => {
     reportedHeights.set(html, height, html.length * 2 + 16);
@@ -29,7 +31,7 @@ export function LegacyHtmlEmbedFrame(props: { readonly html: string }) {
       <HtmlRenderDocument
         key={html}
         html={html}
-        title="Interactive embed"
+        title={gt("Interactive embed")}
         className="block size-full"
         onContentHeight={handleContentHeight}
       />
@@ -43,16 +45,19 @@ export function LegacyHtmlEmbedDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  const gt = useGT();
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogPopup className="h-[85vh] max-w-5xl">
         <DialogHeader>
-          <DialogTitle>Interactive embed</DialogTitle>
+          <DialogTitle>
+            <T>Interactive embed</T>
+          </DialogTitle>
         </DialogHeader>
         {props.open ? (
           <HtmlRenderDocument
             html={props.html}
-            title="Interactive embed"
+            title={gt("Interactive embed")}
             className="min-h-0 flex-1 rounded-b-2xl"
           />
         ) : null}

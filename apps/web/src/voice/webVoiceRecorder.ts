@@ -1,4 +1,7 @@
 import * as Schema from "effect/Schema";
+import { msg } from "gt-react";
+
+import { m } from "../i18n/messages";
 
 import { bytesToBase64, encodeMonoWav, VOICE_WAV_SAMPLE_RATE } from "./wavEncoding";
 
@@ -21,13 +24,17 @@ function microphoneError(reason: MicrophoneFailure, cause?: unknown): Microphone
 function microphoneFailureMessage(reason: MicrophoneFailure): string {
   switch (reason) {
     case "unsupported":
-      return "This browser cannot record audio here.";
+      return m(msg("This browser cannot record audio here."));
     case "denied":
-      return "Microphone access is blocked. Allow it for T3 Code in your browser or system settings.";
+      return m(
+        msg(
+          "Microphone access is blocked. Allow it for T3 Code in your browser or system settings.",
+        ),
+      );
     case "no-device":
-      return "No microphone was found.";
+      return m(msg("No microphone was found."));
     case "failed":
-      return "The microphone could not start.";
+      return m(msg("The microphone could not start."));
   }
 }
 

@@ -5,9 +5,11 @@ import {
 import type { VoiceTranscriptionRequest } from "@t3tools/contracts/relay";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
+import { msg } from "gt-react";
 import { useSyncExternalStore } from "react";
 
 import { refreshManagedRelayVoiceInput } from "../cloud/managedRelayState";
+import { m } from "../i18n/messages";
 import { randomUUID } from "../lib/utils";
 import { runtime } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -129,7 +131,7 @@ async function transcribe(
   transcription = null;
   refreshManagedRelayVoiceInput();
   if (Exit.isFailure(exit)) {
-    const failure = describeManagedRelayVoiceFailure(Cause.squash(exit.cause));
+    const failure = describeManagedRelayVoiceFailure(Cause.squash(exit.cause), m);
     if (!failure.canRetry) pendingClip = null;
     setState({ phase: "failed", targetKey: current.key, ...failure });
     return;
@@ -163,7 +165,7 @@ export async function startVoiceRecording(next: VoiceTarget): Promise<void> {
     setState({
       phase: "failed",
       targetKey: next.key,
-      message: cause instanceof Error ? cause.message : "The microphone could not start.",
+      message: cause instanceof Error ? cause.message : m(msg("The microphone could not start.")),
       canRetry: false,
     });
     return;
@@ -210,7 +212,7 @@ export async function stopVoiceRecording(): Promise<void> {
     setState({
       phase: "failed",
       targetKey: current.key,
-      message: "The recording could not be read.",
+      message: m(msg("The recording could not be read.")),
       canRetry: false,
     });
     return;

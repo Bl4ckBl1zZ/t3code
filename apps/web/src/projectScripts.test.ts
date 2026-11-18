@@ -1,7 +1,7 @@
 import { shortcutLabelForCommand } from "./keybindings";
 import { describe, expect, it } from "vite-plus/test";
+import { projectScriptMenuLabel } from "@t3tools/shared/projectScriptsCopy";
 import {
-  projectScriptMenuLabel,
   runningSingleRunScriptIds,
   settleProjectScript,
   singleRunScriptTerminalId,

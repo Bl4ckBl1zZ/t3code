@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react";
 import { AppWindowIcon, CodeIcon, Maximize2Icon } from "lucide-react";
 import { use, useState, type ReactNode } from "react";
 
@@ -29,6 +30,7 @@ export function MarkdownLegacyHtmlEmbedCodeBlock({
   isClosed: boolean;
   children: ReactNode;
 }) {
+  const gt = useGT();
   const [showCode, setShowCode] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const searching = use(MarkdownFindContext);
@@ -36,7 +38,7 @@ export function MarkdownLegacyHtmlEmbedCodeBlock({
   const sourceRevealRef = findRevealRef(revealSource);
   const canShowEmbed = !isStreaming && isClosed && code.trim().length > 0;
   const showEmbed = canShowEmbed && !showCode;
-  const toggleLabel = showCode ? "Show embed" : "Show code";
+  const toggleLabel = showCode ? gt("Show embed") : gt("Show code");
   return (
     <MarkdownCodeBlock
       code={code}
@@ -74,13 +76,15 @@ export function MarkdownLegacyHtmlEmbedCodeBlock({
                       variant="ghost-muted"
                       size="icon-xs"
                       onClick={() => setExpanded(true)}
-                      aria-label="Expand embed"
+                      aria-label={gt("Expand embed")}
                     />
                   }
                 >
                   <Maximize2Icon className="size-3" />
                 </TooltipTrigger>
-                <TooltipPopup side="top">Expand embed</TooltipPopup>
+                <TooltipPopup side="top">
+                  <T>Expand embed</T>
+                </TooltipPopup>
               </Tooltip>
             ) : null}
           </span>

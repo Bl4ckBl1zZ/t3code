@@ -1,3 +1,4 @@
+import { T } from "gt-react";
 import { cn } from "~/lib/utils";
 
 import { CommandBlock } from "./CommandBlock";
@@ -18,21 +19,25 @@ export function InstallT3Commands({
   return (
     <div className={cn("space-y-2", className)}>
       <p className="text-xs text-muted-foreground">
-        Install the desktop app from{" "}
-        <a
-          className="underline underline-offset-2 hover:text-foreground"
-          href={FORK_RELEASES_URL}
-          rel="noreferrer"
-          target="_blank"
-        >
-          this fork's releases
-        </a>{" "}
-        and choose <strong>Install</strong> next to <strong>t3 command</strong> in Settings →
-        General → About. Then run
+        <T>
+          Install the desktop app from{" "}
+          <a
+            className="underline underline-offset-2 hover:text-foreground"
+            href={FORK_RELEASES_URL}
+            rel="noreferrer"
+            target="_blank"
+          >
+            this fork's releases
+          </a>{" "}
+          and choose <strong>Install</strong> next to <strong>t3 command</strong> in Settings →
+          General → About. Then run
+        </T>
       </p>
       <CommandBlock command={command} />
       <p className="text-xs text-muted-foreground">
-        Skip the install if you already have <code className="font-mono">t3</code>.
+        <T>
+          Skip the install if you already have <code className="font-mono">t3</code>.
+        </T>
       </p>
     </div>
   );
