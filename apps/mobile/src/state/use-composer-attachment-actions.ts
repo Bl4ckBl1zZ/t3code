@@ -5,11 +5,13 @@ import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/at
 import { nextPastedTextFileName } from "@t3tools/client-runtime/text-paste";
 import type { ComposerTextPaste } from "../components/ComposerEditor";
 import {
+  composerAttachmentsFromMediaAssets,
   convertPastedImagesToAttachments,
   createPastedTextComposerAttachment,
   pickComposerFiles,
   pickComposerMedia,
   removePersistedComposerAttachmentFile,
+  type ComposerMediaAsset,
   type DraftComposerAttachment,
 } from "../lib/composerImages";
 import {
@@ -73,6 +75,38 @@ export function useComposerAttachmentActions(props: {
         await append(key, signal, result.attachments, insertion),
       );
     });
+  };
+  /** For in-app capture: problems are returned, not alerted, so the caller can close its overlay first. */
+  const onAddDraftMediaAssets = async (
+    assets: ReadonlyArray<ComposerMediaAsset>,
+    options?: {
+      readonly beforeAppend?: (attachmentIds: ReadonlyArray<string>) => void;
+      /** A problem the caller hit before conversion, reported with the rest. */
+      readonly error?: string;
+    },
+  ): Promise<ComposerMediaAssetsResult> => {
+    const key = props.draftKey;
+    if (!key || props.locked) return { attachmentIds: [], showProblems: noop };
+    const title = "Could not attach photo";
+    if (!assets.length) {
+      return { attachmentIds: [], showProblems: () => report(title, options?.error, 0) };
+    }
+    const insertion = captureComposerDraftInsertion(key);
+    let attachmentIds: ReadonlyArray<string> = [];
+    let showProblems: () => void = noop;
+    await withDraftOperation(key, async (signal) => {
+      const result = await composerAttachmentsFromMediaAssets(assets, {
+        existingCount: countComposerDraftAttachmentsAfterSelection(key, insertion),
+        maxVideoBytes: capabilities?.fileAttachments?.maxUploadBytes,
+      });
+      options?.beforeAppend?.(result.attachments.map(({ id }) => id));
+      const rejected = await append(key, signal, result.attachments, insertion);
+      const added = new Set(getComposerDraftSnapshot(key).attachments.map(({ id }) => id));
+      attachmentIds = result.attachments.flatMap(({ id }) => (added.has(id) ? [id] : []));
+      const error = [options?.error, result.error].filter(Boolean).join("\n\n") || null;
+      showProblems = () => report(title, error, rejected);
+    });
+    return { attachmentIds, showProblems };
   };
   const onPickDraftFiles = async () => {
     const key = props.draftKey;
@@ -146,5 +180,22 @@ export function useComposerAttachmentActions(props: {
       }
     });
   };
-  return { onPickDraftMedia, onPickDraftFiles, onNativePasteImages, onNativePasteText };
+  return {
+    onPickDraftMedia,
+    onPickDraftFiles,
+    onAddDraftMediaAssets,
+    onNativePasteImages,
+    onNativePasteText,
+  };
 }
+
+export type ComposerAddMediaAssets = ReturnType<
+  typeof useComposerAttachmentActions
+>["onAddDraftMediaAssets"];
+
+export interface ComposerMediaAssetsResult {
+  readonly attachmentIds: ReadonlyArray<string>;
+  readonly showProblems: () => void;
+}
+
+const noop = () => undefined;

@@ -28,6 +28,8 @@ import IconBolt from "@tabler/icons-react-native/IconBolt";
 import IconBox from "@tabler/icons-react-native/IconBox";
 import IconBrain from "@tabler/icons-react-native/IconBrain";
 import IconCamera from "@tabler/icons-react-native/IconCamera";
+import IconCameraRotate from "@tabler/icons-react-native/IconCameraRotate";
+import IconPaperclip from "@tabler/icons-react-native/IconPaperclip";
 import IconCar from "@tabler/icons-react-native/IconCar";
 import IconChartBar from "@tabler/icons-react-native/IconChartBar";
 import IconCheck from "@tabler/icons-react-native/IconCheck";
@@ -180,6 +182,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   brain: IconBrain,
   "cable.connector": IconPlug,
   camera: IconCamera,
+  "camera.rotate": IconCameraRotate,
   car: IconCar,
   "chart.bar.xaxis": IconChartBar,
   checkmark: IconCheck,
@@ -250,6 +253,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "person.badge.clock": IconUserQuestion,
   "person.badge.plus": IconUserPlus,
   photo: IconPhoto,
+  paperclip: IconPaperclip,
   pin: IconPin,
   "pin.slash": IconPinnedOff,
   play: IconPlayerPlay,

@@ -119,7 +119,11 @@ vi.mock("./uuid", () => ({
   uuidv4: () => "attachment-id",
 }));
 
-import { convertPastedImagesToAttachments, persistComposerAttachmentFile } from "./composerImages";
+import {
+  composerAttachmentsFromMediaAssets,
+  convertPastedImagesToAttachments,
+  persistComposerAttachmentFile,
+} from "./composerImages";
 
 function oversizedPng(): string {
   const png = Buffer.alloc(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES + 1);
@@ -285,6 +289,45 @@ describe("native pasted image cleanup", () => {
       error: "A pasted image exceeds the 10 MB attachment limit.",
     });
     expect(files.get(uri)?.deleted).toBe(true);
+  });
+});
+
+describe("composerAttachmentsFromMediaAssets", () => {
+  beforeEach(() => {
+    files.clear();
+    manipulator.state.renderedBase64 = "cmVuZGVyZWQ=";
+  });
+
+  it("keeps a camera JPEG, renders a library HEIC, and stops at the attachment limit", async () => {
+    files.set("file:///cache/Camera/capture.jpg", { base64: "aGVsbG8=", deleted: false });
+    files.set("file:///library/IMG_1.HEIC", { base64: "b3JpZ2luYWw=", deleted: false });
+    files.set("file:///library/IMG_2.HEIC", { base64: "b3JpZ2luYWw=", deleted: false });
+    manipulator.state.sourceSize = { width: 100, height: 100 };
+
+    const { attachments, error } = await composerAttachmentsFromMediaAssets(
+      [
+        { uri: "file:///cache/Camera/capture.jpg", type: "image", mimeType: "image/jpeg" },
+        { uri: "file:///library/IMG_1.HEIC", type: "image", fileName: "IMG_1.HEIC" },
+        { uri: "file:///library/IMG_2.HEIC", type: "image", fileName: "IMG_2.HEIC" },
+      ],
+      { existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 2 },
+    );
+
+    expect(attachments).toEqual([
+      expect.objectContaining({
+        mimeType: "image/jpeg",
+        dataUrl: "data:image/jpeg;base64,aGVsbG8=",
+        previewUri: "file:///cache/Camera/capture.jpg",
+      }),
+      expect.objectContaining({
+        name: "IMG_1.jpg",
+        mimeType: "image/jpeg",
+        dataUrl: "data:image/jpeg;base64,cmVuZGVyZWQ=",
+      }),
+    ]);
+    expect(error).toBe(
+      `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments per message.`,
+    );
   });
 });
 

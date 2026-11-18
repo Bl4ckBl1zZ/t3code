@@ -426,10 +426,33 @@ export async function pickComposerMedia(input: {
     };
   }
 
+  return composerAttachmentsFromMediaAssets(result.assets, {
+    existingCount: input.existingCount,
+    maxVideoBytes: input.maxVideoBytes,
+  });
+}
+
+/** A photo or video from the system picker, the in-app camera, or the in-app photo grid. */
+export interface ComposerMediaAsset {
+  readonly uri: string;
+  readonly type?: string | null;
+  readonly mimeType?: string | null;
+  readonly fileName?: string | null;
+  readonly fileSize?: number | null;
+}
+
+export async function composerAttachmentsFromMediaAssets(
+  assets: ReadonlyArray<ComposerMediaAsset>,
+  input: { readonly existingCount: number; readonly maxVideoBytes?: number },
+): Promise<{
+  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
+  readonly error: string | null;
+}> {
+  const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
   const attachments: DraftComposerAttachment[] = [];
   let error: string | null = null;
 
-  for (const asset of result.assets) {
+  for (const asset of assets) {
     if (attachments.length >= remainingSlots) {
       error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments per message.`;
       break;

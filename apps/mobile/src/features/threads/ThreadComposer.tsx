@@ -56,6 +56,7 @@ import { useEnvironmentScopeDenied } from "../../state/session";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import type { ComposerAddMediaAssets } from "../../state/use-composer-attachment-actions";
 import { ComposerAttachmentButton } from "./ComposerAttachmentButton";
 import {
   ComposerAttachmentStrip,
@@ -172,6 +173,7 @@ export interface ThreadComposerProps {
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
+  readonly onAddDraftMediaAssets: ComposerAddMediaAssets;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
@@ -793,6 +795,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 supportsFiles={props.serverConfig !== null}
                 onPickMedia={props.onPickDraftMedia}
                 onPickFiles={props.onPickDraftFiles}
+                onAddMediaAssets={props.onAddDraftMediaAssets}
               />
               <Animated.View
                 className="min-w-0 flex-1"
