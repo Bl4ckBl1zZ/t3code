@@ -13,6 +13,7 @@ import * as Exit from "effect/Exit";
 import { AsyncResult, AtomRegistry } from "effect/reactivity";
 import { File } from "expo-file-system";
 
+import { m } from "../../i18n/messages";
 import { runtime } from "../../lib/runtime";
 import { uuidv4 } from "../../lib/uuid";
 import { managedRelayQueryManager } from "../cloud/managedRelayState";
@@ -20,7 +21,7 @@ import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { createRelayVoiceTranscriber } from "./relayVoiceTranscriber";
 
 function rejected(cause: Cause.Cause<unknown>): VoiceTranscriptionError {
-  const failure = describeManagedRelayVoiceFailure(Cause.squash(cause));
+  const failure = describeManagedRelayVoiceFailure(Cause.squash(cause), m);
   return new VoiceTranscriptionError({ code: "rejected", message: failure.message, cause });
 }
 

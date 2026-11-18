@@ -1,4 +1,5 @@
 import type { MenuAction } from "@react-native-menu/menu";
+import { msg, useGT, useMessages } from "gt-react-native";
 import { useRef, useState } from "react";
 import { Pressable, type ViewInstance } from "react-native";
 
@@ -10,8 +11,8 @@ import type { ComposerAddMediaAssets } from "../../state/use-composer-attachment
 import { ComposerAttachmentMenu } from "./ComposerAttachmentMenu";
 
 const ATTACHMENT_MENU_ACTIONS: MenuAction[] = [
-  { id: "photos", title: "Photo Library", image: "photo" },
-  { id: "files", title: "Choose Files", image: "folder" },
+  { id: "photos", title: msg("Photo Library"), image: "photo" },
+  { id: "files", title: msg("Choose Files"), image: "folder" },
 ];
 
 export function ComposerAttachmentButton(props: {
@@ -23,6 +24,8 @@ export function ComposerAttachmentButton(props: {
   /** Enables the in-app camera and photo grid; without it the button opens the system menu. */
   readonly onAddMediaAssets?: ComposerAddMediaAssets;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const { scale } = useAndroidControlSizing();
   const buttonRef = useRef<ViewInstance>(null);
   const [menuAnchor, setMenuAnchor] = useState<WindowRect | null>(null);
@@ -34,7 +37,7 @@ export function ComposerAttachmentButton(props: {
   const button = (
     <Pressable
       ref={buttonRef}
-      accessibilityLabel="Add attachment"
+      accessibilityLabel={gt("Add attachment")}
       accessibilityRole="button"
       accessibilityState={{ disabled: props.disabled }}
       className="size-[44px] shrink-0 items-center justify-center rounded-full active:opacity-70 disabled:opacity-50"
@@ -85,9 +88,9 @@ export function ComposerAttachmentButton(props: {
   return (
     <Menu
       accessible
-      accessibilityLabel="Add attachment"
+      accessibilityLabel={gt("Add attachment")}
       accessibilityRole="button"
-      actions={ATTACHMENT_MENU_ACTIONS}
+      actions={ATTACHMENT_MENU_ACTIONS.map((action) => ({ ...action, title: m(action.title) }))}
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event === "photos") {
           void props.onPickMedia();

@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import { useEffect, useRef } from "react";
 
 import { useManagedRelayVoiceInput } from "../cloud/managedRelayState";
@@ -7,6 +8,7 @@ import {
   type ComposerThreadTarget,
 } from "../composerDraftStore";
 import { toastManager } from "../components/ui/toast";
+import { m } from "../i18n/messages";
 import { voiceTranscriptInsertion } from "./voiceTranscriptInsertion";
 import {
   bindVoiceComposer,
@@ -35,8 +37,8 @@ function appendTranscriptToStoredDraft(
   store.setPrompt(draftTarget, prompt + insertion);
   toastManager.add({
     type: "info",
-    title: "Voice transcript added",
-    description: "It is in the draft of the conversation you dictated it for.",
+    title: m(msg("Voice transcript added")),
+    description: m(msg("It is in the draft of the conversation you dictated it for.")),
   });
 }
 
@@ -94,7 +96,7 @@ export function useComposerVoiceInput(input: {
         if (!replaceRange(position, position, insertion)) {
           toastManager.add({
             type: "warning",
-            title: "Could not insert the voice transcript here",
+            title: m(msg("Could not insert the voice transcript here")),
             description: text,
           });
         }

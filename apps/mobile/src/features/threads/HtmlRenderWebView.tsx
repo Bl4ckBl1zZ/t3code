@@ -11,6 +11,7 @@ import {
   type HtmlRenderReference,
   type HtmlRenderTheme,
 } from "@t3tools/shared/htmlRender";
+import { T, useGT } from "gt-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Platform, Pressable, View, type ColorValue } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -228,6 +229,7 @@ export function ThreadHtmlRender(props: {
   readonly frameWidth: number;
   readonly iconColor: ColorValue;
 }) {
+  const gt = useGT();
   const navigation = useNavigation();
   const { attachmentId, title } = props.render;
   const height = htmlRenderFrameHeight(props.render, props.frameWidth);
@@ -266,7 +268,7 @@ export function ThreadHtmlRender(props: {
         {uri !== null && !failed ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Open ${title}`}
+            accessibilityLabel={gt("Open {title}", { title })}
             hitSlop={8}
             className="h-7 w-7 items-center justify-center rounded-full border border-border/60 bg-card/80"
             onPress={() =>
@@ -302,7 +304,7 @@ export function ThreadHtmlRender(props: {
         ) : failed || asset._tag === "Failure" ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Reload ${title}`}
+            accessibilityLabel={gt("Reload {title}", { title })}
             className="flex-1 items-center justify-center"
             onPress={() => {
               retried.current = false;
@@ -310,7 +312,9 @@ export function ThreadHtmlRender(props: {
               if (uri === null) void refresh().then((next) => next !== null && setUri(next));
             }}
           >
-            <Text className="text-sm text-foreground-muted">Page unavailable</Text>
+            <Text className="text-sm text-foreground-muted">
+              <T>Page unavailable</T>
+            </Text>
           </Pressable>
         ) : (
           <View className="flex-1 items-center justify-center">
@@ -329,6 +333,7 @@ const LEGACY_EMBED_DEFAULT_HEIGHT = 220;
  * height it reports, with a full-screen view for pages that need more room.
  */
 export function ThreadLegacyHtmlEmbed(props: { readonly html: string }) {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const [contentHeight, setContentHeight] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -338,20 +343,22 @@ export function ThreadLegacyHtmlEmbed(props: { readonly html: string }) {
     <View style={{ marginBottom: ROW_BOTTOM_MARGIN, height }}>
       {failed ? (
         <View className="flex-1 items-center justify-center">
-          <Text className="text-sm text-foreground-muted">Embed unavailable</Text>
+          <Text className="text-sm text-foreground-muted">
+            <T>Embed unavailable</T>
+          </Text>
         </View>
       ) : (
         <>
           <HtmlRenderWebView
             html={props.html}
-            title="Interactive embed"
+            title={gt("Interactive embed")}
             nested
             onLoadError={() => setFailed(true)}
             onContentHeight={setContentHeight}
           />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Expand embed"
+            accessibilityLabel={gt("Expand embed")}
             hitSlop={8}
             className="absolute right-1.5 top-1.5 h-7 w-7 items-center justify-center rounded-full border border-border/60 bg-card/80"
             onPress={() => setExpanded(true)}
@@ -374,11 +381,11 @@ export function ThreadLegacyHtmlEmbed(props: { readonly html: string }) {
         <View className="flex-1 bg-screen" style={{ paddingTop: insets.top }}>
           <View className="h-11 flex-row items-center justify-between px-3">
             <Text className="text-base font-semibold text-foreground" numberOfLines={1}>
-              Interactive embed
+              <T>Interactive embed</T>
             </Text>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Close embed"
+              accessibilityLabel={gt("Close embed")}
               hitSlop={8}
               onPress={() => setExpanded(false)}
             >
@@ -392,7 +399,7 @@ export function ThreadLegacyHtmlEmbed(props: { readonly html: string }) {
           </View>
           <View className="flex-1" style={{ paddingBottom: insets.bottom }}>
             {expanded ? (
-              <HtmlRenderWebView html={props.html} title="Interactive embed" nested={false} />
+              <HtmlRenderWebView html={props.html} title={gt("Interactive embed")} nested={false} />
             ) : null}
           </View>
         </View>

@@ -64,6 +64,8 @@ interface Options {
   ) => Promise<{ readonly path: string; readonly release: () => Promise<void> } | undefined>;
   readonly diagnose?: (executable: string, cause: unknown) => Promise<unknown>;
   readonly env?: NodeJS.ProcessEnv;
+  /** Names Chrome in the browser's own user agent, which is all a service worker ever sends. */
+  readonly chrome: { readonly version: string; readonly platform: NodeJS.Platform };
   /** Closes the shared browser once it has held no context for this long. */
   readonly idleBrowserMs?: number;
   readonly onContextClose?: (context: BrowserContext) => void;
@@ -88,17 +90,35 @@ const chromeBrands = (major: string, fullVersion: string) => {
   };
 };
 
+// Chrome froze its user agent apart from the major version.
+const UA_SYSTEMS: Partial<Record<NodeJS.Platform, string>> = {
+  darwin: "Macintosh; Intel Mac OS X 10_15_7",
+  linux: "X11; Linux x86_64",
+  win32: "Windows NT 10.0; Win64; x64",
+};
+
+const chromeToken = (major: string) => `Chrome/${major}.0.0.0`;
+
+const chromeUserAgent = (chrome: Options["chrome"]) => {
+  const major = /^\d+/.exec(chrome.version)?.[0];
+  const system = UA_SYSTEMS[chrome.platform];
+  return major && system
+    ? `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) ${chromeToken(major)} Safari/537.36`
+    : null;
+};
+
 /** Change user agent and Sec-CH-UA together; sites block mismatches. */
 const chromeIdentity = (
-  headlessUserAgent: string,
+  browser: { readonly product: string; readonly userAgent: string },
   host: { readonly platform: NodeJS.Platform; readonly arch: string; readonly release: string },
 ) => {
-  const version = /HeadlessChrome\/((\d+)[\d.]*)/.exec(headlessUserAgent);
+  // A launch that already named Chrome in the user agent still reports the headless product.
+  const version = /^(?:Headless)?Chrome\/((\d+)[\d.]*)/.exec(browser.product);
   const fullVersion = version?.[1];
   const major = version?.[2];
   if (!version || !fullVersion || !major) return null;
   return {
-    userAgent: headlessUserAgent.replace(version[0], `Chrome/${major}.0.0.0`),
+    userAgent: browser.userAgent.replace(/HeadlessChrome\/[\d.]+/, chromeToken(major)),
     userAgentMetadata: {
       ...chromeBrands(major, fullVersion),
       platform: UA_PLATFORMS[host.platform] ?? "Unknown",
@@ -116,8 +136,8 @@ export const presentAsChrome = async (
   cdp: CDPSession,
   host: { readonly platform: NodeJS.Platform; readonly arch: string },
 ) => {
-  const { userAgent } = await cdp.send("Browser.getVersion");
-  const identity = chromeIdentity(userAgent, { ...host, release: NodeOS.release() });
+  const browser = await cdp.send("Browser.getVersion");
+  const identity = chromeIdentity(browser, { ...host, release: NodeOS.release() });
   if (identity) await cdp.send("Emulation.setUserAgentOverride", identity);
 };
 
@@ -132,11 +152,11 @@ const IPAD_USER_AGENT =
  * Android at the version the page's own browser runs, in Chrome's reduced
  * Android form. Null when the preset keeps the browser's own identity.
  */
-export const deviceIdentity = (userAgent: PreviewDevice["userAgent"], browserUserAgent: string) => {
+export const deviceIdentity = (userAgent: PreviewDevice["userAgent"], browserProduct: string) => {
   if (userAgent === "iphone") return { userAgent: IPHONE_USER_AGENT };
   if (userAgent === "ipad") return { userAgent: IPAD_USER_AGENT };
   if (userAgent !== "android") return null;
-  const version = /Chrome\/((\d+)[\d.]*)/.exec(browserUserAgent);
+  const version = /Chrome\/((\d+)[\d.]*)/.exec(browserProduct);
   const fullVersion = version?.[1];
   const major = version?.[2];
   if (!fullVersion || !major) return null;
@@ -171,6 +191,8 @@ export class ServerBrowserContexts {
   private async launchOptions() {
     const executable = await this.options.executable();
     const env = this.options.env ?? process.env;
+    // A page's override never reaches its workers, so the browser itself must name Chrome.
+    const userAgent = chromeUserAgent(this.options.chrome);
     return {
       executable,
       env,
@@ -178,6 +200,7 @@ export class ServerBrowserContexts {
         "--disable-gpu",
         "--force-device-scale-factor=2",
         "--disable-blink-features=AutomationControlled",
+        ...(userAgent ? [`--user-agent=${userAgent}`] : []),
       ],
       ignoreDefaultArgs: ["--enable-automation"],
       headless: true,

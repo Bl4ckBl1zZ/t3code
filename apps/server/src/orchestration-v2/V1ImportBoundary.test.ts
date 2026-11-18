@@ -14,6 +14,8 @@ const legacyReaderFiles: Record<string, string> = {
   "serverSettings.ts": "one-time provider history for settings migration",
   // The fork database upgrade deletes V1 rows of removed Hermes/T3 Work threads.
   "persistence/forkDatabaseBridge.ts": "one-time fork database upgrade",
+  // Before deleting the pre-0.1.0 database, checks every V1 record reached the current one.
+  "persistence/DatabaseMaintenance.ts": "legacy database removal check",
 };
 const retiredPaths = [
   "orchestration",

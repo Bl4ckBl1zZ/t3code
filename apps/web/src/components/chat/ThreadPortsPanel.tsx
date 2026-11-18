@@ -5,6 +5,7 @@ import {
   type EnvironmentId,
   type ThreadId,
 } from "@t3tools/contracts";
+import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -17,10 +18,12 @@ import {
   GlobeIcon,
   SquareIcon,
 } from "lucide-react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { useState } from "react";
 
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { m } from "~/i18n/messages";
 import { ensureLocalApi } from "~/localApi";
 import { useDiscoveredPortsState } from "~/portDiscoveryState";
 import { useEnvironment } from "~/state/environments";
@@ -39,6 +42,12 @@ import { isLoopbackPreviewUrl, threadPortRows, type ThreadPortRow } from "./thre
 
 const PORT_PAGE_COUNT = 4;
 
+const PORT_URL_CLIPBOARD_TARGET = {
+  target: "port URL",
+  unavailableMessage: msg("Clipboard API is unavailable while copying port URL."),
+  failureMessage: msg("Failed to copy port URL to the clipboard."),
+};
+
 const STATUS_DOT_CLASS: Record<ThreadPortRow["status"], string> = {
   running: "bg-emerald-500",
   stopped: "bg-muted-foreground/40",
@@ -46,9 +55,9 @@ const STATUS_DOT_CLASS: Record<ThreadPortRow["status"], string> = {
 };
 
 const STATUS_LABEL: Record<ThreadPortRow["status"], string> = {
-  running: "Running",
-  stopped: "Not running",
-  pinned: "Pinned",
+  running: msg("Running", { $context: "dev server status" }),
+  stopped: msg("Not running", { $context: "dev server status" }),
+  pinned: msg("Pinned", { $context: "dev server status" }),
 };
 
 function reportFailure(title: string, error: unknown) {
@@ -56,7 +65,7 @@ function reportFailure(title: string, error: unknown) {
     stackedThreadToast({
       type: "error",
       title,
-      description: error instanceof Error ? error.message : String(error),
+      description: thrownErrorMessage(error, m) ?? String(error),
     }),
   );
 }
@@ -78,6 +87,8 @@ interface ThreadPortsPanelProps {
 }
 
 function ThreadPortsList(props: ThreadPortsPanelProps) {
+  const gt = useGT();
+  const messages = useMessages();
   const configuredUrls =
     isLoopbackPreviewUrl(props.pinnedUrl) && props.pinnedUrl !== undefined
       ? [props.pinnedUrl]
@@ -115,7 +126,7 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
   const openInPreview = async (row: ThreadPortRow) => {
     const result = await openDiscoveredPort({ threadRef, port: portForRow(row), openPreview });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      reportFailure("Could not open preview", squashAtomCommandFailure(result));
+      reportFailure(gt("Could not open preview"), squashAtomCommandFailure(result));
     }
   };
 
@@ -129,23 +140,25 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
     });
     setStoppingKey(null);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      reportFailure("Could not stop server", squashAtomCommandFailure(result));
+      reportFailure(gt("Could not stop server"), squashAtomCommandFailure(result));
     }
   };
 
   return (
     <ThreadDetailsSection
       headingId="thread-details-ports-heading"
-      title="Ports"
+      title={gt("Ports", { $context: "thread details section: dev servers and their ports" })}
       data-thread-ports-panel
     >
       <ul className="m-0 list-none p-0">
         {rows.slice(0, visibleCount).map((row, index) => {
           const detail = [
             row.pinned ? "t3.json" : null,
-            row.startedBy === "agent" ? "Agent" : null,
+            row.startedBy === "agent"
+              ? gt("Agent", { $context: "who started a dev server" })
+              : null,
             row.processName,
-            STATUS_LABEL[row.status],
+            messages(STATUS_LABEL[row.status]),
           ]
             .filter((part) => part !== null)
             .join(" · ");
@@ -160,7 +173,7 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                 type="button"
                 className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left hover:bg-black/[0.035] disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-white/[0.08]"
                 disabled={!canOperatePreview}
-                aria-label={`Open ${row.label} in preview`}
+                aria-label={gt("Open {label} in preview", { label: row.label })}
                 onClick={() => void openInPreview(row)}
               >
                 <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
@@ -187,18 +200,22 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                       size="icon-xs"
                       variant="ghost"
                       part="icon"
-                      aria-label={`Open ${row.label} in browser`}
+                      aria-label={gt("Open {label} in browser", { label: row.label })}
                       onClick={() =>
                         void ensureLocalApi()
                           .shell.openExternal(reachableUrl(row))
-                          .catch((error: unknown) => reportFailure("Could not open link", error))
+                          .catch((error: unknown) =>
+                            reportFailure(gt("Could not open link"), error),
+                          )
                       }
                     >
                       <ExternalLinkIcon className="size-3.5" />
                     </ThreadDetailsControl>
                   }
                 />
-                <TooltipPopup>Open in browser</TooltipPopup>
+                <TooltipPopup>
+                  <T>Open in browser</T>
+                </TooltipPopup>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger
@@ -207,18 +224,21 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                       size="icon-xs"
                       variant="ghost"
                       part="icon"
-                      aria-label={`Copy ${row.label}`}
+                      aria-label={gt("Copy {label}", { label: row.label })}
                       onClick={() =>
-                        void writeTextToClipboard(reachableUrl(row), "port URL").catch(
-                          (error: unknown) => reportFailure("Could not copy URL", error),
-                        )
+                        void writeTextToClipboard(
+                          reachableUrl(row),
+                          PORT_URL_CLIPBOARD_TARGET,
+                        ).catch((error: unknown) => reportFailure(gt("Could not copy URL"), error))
                       }
                     >
                       <CopyIcon className="size-3.5" />
                     </ThreadDetailsControl>
                   }
                 />
-                <TooltipPopup>Copy URL</TooltipPopup>
+                <TooltipPopup>
+                  <T>Copy URL</T>
+                </TooltipPopup>
               </Tooltip>
               {stoppable ? (
                 <Tooltip>
@@ -229,7 +249,7 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                         variant="ghost"
                         part="icon"
                         tone="destructive"
-                        aria-label={`Stop ${row.label}`}
+                        aria-label={gt("Stop {label}", { label: row.label })}
                         disabled={stoppingKey !== null}
                         onClick={() => void stop(row)}
                       >
@@ -241,7 +261,9 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                       </ThreadDetailsControl>
                     }
                   />
-                  <TooltipPopup>Stop server</TooltipPopup>
+                  <TooltipPopup>
+                    <T>Stop server</T>
+                  </TooltipPopup>
                 </Tooltip>
               ) : null}
             </li>
@@ -264,7 +286,13 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
           ) : (
             <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
           )}
-          {hiddenCount > 0 ? `Show ${Math.min(hiddenCount, PORT_PAGE_COUNT)} more` : "Show less"}
+          {hiddenCount > 0 ? (
+            <T>
+              Show <Var>{Math.min(hiddenCount, PORT_PAGE_COUNT)}</Var> more
+            </T>
+          ) : (
+            <T>Show less</T>
+          )}
         </ThreadDetailsControl>
       ) : null}
     </ThreadDetailsSection>

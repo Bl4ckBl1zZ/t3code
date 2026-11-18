@@ -8,6 +8,7 @@ import {
   presentPendingBackgroundWork,
   type PendingBackgroundWorkItem,
 } from "@t3tools/client-runtime/state/thread-execution";
+import { T, useGT } from "gt-react";
 import { BotIcon, EyeIcon, SquareTerminalIcon, type LucideIcon } from "lucide-react";
 
 import { cn } from "../../lib/utils";
@@ -34,12 +35,15 @@ export function ThreadBackgroundPanel(props: {
   readonly outputs: ReadonlyMap<string, OrchestrationV2BackgroundTaskOutput>;
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
+  const gt = useGT();
   const presentation = presentPendingBackgroundWork(props.tasks);
   if (presentation === null) return null;
   return (
     <ThreadDetailsSection
       headingId="thread-details-background-heading"
-      title="Background"
+      title={gt("Background", {
+        $context: "thread details section: work still running after the turn",
+      })}
       data-thread-background-panel
     >
       <ul className="m-0 list-none p-0">
@@ -61,6 +65,7 @@ function BackgroundWorkRow(props: {
   readonly output: OrchestrationV2BackgroundTaskOutput | undefined;
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
+  const gt = useGT();
   const { item } = props;
   const output = presentBackgroundTaskOutput(props.output, useBackgroundOutputClock(props.output));
   const Icon = KIND_ICON[item.kind];
@@ -81,7 +86,7 @@ function BackgroundWorkRow(props: {
             <button
               type="button"
               className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm font-medium text-foreground/80 hover:text-foreground hover:underline"
-              aria-label={`Open subagent ${item.label}`}
+              aria-label={gt("Open subagent {label}", { label: item.label })}
               onClick={() => props.onOpenThread(childThreadId)}
             >
               {item.label}
@@ -99,7 +104,9 @@ function BackgroundWorkRow(props: {
             ) : null}
           </p>
         ) : item.kind === "command" && props.output?.startedAt !== undefined ? (
-          <p className="text-2xs text-muted-foreground">No output yet</p>
+          <p className="text-2xs text-muted-foreground">
+            <T>No output yet</T>
+          </p>
         ) : null}
       </div>
     </li>

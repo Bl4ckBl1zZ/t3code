@@ -1,6 +1,8 @@
+import { msg, T, useGT } from "gt-react";
 import { MicIcon, RotateCcwIcon, SquareIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState, type PointerEvent } from "react";
 
+import { m } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
 import {
   VOICE_GESTURE_IDLE,
@@ -73,6 +75,7 @@ function formatClock(seconds: number): string {
 
 /** Elapsed time, switching to the time left near the clip limit. */
 function VoiceRecordingClock(props: { startedAt: number; maxSeconds: number }) {
+  const gt = useGT();
   const elapsedNow = () => (Date.now() - props.startedAt) / 1_000;
   const [elapsed, setElapsed] = useState(elapsedNow);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- ticks the clock once a second while it is mounted
@@ -87,7 +90,7 @@ function VoiceRecordingClock(props: { startedAt: number; maxSeconds: number }) {
   const ending = remaining <= 10;
   return (
     <span className={cn("text-xs tabular-nums", ending && "text-warning-foreground")}>
-      {ending ? `${formatClock(remaining)} left` : formatClock(elapsed)}
+      {ending ? gt("{time} left", { time: formatClock(remaining) }) : formatClock(elapsed)}
     </span>
   );
 }
@@ -104,6 +107,7 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
   /** Called before a recording starts so the composer can remember the caret. */
   readonly onBeforeStart: () => void;
 }) {
+  const gt = useGT();
   const session = useVoiceSession();
   const gestureRef = useRef<VoiceGestureState>(VOICE_GESTURE_IDLE);
   const holdTimerRef = useRef<number | null>(null);
@@ -121,7 +125,11 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- failures arrive from the shared voice session, not a handler here
   useEffect(() => {
     if (failureMessage) {
-      toastManager.add({ type: "error", title: "Voice input", description: failureMessage });
+      toastManager.add({
+        type: "error",
+        title: m(msg("Voice input")),
+        description: failureMessage,
+      });
     }
   }, [failureMessage]);
 
@@ -211,17 +219,19 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
   };
 
   const label = recording
-    ? "Stop and transcribe"
+    ? gt("Stop and transcribe")
     : session.phase === "transcribing"
-      ? "Transcribing"
-      : "Voice input";
+      ? gt("Transcribing")
+      : gt("Voice input");
   const hint = recording
     ? session.hold
       ? cancelArmed
-        ? "Release to discard"
-        : "Release to transcribe, slide up to discard"
-      : "Click to transcribe, Esc to discard"
-    : `Tap to dictate, hold to talk${props.shortcutLabel ? ` (${props.shortcutLabel})` : ""}`;
+        ? gt("Release to discard")
+        : gt("Release to transcribe, slide up to discard")
+      : gt("Click to transcribe, Esc to discard")
+    : props.shortcutLabel
+      ? gt("Tap to dictate, hold to talk ({shortcut})", { shortcut: props.shortcutLabel })
+      : gt("Tap to dictate, hold to talk");
 
   return (
     <div className="flex items-center gap-1">
@@ -231,7 +241,7 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
             type="button"
             variant="ghost-muted"
             size="icon-sm"
-            aria-label="Discard recording"
+            aria-label={gt("Discard recording")}
             onPointerDown={(event) => event.preventDefault()}
             onClick={cancelVoiceRecording}
           >
@@ -249,14 +259,16 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
         </>
       ) : null}
       {session.phase === "transcribing" ? (
-        <span className="text-xs text-muted-foreground">Transcribing…</span>
+        <span className="text-xs text-muted-foreground">
+          <T>Transcribing…</T>
+        </span>
       ) : null}
       {failed?.canRetry ? (
         <Button
           type="button"
           variant="ghost-muted"
           size="icon-sm"
-          aria-label="Retry transcription"
+          aria-label={gt("Retry transcription")}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => void retryVoiceTranscription()}
         >

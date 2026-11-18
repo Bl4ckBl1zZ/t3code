@@ -56,19 +56,6 @@ export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectSc
   return scripts.find((script) => script.runOnWorktreeCreate) ?? null;
 }
 
-export function projectScriptMenuLabel(
-  script: ProjectScript,
-  options?: { readonly running?: boolean },
-): string {
-  const roles = [
-    ...(options?.running ? ["running"] : []),
-    ...(script.runOnWorktreeCreate ? ["setup"] : []),
-    ...(script.runOnSettle ? ["on settle"] : []),
-    ...(script.runOnWorktreeDelete ? ["teardown"] : []),
-  ];
-  return roles.length === 0 ? script.name : `${script.name} (${roles.join(", ")})`;
-}
-
 export function settleProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
   return scripts.find((script) => script.runOnSettle === true) ?? null;
 }
