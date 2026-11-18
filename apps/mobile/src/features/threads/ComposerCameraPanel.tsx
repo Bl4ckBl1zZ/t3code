@@ -1,7 +1,6 @@
 import { CameraView, useCameraPermissions, type CameraType } from "expo-camera";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
-import { useGT } from "gt-react-native";
 import { useEffect, useRef, useState } from "react";
 import { Linking, Pressable, StyleSheet, View } from "react-native";
 
@@ -21,7 +20,6 @@ export function ComposerCameraPanel(props: {
   readonly onBack: () => void;
   readonly onCapture: (photo: ComposerCapturedPhoto) => void;
 }) {
-  const gt = useGT();
   const camera = useRef<CameraView>(null);
   const [permission, requestPermission, getPermission] = useCameraPermissions({ request: true });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- access granted in Settings is only visible after re-reading it on return
@@ -59,7 +57,7 @@ export function ComposerCameraPanel(props: {
         <View className="flex-1 items-center justify-center gap-4 px-8">
           <SymbolView name="camera" size={34} tintColor="#ffffff" type="monochrome" />
           <Text className="text-center text-[15px] text-white">
-            {gt("Allow camera access to take photos here.")}
+            Allow camera access to take photos here.
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -69,7 +67,7 @@ export function ComposerCameraPanel(props: {
             }
           >
             <Text className="text-[15px] font-t3-bold text-black">
-              {permission.canAskAgain ? gt("Allow Camera") : gt("Open Settings")}
+              {permission.canAskAgain ? "Allow Camera" : "Open Settings"}
             </Text>
           </Pressable>
         </View>
@@ -86,14 +84,14 @@ export function ComposerCameraPanel(props: {
         className="absolute inset-x-0 bottom-0 flex-row items-center justify-between px-5 pb-5"
       >
         <ComposerOverlayButton
-          accessibilityLabel={gt("Back")}
+          accessibilityLabel="Back"
           symbol="chevron.left"
           onPress={props.onBack}
         />
         {granted ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={gt("Take photo")}
+            accessibilityLabel="Take photo"
             disabled={!ready || capturing || props.captured !== null}
             onPress={() => void capture()}
             className="size-[74px] items-center justify-center rounded-full border-4 border-white/90 active:opacity-80"
@@ -103,7 +101,7 @@ export function ComposerCameraPanel(props: {
         ) : null}
         {granted ? (
           <ComposerOverlayButton
-            accessibilityLabel={gt("Switch camera")}
+            accessibilityLabel="Switch camera"
             symbol="camera.rotate"
             onPress={() => setFacing((current) => (current === "back" ? "front" : "back"))}
           />
