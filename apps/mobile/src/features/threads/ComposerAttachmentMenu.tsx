@@ -1,6 +1,5 @@
 import { useNavigation } from "@react-navigation/native";
 import { Image } from "expo-image";
-import { useGT } from "gt-react-native";
 import { useEffect, useRef, useState } from "react";
 import { BackHandler, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import { OverKeyboardView } from "react-native-keyboard-controller";
@@ -51,7 +50,6 @@ export function ComposerAttachmentMenu(props: {
   /** `after` runs once the overlay is gone, so system pickers and alerts are not hidden under it. */
   readonly onDismissed: (after?: () => void) => void;
 }) {
-  const gt = useGT();
   const navigation = useNavigation();
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -60,10 +58,10 @@ export function ComposerAttachmentMenu(props: {
     readonly label: string;
     readonly symbol: AppSymbolName;
   }> = [
-    { id: "camera", label: gt("Camera"), symbol: "camera" },
-    { id: "photos", label: gt("Photos"), symbol: "photo" },
+    { id: "camera", label: "Camera", symbol: "camera" },
+    { id: "photos", label: "Photos", symbol: "photo" },
     ...(props.supportsFiles
-      ? [{ id: "files" as const, label: gt("Files"), symbol: "paperclip" as const }]
+      ? [{ id: "files" as const, label: "Files", symbol: "paperclip" as const }]
       : []),
   ];
   const layout = composerAttachmentMenuLayout({
@@ -253,7 +251,7 @@ export function ComposerAttachmentMenu(props: {
         pointerEvents={closing || captured !== null ? "none" : "auto"}
       >
         <Pressable
-          accessibilityLabel={gt("Close")}
+          accessibilityLabel="Close"
           accessibilityRole="button"
           style={StyleSheet.absoluteFill}
           onPress={() => dismiss()}
