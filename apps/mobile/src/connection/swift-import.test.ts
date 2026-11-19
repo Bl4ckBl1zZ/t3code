@@ -151,7 +151,10 @@ describe("catalogFromSwiftEnvironments", () => {
       ],
     ]);
     expect(
-      document.credentials.map((entry) => [entry.connectionId, entry.credential.token]),
+      document.credentials.map((entry) => [
+        entry.connectionId,
+        "token" in entry.credential ? entry.credential.token : undefined,
+      ]),
     ).toEqual([
       ["bearer:env-macbook:http://192.168.1.10:3773", "mac-token"],
       ["bearer:env-macbook:https://macbook.tail1234.ts.net", "tailnet-token"],
@@ -171,7 +174,11 @@ describe("catalogFromSwiftEnvironments", () => {
     });
 
     expect(catalog?.targets.map((target) => target.environmentId)).toEqual(["env-macbook"]);
-    expect(catalog?.credentials.map((entry) => entry.credential.token)).toEqual(["tailnet-token"]);
+    expect(
+      catalog?.credentials.map((entry) =>
+        "token" in entry.credential ? entry.credential.token : undefined,
+      ),
+    ).toEqual(["tailnet-token"]);
   });
 
   it("returns null without a Swift catalog and an empty catalog for an empty one", () => {

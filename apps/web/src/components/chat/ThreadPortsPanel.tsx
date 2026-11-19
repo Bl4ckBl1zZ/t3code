@@ -21,7 +21,7 @@ import {
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { useState } from "react";
 
-import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
+import { resolveExternalServerUrl } from "~/browser/browserTargetResolver";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { m } from "~/i18n/messages";
 import { ensureLocalApi } from "~/localApi";
@@ -121,7 +121,7 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
   // Loopback means the environment's machine: a remote client reaches it at
   // the environment's LAN address instead.
   const reachableUrl = (row: ThreadPortRow) =>
-    resolveDiscoveredServerUrl(props.environmentId, row.url);
+    resolveExternalServerUrl(props.environmentId, row.url);
 
   const openInPreview = async (row: ThreadPortRow) => {
     const result = await openDiscoveredPort({ threadRef, port: portForRow(row), openPreview });
