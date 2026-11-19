@@ -505,11 +505,19 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     );
     // Status reads run concurrently, so their order is not stable.
     assert.sameDeepMembers(parsedCommands, [
-      { args: ["rev-parse", "--git-path", "index"], language: "C" },
-      { args: ["rev-parse", "--git-common-dir"], language: "C" },
-      { args: ["status", "--porcelain=2", "--branch", "-z"], language: "C" },
-      { args: ["diff-index", "-M", "--numstat", "-z", "HEAD", "--"], language: "C" },
+      {
+        args: [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-path",
+          "index",
+          "--git-common-dir",
+          "--show-toplevel",
+        ],
+        language: "C",
+      },
       { args: ["rev-parse", "--symbolic-full-name", "HEAD"], language: "C" },
+      { args: ["rev-parse", "--git-common-dir"], language: "C" },
     ]);
   }).pipe(Effect.provide(layer));
 });
