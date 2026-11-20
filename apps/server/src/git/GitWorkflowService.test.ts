@@ -70,6 +70,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       Effect.scoped,
       Effect.provide(
         GitWorkflowService.layer.pipe(
+          Layer.provide(Layer.mock(ProjectTeardownScriptRunner.ProjectTeardownScriptRunner)({})),
           Layer.provide(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
           Layer.provide(Layer.mock(GitManager.GitManager)({})),
           Layer.provide(

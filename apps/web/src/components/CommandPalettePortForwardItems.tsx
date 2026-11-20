@@ -10,7 +10,7 @@ import { CableIcon, ClipboardCopyIcon, ExternalLinkIcon, SquareIcon } from "luci
 
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
-import { useThreadDiscoveredPorts } from "../portDiscoveryState";
+import { useDiscoveredPortsState } from "../portDiscoveryState";
 import { useEnvironments } from "../state/environments";
 import {
   canForwardPorts,
@@ -68,10 +68,12 @@ export function useCommandPalettePortForwardItem(input: {
   )
     ? (input.activeThread?.environmentId ?? null)
     : null;
-  const threadServers = useThreadDiscoveredPorts({
-    environmentId: threadEnvironmentId,
-    threadId: threadEnvironmentId === null ? null : (input.activeThread?.id ?? null),
-  });
+  const threadId = threadEnvironmentId === null ? null : (input.activeThread?.id ?? null);
+  const threadServers = useDiscoveredPortsState(threadEnvironmentId).servers.filter(
+    (server) =>
+      threadId !== null &&
+      (server.terminal?.threadId === threadId || server.agent?.threadId === threadId),
+  );
   if (forwards.length === 0 && sources.length === 0) return null;
 
   const labelOf = (environmentId: EnvironmentId) =>
