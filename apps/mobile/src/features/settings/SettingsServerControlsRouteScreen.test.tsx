@@ -42,7 +42,7 @@ vi.mock("@effect/atom-react", () => ({
 }));
 vi.mock("../../state/preferences", () => ({
   mobilePreferencesAtom: {},
-  updateMobilePreferencesAtom: {},
+  saveMobilePreferences: {},
 }));
 vi.mock("./components/AutoSettleDaysField", () => ({ AutoSettleDaysField: () => null }));
 // The fork's auto-delete days field renders a native SwiftUI control.

@@ -47,6 +47,7 @@ import {
   MenuSubTrigger,
   MenuSubPopup,
 } from "./ui/menu";
+import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
@@ -112,6 +113,7 @@ export default function ProjectScriptsControl({
     setActionsMenuOpen({ presentation, scripts: false, imports: false });
   }
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
+  const editorRequestIdRef = React.useRef(0);
 
   const primaryScript =
     (preferredScriptId ? scripts.find((script) => script.id === preferredScriptId) : undefined) ??
@@ -131,10 +133,12 @@ export default function ProjectScriptsControl({
   );
 
   const openAddDialog = () => {
+    editorRequestIdRef.current += 1;
     setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
   };
 
   const openEditDialog = (script: ProjectScript) => {
+    editorRequestIdRef.current += 1;
     onRequestMenuClose?.();
     setActionsMenuOpen({ presentation, scripts: false, imports: false });
     setEditorRequest(editorRequestForScript(script, keybindings));
@@ -144,6 +148,7 @@ export default function ProjectScriptsControl({
     scriptId === null ? onAddScript(input) : onUpdateScript(scriptId, input);
 
   const importFileScript = async (fileScript: T3ProjectFileScript) => {
+    const requestId = ++editorRequestIdRef.current;
     const payload: NewProjectScriptInput = {
       name: fileScript.name,
       command: fileScript.command,
@@ -159,14 +164,24 @@ export default function ProjectScriptsControl({
       autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
     };
     const result = await onAddScript(payload);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
-      setEditorRequest({
-        scriptId: null,
-        initial: payload,
-        error: thrownErrorMessage(error, m) ?? gt("Failed to import action."),
-      });
+    if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+
+    const message = thrownErrorMessage(squashAtomCommandFailure(result), m);
+    if (requestId !== editorRequestIdRef.current) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Failed to import {name}.", { name: fileScript.name }),
+          ...(message ? { description: message } : {}),
+        }),
+      );
+      return;
     }
+    setEditorRequest({
+      scriptId: null,
+      initial: payload,
+      error: message ?? gt("Failed to import action."),
+    });
   };
 
   const importMenuItems = importableScripts.length > 0 && (

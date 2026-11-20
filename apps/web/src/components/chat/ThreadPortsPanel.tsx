@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthPreviewOperateScope,
+  AuthTerminalOperateScope,
   type DiscoveredLocalServer,
   type EnvironmentId,
   type ThreadId,
@@ -10,7 +11,9 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { isLoopbackHost } from "@t3tools/shared/preview";
 import {
+  CableIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   CopyIcon,
@@ -21,12 +24,24 @@ import {
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { useState } from "react";
 
-import { resolveExternalServerUrl } from "~/browser/browserTargetResolver";
+import {
+  resolveExternalServerUrl,
+  tunnelsEnvironmentLoopback,
+} from "~/browser/browserTargetResolver";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { m } from "~/i18n/messages";
 import { ensureLocalApi } from "~/localApi";
 import { useDiscoveredPortsState } from "~/portDiscoveryState";
 import { useEnvironment } from "~/state/environments";
+import {
+  canForwardPorts,
+  findPortForward,
+  forwardedUrl,
+  forwardPort,
+  stopPortForward,
+  useForwardLocality,
+  usePortForwards,
+} from "~/state/portForwards";
 import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -104,14 +119,21 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
   const canStop = useAtomValue(
     previewEnvironment.stopLocalServer.permissionAtom(props.environmentId),
   );
-  const supportsStop =
-    useEnvironment(props.environmentId)?.serverConfig?.environment.capabilities.localServerStop ===
-    true;
+  const environment = useEnvironment(props.environmentId);
+  const supportsStop = environment?.serverConfig?.environment.capabilities.localServerStop === true;
+  const forwards = usePortForwards();
+  const forwardable =
+    useEnvironmentScope(props.environmentId, AuthTerminalOperateScope) &&
+    environment?.connection.phase === "connected" &&
+    canForwardPorts(environment);
+  const locality = useForwardLocality(forwardable ? props.environmentId : null);
+  const canForward = locality === "remote";
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const stopServer = useAtomCommand(previewEnvironment.stopLocalServer, {
     label: "thread server stop",
   });
   const [stoppingKey, setStoppingKey] = useState<string | null>(null);
+  const [forwardingPort, setForwardingPort] = useState<number | null>(null);
   const [visibleCount, setVisibleCount] = useState(PORT_PAGE_COUNT);
 
   if (rows.length === 0) return null;
@@ -120,8 +142,62 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
   const threadRef = { environmentId: props.environmentId, threadId: props.threadId };
   // Loopback means the environment's machine: a remote client reaches it at
   // the environment's LAN address instead.
-  const reachableUrl = (row: ThreadPortRow) =>
-    resolveExternalServerUrl(props.environmentId, row.url);
+  const reachableUrl = (row: ThreadPortRow) => {
+    const forward = findPortForward(forwards, props.environmentId, portForRow(row).port);
+    return forward
+      ? forwardedUrl(forward, row.url)
+      : resolveExternalServerUrl(props.environmentId, row.url);
+  };
+
+  // This machine's browser reaches another environment's loopback only through a forward.
+  // Starting a forward runs the probe; only a confirmed local environment opens directly.
+  const openInBrowser = async (row: ThreadPortRow) => {
+    const port = portForRow(row).port;
+    const url =
+      forwardable && locality !== "local"
+        ? await forwardPort(props.environmentId, port).then(
+            (forward) => forwardedUrl(forward, row.url),
+            (error: unknown) => {
+              reportFailure(gt("Could not forward port {port}", { port }), error);
+              return null;
+            },
+          )
+        : reachableUrl(row);
+    if (url === null) return;
+    // Without a forward, a remote environment's localhost would open this machine's instead.
+    if (
+      locality !== "local" &&
+      tunnelsEnvironmentLoopback(environment?.entry.target) &&
+      isLoopbackHost(new URL(url).hostname)
+    ) {
+      reportFailure(
+        gt("Could not open link"),
+        new Error(
+          gt(
+            "localhost:{port} runs on another machine, and port forwarding isn't available for it right now.",
+            { port },
+          ),
+        ),
+      );
+      return;
+    }
+    await ensureLocalApi()
+      .shell.openExternal(url)
+      .catch((error: unknown) => reportFailure(gt("Could not open link"), error));
+  };
+
+  const toggleForward = async (port: number, forwarded: boolean) => {
+    if (forwardingPort !== null) return;
+    setForwardingPort(port);
+    await (
+      forwarded
+        ? stopPortForward(props.environmentId, port)
+        : forwardPort(props.environmentId, port)
+    ).catch((error: unknown) =>
+      reportFailure(gt("Could not forward port {port}", { port }), error),
+    );
+    setForwardingPort(null);
+  };
 
   const openInPreview = async (row: ThreadPortRow) => {
     const result = await openDiscoveredPort({ threadRef, port: portForRow(row), openPreview });
@@ -152,7 +228,19 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
     >
       <ul className="m-0 list-none p-0">
         {rows.slice(0, visibleCount).map((row, index) => {
+          const serverPort = row.server?.port ?? null;
+          const forward =
+            serverPort === null
+              ? undefined
+              : findPortForward(forwards, props.environmentId, serverPort);
           const detail = [
+            // First, so the narrow panel truncates the less useful parts.
+            forward
+              ? gt("Forwarded to :{port}", {
+                  $context: "a remote dev server reachable on this machine's port",
+                  port: forward.localPort,
+                })
+              : null,
             row.pinned ? "t3.json" : null,
             row.startedBy === "agent"
               ? gt("Agent", { $context: "who started a dev server" })
@@ -201,13 +289,7 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                       variant="ghost"
                       part="icon"
                       aria-label={gt("Open {label} in browser", { label: row.label })}
-                      onClick={() =>
-                        void ensureLocalApi()
-                          .shell.openExternal(reachableUrl(row))
-                          .catch((error: unknown) =>
-                            reportFailure(gt("Could not open link"), error),
-                          )
-                      }
+                      onClick={() => void openInBrowser(row)}
                     >
                       <ExternalLinkIcon className="size-3.5" />
                     </ThreadDetailsControl>
@@ -240,6 +322,46 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
                   <T>Copy URL</T>
                 </TooltipPopup>
               </Tooltip>
+              {canForward && serverPort !== null ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <ThreadDetailsControl
+                        size="icon-xs"
+                        variant="ghost"
+                        part="icon"
+                        aria-pressed={forward !== undefined}
+                        aria-label={
+                          forward
+                            ? gt("Stop forwarding {label}", { label: row.label })
+                            : gt("Forward {label} to this machine", { label: row.label })
+                        }
+                        disabled={forwardingPort !== null}
+                        onClick={() => void toggleForward(serverPort, forward !== undefined)}
+                      >
+                        {forwardingPort === serverPort ? (
+                          <Spinner aria-hidden size="xs" />
+                        ) : (
+                          <CableIcon
+                            aria-hidden
+                            className={cn("size-3.5", forward && "text-primary")}
+                          />
+                        )}
+                      </ThreadDetailsControl>
+                    }
+                  />
+                  <TooltipPopup>
+                    {forward ? (
+                      <T>
+                        Forwarded to localhost:<Var>{forward.localPort}</Var> on this machine. Click
+                        to stop.
+                      </T>
+                    ) : (
+                      <T>Forward to this machine, for any app here</T>
+                    )}
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null}
               {stoppable ? (
                 <Tooltip>
                   <TooltipTrigger

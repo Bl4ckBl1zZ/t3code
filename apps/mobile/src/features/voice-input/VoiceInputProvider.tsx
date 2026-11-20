@@ -1,3 +1,4 @@
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import { AudioModule, IOSOutputFormat, RecordingPresets, type RecordingStatus } from "expo-audio";
@@ -16,7 +17,7 @@ import {
 } from "../../lib/microphonePriority";
 import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
 import { createVoiceRecorder } from "../../native/voiceRecorder";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
 import { managedRelayQueryManager } from "../cloud/managedRelayState";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { getNativeShowcaseScene } from "../showcase/nativeShowcaseScene";
@@ -96,9 +97,8 @@ const voiceInputAvailableAtom = Atom.make((get): boolean | "route-unavailable" =
  */
 const voiceInputAtom = Atom.make((get) => {
   const registry = get.registry;
-  // Mounted so the recorder can read and remember microphones synchronously.
+  // Mounted so the recorder can read known microphones synchronously.
   get.mount(mobilePreferencesAtom);
-  get.mount(updateMobilePreferencesAtom);
   const audioLevels = makeMutable<ReadonlyArray<number>>(
     Array<number>(VOICE_WAVEFORM_SAMPLE_COUNT).fill(0),
   );
@@ -128,7 +128,7 @@ const voiceInputAtom = Atom.make((get) => {
       const known = deviceMicrophoneOrder(preferences.value.microphones);
       const order = rememberMicrophones(known, inputs);
       if (order !== known) {
-        registry.set(updateMobilePreferencesAtom, {
+        void runAtomCommand(registry, saveMobilePreferences, {
           transform: (current) => ({
             microphones: rememberMicrophones(deviceMicrophoneOrder(current.microphones), inputs),
           }),
