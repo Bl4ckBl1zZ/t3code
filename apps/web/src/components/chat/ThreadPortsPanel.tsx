@@ -143,7 +143,9 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
   // Loopback means the environment's machine: a remote client reaches it at
   // the environment's LAN address instead.
   const reachableUrl = (row: ThreadPortRow) => {
-    const forward = findPortForward(forwards, props.environmentId, portForRow(row).port);
+    const forward = isLoopbackPreviewUrl(row.url)
+      ? findPortForward(forwards, props.environmentId, portForRow(row).port)
+      : undefined;
     return forward
       ? forwardedUrl(forward, row.url)
       : resolveExternalServerUrl(props.environmentId, row.url);
@@ -153,8 +155,10 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
   // Starting a forward runs the probe; only a confirmed local environment opens directly.
   const openInBrowser = async (row: ThreadPortRow) => {
     const port = portForRow(row).port;
+    // A pinned remote origin is reachable as is; only loopback needs the forward.
+    const loopback = isLoopbackPreviewUrl(row.url);
     const url =
-      forwardable && locality !== "local"
+      loopback && forwardable && locality !== "local"
         ? await forwardPort(props.environmentId, port).then(
             (forward) => forwardedUrl(forward, row.url),
             (error: unknown) => {
@@ -166,6 +170,7 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
     if (url === null) return;
     // Without a forward, a remote environment's localhost would open this machine's instead.
     if (
+      loopback &&
       locality !== "local" &&
       tunnelsEnvironmentLoopback(environment?.entry.target) &&
       isLoopbackHost(new URL(url).hostname)
