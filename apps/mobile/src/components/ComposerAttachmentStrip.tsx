@@ -82,6 +82,13 @@ export function ComposerAttachmentThumbnail(props: ComposerAttachmentThumbnailPr
       style={{ width: props.size, height: props.size, opacity: inFlight ? 0 : 1 }}
     >
       <ComposerAttachmentContent {...props} />
+      {upload?.status === "failed" ? (
+        <View
+          pointerEvents="none"
+          className="absolute inset-0 border-2 border-danger-foreground"
+          style={{ borderRadius: props.borderRadius }}
+        />
+      ) : null}
       {upload && upload.status !== "ready" ? (
         <Pressable
           accessibilityRole={upload.status === "failed" ? "button" : "text"}

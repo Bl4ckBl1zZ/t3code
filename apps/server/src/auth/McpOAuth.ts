@@ -631,6 +631,7 @@ export const layerMcpClientAuthenticator = Layer.effect(
                     label: client.label,
                     access: client.access,
                     linked: client.peerLink,
+                    linkExpiresAt: client.linkExpiresAt,
                     // A build without a hosted app hands out t3-thread:// links, never upstream's.
                     ...(client.peerLink || hostedAppUrl === null ? {} : { hostedAppUrl }),
                   },
