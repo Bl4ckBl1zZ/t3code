@@ -571,12 +571,13 @@ describe("cached VCS refs", () => {
             input: { cwd: "/repo" },
           });
 
-        const first = refresh();
-        const burst = [refresh(), refresh(), refresh()];
+        const start = () => Effect.forkChild(Effect.exit(refresh()), { startImmediately: true });
+        const first = yield* start();
+        const burst = [yield* start(), yield* start(), yield* start()];
         releaseFirst.resolve();
-        const results = yield* Effect.promise(() => Promise.all([first, ...burst]));
+        const results = yield* Fiber.joinAll([first, ...burst]);
 
-        expect(results.every(AsyncResult.isSuccess)).toBe(true);
+        expect(results.every(Exit.isSuccess)).toBe(true);
         expect(yield* Ref.get(calls)).toBe(2);
       }),
     ),
