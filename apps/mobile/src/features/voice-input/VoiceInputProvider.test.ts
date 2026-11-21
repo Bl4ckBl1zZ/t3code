@@ -18,11 +18,16 @@ vi.mock("expo-keep-awake", () => ({
 }));
 vi.mock("expo-audio", () => ({
   AudioModule: {},
+  IOSOutputFormat: { LINEARPCM: "lpcm" },
   RecordingPresets: { HIGH_QUALITY: { ios: {}, android: {} } },
   requestRecordingPermissionsAsync: async () => ({ granted: true }),
   setAudioModeAsync: vi.fn(async () => {}),
   setIsAudioActiveAsync: async () => {},
 }));
+// The fork's relay transcription imports the Expo runtime; these tests cover local capture only.
+vi.mock("../cloud/managedRelayState", () => ({ managedRelayQueryManager: {} }));
+vi.mock("../cloud/publicConfig", () => ({ hasCloudPublicConfig: () => false }));
+vi.mock("./relayVoiceInput", () => ({ getRelayVoiceTranscriber: () => null }));
 vi.mock("../../native/voiceRecorder", () => ({ createVoiceRecorder: vi.fn() }));
 vi.mock("../../native/voiceTranscription", () => ({ getLocalVoiceTranscriber: async () => null }));
 vi.mock("../../state/preferences", async () => {
