@@ -35,8 +35,10 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "$schema",
       "defaultThreadEnvMode",
       "iconPath",
+      "ignoreRepositories",
       "previewUrl",
       "scripts",
+      "worktreeLayout",
       "worktreeSparsePatternsPath",
       "worktreeSubmodules",
     ]);
