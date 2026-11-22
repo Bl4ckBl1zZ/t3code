@@ -157,20 +157,21 @@ function ThreadPortsList(props: ThreadPortsPanelProps) {
     const port = portForRow(row).port;
     // A pinned remote origin is reachable as is; only loopback needs the forward.
     const loopback = isLoopbackPreviewUrl(row.url);
-    const url =
-      loopback && forwardable && locality !== "local"
-        ? await forwardPort(props.environmentId, port).then(
-            (forward) => forwardedUrl(forward, row.url),
-            (error: unknown) => {
-              reportFailure(gt("Could not forward port {port}", { port }), error);
-              return null;
-            },
-          )
-        : reachableUrl(row);
+    const forwarding = loopback && forwardable && locality !== "local";
+    const url = forwarding
+      ? await forwardPort(props.environmentId, port).then(
+          (forward) => forwardedUrl(forward, row.url),
+          (error: unknown) => {
+            reportFailure(gt("Could not forward port {port}", { port }), error);
+            return null;
+          },
+        )
+      : reachableUrl(row);
     if (url === null) return;
     // Without a forward, a remote environment's localhost would open this machine's instead.
     if (
       loopback &&
+      !forwarding &&
       locality !== "local" &&
       tunnelsEnvironmentLoopback(environment?.entry.target) &&
       isLoopbackHost(new URL(url).hostname)

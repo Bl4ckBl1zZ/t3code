@@ -158,7 +158,8 @@ jobs:
   build_macos:
     name: Build downloadable macOS ARM64 app
     needs: [version, build_bundle]
-    runs-on: macos-15
+    # The Apple Speech helper needs the macOS 26 SDK (SpeechTranscriber).
+    runs-on: macos-26
     timeout-minutes: 60
     environment:
       name: production
@@ -178,6 +179,13 @@ jobs:
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|_rc' | sort -V | tail -n 1)"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
