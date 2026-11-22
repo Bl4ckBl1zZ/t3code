@@ -520,6 +520,7 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
         language: "C",
       },
       { args: ["rev-parse", "--symbolic-full-name", "HEAD"], language: "C" },
+      { args: ["rev-parse", "--git-common-dir", "--show-toplevel"], language: "C" },
       { args: ["rev-parse", "--git-common-dir"], language: "C" },
     ]);
   }).pipe(Effect.provide(layer));
