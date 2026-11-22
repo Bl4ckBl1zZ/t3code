@@ -973,7 +973,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
             ) : null}
             <Text
               accessibilityLabel={timestamp.toLocaleString()}
-              className="shrink-0 text-xs text-foreground-subtle"
+              className="shrink-0 text-xs text-foreground-muted"
             >
               {timestamp.toLocaleString(undefined, {
                 month: "short",
@@ -1187,7 +1187,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
                     row.workEntry.questionAnswer &&
                     hasQuestionAnswer(row.workEntry.questionAnswer)
                       ? "text-foreground"
-                      : "text-foreground-subtle"
+                      : "text-foreground-muted"
                   }
                 >{`  ${answerPreview}`}</Text>
               ) : null}
