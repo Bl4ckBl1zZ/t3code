@@ -45,7 +45,8 @@ concurrency:
 jobs:
   build-and-submit:
     name: Build iOS app and submit to TestFlight
-    runs-on: macos-26
+    # macos-26 tops out at Xcode 26.x; the Duo's hinge and side-bar APIs need the iOS 27.1 SDK.
+    runs-on: xcode-27
     timeout-minutes: 120
     environment:
       name: production
@@ -76,9 +77,17 @@ jobs:
         # iOS SDK so SDK-gated native features compile in.
         run: |
           set -euo pipefail
-          xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|_rc' | sort -V | tail -n 1)"
+          # Runner images symlink betas under plain names (Xcode_27.3.app), so filter the resolved path.
+          xcode="$(for x in /Applications/Xcode_*.app; do
+            readlink -f "$x" | grep -qiE 'beta|_rc|release_candidate' || echo "$x"
+          done | sort -V | tail -n 1)"
           sudo xcode-select -s "$xcode"
           xcodebuild -version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          if [ "$(printf '%s\n' 27.1 "$sdk" | sort -V | head -n 1)" != 27.1 ]; then
+            echo "::error::iOS SDK $sdk is older than 27.1; Duo support would compile out."
+            exit 1
+          fi
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
