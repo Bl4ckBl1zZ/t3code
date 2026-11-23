@@ -14,6 +14,10 @@
         ".github/scripts/pr-limits.cjs",
       ],
     },
+    "evals": {
+      // The grader loads these answers by path, as the server loads a definitions file.
+      "entry": ["workflow-authoring/fixtures/*.ts"],
+    },
     "scripts": {
       // Knip loads its preprocessor through a CLI option; native verification,
       // worktree setup (from t3.json) and the iOS release tool (from
