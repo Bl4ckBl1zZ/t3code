@@ -77,7 +77,10 @@ jobs:
         # iOS SDK so SDK-gated native features compile in.
         run: |
           set -euo pipefail
-          xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|_rc' | sort -V | tail -n 1)"
+          # Runner images symlink betas under plain names (Xcode_27.3.app), so filter the resolved path.
+          xcode="$(for x in /Applications/Xcode_*.app; do
+            readlink -f "$x" | grep -qiE 'beta|_rc|release_candidate' || echo "$x"
+          done | sort -V | tail -n 1)"
           sudo xcode-select -s "$xcode"
           xcodebuild -version
           sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
