@@ -329,13 +329,14 @@ describe("composerAttachmentsFromMediaAssets", () => {
     expect(attachments).toEqual([
       expect.objectContaining({
         mimeType: "image/jpeg",
-        dataUrl: "data:image/jpeg;base64,aGVsbG8=",
-        previewUri: "file:///cache/Camera/capture.jpg",
+        fileUri: `${STORED}-image`,
+        sizeBytes: 5,
       }),
       expect.objectContaining({
         name: "IMG_1.jpg",
         mimeType: "image/jpeg",
-        dataUrl: "data:image/jpeg;base64,cmVuZGVyZWQ=",
+        fileUri: `${STORED}-IMG_1.jpg`,
+        sizeBytes: 8,
       }),
     ]);
     expect(error).toBe(
