@@ -49,7 +49,7 @@ Voice spans start with `relay.voice.`. `relay.voice.transcribe` records the audi
 the reported and billed seconds, and the upload size. An OpenRouter `401`, `402`, or `403`
 is logged as an error ("OpenRouter rejected the relay's voice key") and reaches users as
 "Voice input is unavailable right now." That usually means the key was revoked or its
-credit limit was reached. See [Relay observability](./relay-observability.md) for where
+credit limit was reached. See [Relay observability](./05_relay-observability.md) for where
 logs live.
 
 ## Upgrading from the fork
@@ -57,3 +57,23 @@ logs live.
 The migration that adds daily usage drops `relay_account_integrations`, where the fork
 stored users' own OpenRouter keys, and the deploy no longer creates the voice credential
 encryption key. Users' language, dictionary, and cleanup settings carry over.
+
+## Design constraints
+
+Each recording has one destination, chosen in this order: an environment the user granted audio to
+(its own model or, for cloud transcription, one named provider), then the relay when signed in and
+the relay reports voice on, then on-device transcription on mobile. A granted environment never
+falls back to the relay or the device, and the relay never falls back to an environment.
+
+The relay, not an environment, owns this path because the key and its spend belong to the operator
+and the daily cap needs a stable identity across devices: the Clerk account. The caps are the cost
+boundary, so they cannot depend on client honesty where avoidable. Usage is reserved in Postgres
+before the upstream call, atomically against the daily cap, and refunded only when the upstream
+call fails. Web and desktop send WAV so the relay bills by the header's length; mobile sends m4a and
+its reported length, bounded by the clip limit. A client request id makes retries idempotent: the
+relay stores the response for a day and returns it without calling upstream or billing again, so
+clients reuse the id when resending the same clip, and only then.
+
+The web relay path keeps its own [session store](../../apps/web/src/voice/webVoiceSession.ts)
+because MediaRecorder yields blobs rather than file URIs, and it must outlive the composer:
+switching threads mid-transcription delivers the text to that thread's stored draft.
