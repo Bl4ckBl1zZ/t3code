@@ -20,6 +20,12 @@ window. It can point to a date or time problem on either device, but it can also
 delayed request. The client uses this category, and the absence of a category from an older relay,
 to decide whether clock skew is confirmed or only one possible cause.
 
+Account deletion runs as `relay.account_deletion.process_pending` sweeps every 5 minutes after a
+Clerk `user.deleted` webhook (`CLERK_WEBHOOK_SIGNING_SECRET`). If a deletion keeps failing,
+`select * from relay_account_deletions where completed_at is null order by attempts desc` shows
+which, and the failed `relay.account_deletion.delete_account` log names the stage (usually
+Cloudflare tunnel teardown). The row stays and retries until it succeeds.
+
 ## Webhooks
 
 A public webhook request is one `relay.hooks.forward` span. Its `relay.hook.outcome` says what

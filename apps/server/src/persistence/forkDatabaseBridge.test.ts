@@ -547,7 +547,19 @@ describe("upgradeForkDatabase", () => {
       assert.deepStrictEqual(yield* schema, yield* freshSchema);
 
       const survivingAfter = yield* threadRows(SURVIVING_THREADS);
-      assert.deepStrictEqual(survivingAfter.threads, survivingBefore.threads);
+      // Columns added after the fork schema (e.g. 116's fork_run_ids_json) start empty.
+      assert.deepStrictEqual(
+        survivingAfter.threads.map((row, index) =>
+          Object.fromEntries(
+            Object.entries(row).filter(([column, value]) => {
+              if (column in (survivingBefore.threads[index] ?? {})) return true;
+              assert.strictEqual(value, null, column);
+              return false;
+            }),
+          ),
+        ),
+        survivingBefore.threads,
+      );
       assert.deepStrictEqual(survivingAfter.receipts, survivingBefore.receipts);
       assert.deepStrictEqual(
         survivingAfter.events.map((event) => event.event_id),
