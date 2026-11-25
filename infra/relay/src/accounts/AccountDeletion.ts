@@ -31,6 +31,9 @@ import {
   relayManagedEndpointAllocations,
   relayManagedTunnelLimits,
   relayMobileDevices,
+  relayVoiceInputSettings,
+  relayVoiceTranscriptionRequests,
+  relayVoiceUsageDays,
 } from "../persistence/schema.ts";
 import * as T3ChatAccounts from "../t3chat/T3ChatAccounts.ts";
 
@@ -232,6 +235,13 @@ const make = Effect.gen(function* () {
           yield* db
             .delete(relayManagedTunnelLimits)
             .where(eq(relayManagedTunnelLimits.userId, userId));
+          yield* db
+            .delete(relayVoiceInputSettings)
+            .where(eq(relayVoiceInputSettings.userId, userId));
+          yield* db
+            .delete(relayVoiceTranscriptionRequests)
+            .where(eq(relayVoiceTranscriptionRequests.userId, userId));
+          yield* db.delete(relayVoiceUsageDays).where(eq(relayVoiceUsageDays.userId, userId));
         }),
       )
       .pipe(

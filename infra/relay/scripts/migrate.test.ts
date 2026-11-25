@@ -104,6 +104,7 @@ describe("relay migrations on a fork-migrated database", () => {
     const freshSchema = await describeSchema(fresh);
     expect(new Set(freshSchema.columns.map((row) => row.table_name))).toEqual(
       new Set([
+        "relay_account_deletions",
         "relay_agent_activity_rows",
         "relay_delivery_attempts",
         "relay_dpop_proofs",

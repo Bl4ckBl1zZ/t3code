@@ -203,6 +203,9 @@ describe("AccountDeletion", () => {
           "delete relay_mobile_devices user_1",
           "delete relay_delivery_attempts user_1",
           "delete relay_managed_tunnel_limits user_1",
+          "delete relay_voice_input_settings user_1",
+          "delete relay_voice_transcription_requests user_1",
+          "delete relay_voice_usage_days user_1",
           "unlink-t3chat user_1",
         ]);
 
