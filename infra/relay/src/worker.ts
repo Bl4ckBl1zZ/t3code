@@ -69,6 +69,8 @@ import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as T3ChatAccounts from "./t3chat/T3ChatAccounts.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
 import * as HookForwarder from "./hooks/HookForwarder.ts";
+import * as ManagedTunnelBinding from "./environments/ManagedTunnelBinding.ts";
+import * as AccountDeletion from "./accounts/AccountDeletion.ts";
 import * as HeldHooks from "./hooks/HeldHooks.ts";
 import * as HookInbox from "./hooks/HookInbox.ts";
 import * as HookInboxObject from "./hooks/HookInboxObject.ts";
@@ -173,6 +175,12 @@ export const layer = Api.make(
     const clerkPublishableKey = yield* Config.String("CLERK_PUBLISHABLE_KEY");
     const clerkJwtAudience = yield* Config.String("CLERK_JWT_AUDIENCE");
     const voiceInput = yield* RelayConfiguration.voiceInputConfig;
+    const clerkWebhookSigningSecret = Option.getOrUndefined(
+      Option.filter(
+        yield* Config.option(Config.Redacted("CLERK_WEBHOOK_SIGNING_SECRET")),
+        (value) => Redacted.value(value).trim().length > 0,
+      ),
+    );
     const t3ChatLinkSecret = Option.getOrUndefined(
       Option.filter(
         yield* Config.option(Config.Redacted("T3CHAT_LINK_SECRET")),
@@ -203,7 +211,7 @@ export const layer = Api.make(
       accountId: Effect.succeed(cloudflareAccountId),
     };
     const managedEndpointZoneId = yield* yield* managedEndpointZone.zoneId;
-    const managedEndpointTunnelBinding = Cloudflare.Tunnel.readWriteClient(
+    const managedEndpointTunnelBinding = ManagedTunnelBinding.makeManagedTunnelClient(
       Cloudflare.Tunnel.makeTunnelAuth(runtimeToken),
     );
     const managedEndpointDnsBinding = Cloudflare.DNS.dnsReadWriteClient(
@@ -245,6 +253,7 @@ export const layer = Api.make(
         clerkSecretKey,
         clerkPublishableKey,
         clerkJwtAudience,
+        ...(clerkWebhookSigningSecret ? { clerkWebhookSigningSecret } : {}),
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
         managedEndpointBaseDomain: yield* managedEndpointZoneName,
@@ -302,6 +311,7 @@ export const layer = Api.make(
           EnvironmentPublishSignatures.layer,
           ManagedEndpointReaper.layer,
           HeldHooks.layer,
+          AccountDeletion.layer,
         ),
       ),
       Layer.provideMerge(
@@ -391,6 +401,7 @@ export const layer = Api.make(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),
       ),
+      AccountDeletion.layerApi,
     ).pipe(
       Layer.provideMerge(RelayHttpApi.layerClientAuth),
       Layer.provideMerge(RelayHttpApi.layerDpopClientAuth),
@@ -458,6 +469,19 @@ export const layer = Api.make(
                 : Effect.logWarning("Failed to prune expired relay state", { cause }),
             ),
           ),
+          AccountDeletion.AccountDeletion.pipe(
+            Effect.flatMap((accounts) => accounts.processPending.pipe(Effect.timeout("2 minutes"))),
+            Effect.tap((result) =>
+              result.failed > 0
+                ? Effect.logError("Account deletions failed; retrying next sweep", result)
+                : Effect.void,
+            ),
+            Effect.catchCause((cause) =>
+              Cause.hasInterrupts(cause)
+                ? Effect.interrupt
+                : Effect.logError("Failed to process account deletions", { cause }),
+            ),
+          ),
           ManagedEndpointReaper.ManagedEndpointReaper.pipe(
             Effect.flatMap((reaper) => reaper.sweep.pipe(Effect.timeout("2 minutes"))),
             Effect.tap((result) =>
@@ -480,7 +504,7 @@ export const layer = Api.make(
             ),
           ),
         ],
-        { concurrency: 3, discard: true },
+        { concurrency: 4, discard: true },
       ).pipe(
         Effect.withSpan("relay.cron.prune_expired_state"),
         Observability.withSchemaErrorSpanAttributes,
