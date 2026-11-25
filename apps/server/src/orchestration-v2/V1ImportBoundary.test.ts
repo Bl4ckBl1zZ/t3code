@@ -16,6 +16,8 @@ const legacyReaderFiles: Record<string, string> = {
   "persistence/forkDatabaseBridge.ts": "one-time fork database upgrade",
   // Before deleting the pre-0.1.0 database, checks every V1 record reached the current one.
   "persistence/DatabaseMaintenance.ts": "legacy database removal check",
+  // Deleting a thread also purges the V1 rows it was imported from.
+  "orchestration-v2/ProjectionMaintenance.ts": "deleted-thread history purge",
 };
 const retiredPaths = [
   "orchestration",
