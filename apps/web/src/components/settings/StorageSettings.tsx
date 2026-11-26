@@ -372,7 +372,7 @@ function CleanupResults({
       {report.omittedCount > 0 && (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
           {gt(
-            "{omitted, plural, one {{environment}: {count} more results.} other {{environment}: {count} more results.}}",
+            "{omitted, plural, one {{environment}: {count} more result.} other {{environment}: {count} more results.}}",
             {
               omitted: report.omittedCount,
               environment: environmentLabel,
@@ -919,10 +919,10 @@ export function StorageCleanupSections() {
   if (!supportsStorageCleanup(connectedEnvironments)) {
     return (
       <>
-        {databaseStorageNotice}
         <SettingsSection id="storage-artifacts" title={gt("Artifacts and logs")} variant="plain">
           <StorageCleanupScopeNotice />
         </SettingsSection>
+        {databaseStorageNotice}
       </>
     );
   }
@@ -932,9 +932,9 @@ export function StorageCleanupSections() {
       environment.serverConfig?.environment.capabilities.settledThreadAutoDelete === true,
   );
 
+  // Machines report their databases after the page renders, so the notice goes last to push nothing down.
   return (
     <>
-      {databaseStorageNotice}
       {supportsSettledThreadAutoDelete && (
         <SettingsSection id="storage-threads" title={gt("Threads")}>
           <SettingsRow
@@ -1005,6 +1005,7 @@ export function StorageCleanupSections() {
         </AnimatedHeight>
       </SettingsSection>
       <CleanupSection />
+      {databaseStorageNotice}
     </>
   );
 }

@@ -114,7 +114,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     props.environmentId,
     props.activeProjectScripts && (visible.scripts || visible.servers) ? props.gitCwd : null,
   );
-  const fileScripts = projectFile.scripts;
   const activeThreadRef = { environmentId: props.environmentId, threadId: props.threadId };
   const project = useProject(scopeProjectRef(props.environmentId, props.projectId));
   const serverConfig = useServerConfigs().get(props.environmentId);
@@ -253,7 +252,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                         environmentId={props.environmentId}
                         displayMode="panel"
                         scripts={props.activeProjectScripts}
-                        fileScripts={fileScripts}
+                        fileScripts={projectFile.scripts}
+                        onActionsMenuOpen={projectFile.refresh}
                         preferredScriptId={props.preferredScriptId}
                         onRunScript={props.onRunProjectScript}
                         {...(props.runningProjectScriptIds
