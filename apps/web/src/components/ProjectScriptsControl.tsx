@@ -29,6 +29,7 @@ import {
   ScriptIcon,
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
+  type ProjectScriptSubmit,
   type ProjectScriptEditorRequest,
 } from "./projectScriptEditor";
 import { Button } from "./ui/button";
@@ -75,10 +76,14 @@ interface ProjectScriptsControlProps {
   /** Single-run scripts whose terminal is running a command; running one again restarts it. */
   runningScriptIds?: ReadonlySet<string>;
   onRunScript?: ((script: ProjectScript) => void) | undefined;
-  onAddScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
+  onAddScript: (
+    input: NewProjectScriptInput,
+    onActionCreated?: (scriptId: string) => void,
+  ) => Promise<ProjectScriptActionResult>;
   onUpdateScript: (
     scriptId: string,
     input: NewProjectScriptInput,
+    retryingCreation?: boolean,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
 }
@@ -150,8 +155,10 @@ export default function ProjectScriptsControl({
     setEditorRequest(editorRequestForScript(script, keybindings));
   };
 
-  const submitScript = (scriptId: string | null, input: NewProjectScriptInput) =>
-    scriptId === null ? onAddScript(input) : onUpdateScript(scriptId, input);
+  const submitScript: ProjectScriptSubmit = (scriptId, input, onActionCreated, retryingCreation) =>
+    scriptId === null
+      ? onAddScript(input, onActionCreated)
+      : onUpdateScript(scriptId, input, retryingCreation);
 
   const importFileScript = async (fileScript: T3ProjectFileScript) => {
     const requestId = ++editorRequestIdRef.current;

@@ -238,6 +238,7 @@ function Panel({
         backgroundTasks={[]}
         backgroundOutputs={new Map()}
         onOpenRelatedThread={noop}
+        taskList={null}
       />
     </ChatCanvasContext>
   );

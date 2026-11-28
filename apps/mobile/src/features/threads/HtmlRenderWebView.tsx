@@ -3,11 +3,13 @@ import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   clampHtmlRenderHeight,
+  HTML_RENDER_NATIVE_OPEN_IMAGE_SCRIPT,
   htmlRenderFileName,
   htmlRenderFrameHeight,
   htmlRenderInlineDocument,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
+  readHtmlRenderImageRequest,
   type HtmlRenderReference,
   type HtmlRenderTheme,
 } from "@t3tools/shared/htmlRender";
@@ -18,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { FilePreviewModal, type FilePreviewSource } from "../../components/ui/FilePreviewModal";
 import { AppText as Text } from "../../components/ui/AppText";
 import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -59,19 +62,22 @@ type Overflow = { readonly x: boolean; readonly y: boolean };
 
 const NO_OVERFLOW: Overflow = { x: false, y: false };
 
-function readOverflowMessage(data: string): Overflow | null {
+function readOverflowMessage(message: unknown): Overflow | null {
+  return typeof message === "object" &&
+    message !== null &&
+    "type" in message &&
+    message.type === OVERFLOW_MESSAGE_TYPE &&
+    "x" in message &&
+    typeof message.x === "boolean" &&
+    "y" in message &&
+    typeof message.y === "boolean"
+    ? { x: message.x, y: message.y }
+    : null;
+}
+
+function parseMessage(data: string): unknown {
   try {
-    const message: unknown = JSON.parse(data);
-    return typeof message === "object" &&
-      message !== null &&
-      "type" in message &&
-      message.type === OVERFLOW_MESSAGE_TYPE &&
-      "x" in message &&
-      typeof message.x === "boolean" &&
-      "y" in message &&
-      typeof message.y === "boolean"
-      ? { x: message.x, y: message.y }
-      : null;
+    return JSON.parse(data);
   } catch {
     return null;
   }
@@ -83,22 +89,29 @@ const HEIGHT_MESSAGE_TYPE = "t3-html-render-height";
 // measures it, for pages no server measured (legacy inline embeds).
 const HEIGHT_SCRIPT = `(function(){var last;function report(){var d=document.documentElement,h=Math.ceil(d.scrollHeight>d.clientHeight?d.scrollHeight:d.getBoundingClientRect().height);if(h===last)return;last=h;window.ReactNativeWebView.postMessage(JSON.stringify({type:${JSON.stringify(HEIGHT_MESSAGE_TYPE)},height:h}));}report();if(window.ResizeObserver){var r=new ResizeObserver(report);r.observe(document.documentElement);if(document.body)r.observe(document.body);}window.addEventListener("load",report);})();true;`;
 
-function readHeightMessage(data: string): number | null {
-  try {
-    const message: unknown = JSON.parse(data);
-    return typeof message === "object" &&
-      message !== null &&
-      "type" in message &&
-      message.type === HEIGHT_MESSAGE_TYPE &&
-      "height" in message &&
-      typeof message.height === "number" &&
-      Number.isFinite(message.height) &&
-      message.height > 0
-      ? message.height
-      : null;
-  } catch {
-    return null;
-  }
+function readHeightMessage(message: unknown): number | null {
+  return typeof message === "object" &&
+    message !== null &&
+    "type" in message &&
+    message.type === HEIGHT_MESSAGE_TYPE &&
+    "height" in message &&
+    typeof message.height === "number" &&
+    Number.isFinite(message.height) &&
+    message.height > 0
+    ? message.height
+    : null;
+}
+
+function imagePreviewSource(message: unknown): FilePreviewSource | null {
+  const request = readHtmlRenderImageRequest(message);
+  if (request === undefined) return null;
+  const gallery = request.images.map((image) => ({
+    kind: "image" as const,
+    uri: image.src,
+    name: image.name,
+  }));
+  const selected = gallery[request.index];
+  return selected ? { ...selected, gallery } : null;
 }
 
 const withoutFragment = (url: string) => url.split("#", 1)[0];
@@ -121,6 +134,7 @@ export function HtmlRenderWebView(
   const [generation, setGeneration] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [overflow, setOverflow] = useState(NO_OVERFLOW);
+  const [preview, setPreview] = useState<FilePreviewSource | null>(null);
   const webView = useRef<WebView<object>>(null);
   const crashes = useRef(0);
   const shownTheme = useRef<HtmlRenderTheme | null>(null);
@@ -138,6 +152,7 @@ export function HtmlRenderWebView(
   const injectedJavaScript = [
     props.nested ? OVERFLOW_SCRIPT : "",
     onContentHeight ? HEIGHT_SCRIPT : "",
+    HTML_RENDER_NATIVE_OPEN_IMAGE_SCRIPT,
   ].join("");
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- posts theme changes into the already loaded WebView
   useEffect(() => {
@@ -202,18 +217,21 @@ export function HtmlRenderWebView(
         onHttpError={props.onLoadError}
         onContentProcessDidTerminate={restart}
         onRenderProcessGone={restart}
-        {...(injectedJavaScript !== ""
-          ? {
-              injectedJavaScript,
-              onMessage: (event: WebViewMessageEvent) => {
-                const next = readOverflowMessage(event.nativeEvent.data);
-                if (next !== null) setOverflow(next);
-                const height = readHeightMessage(event.nativeEvent.data);
-                if (height !== null) onContentHeight?.(height);
-              },
-            }
-          : {})}
+        injectedJavaScript={injectedJavaScript}
+        onMessage={(event: WebViewMessageEvent) => {
+          const message = parseMessage(event.nativeEvent.data);
+          const image = imagePreviewSource(message);
+          if (image !== null) {
+            setPreview(image);
+            return;
+          }
+          const next = props.nested ? readOverflowMessage(message) : null;
+          if (next !== null) setOverflow(next);
+          const height = readHeightMessage(message);
+          if (height !== null) onContentHeight?.(height);
+        }}
       />
+      <FilePreviewModal source={preview} onRequestClose={() => setPreview(null)} />
       {loaded ? null : (
         <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
           <AppActivityIndicator />
