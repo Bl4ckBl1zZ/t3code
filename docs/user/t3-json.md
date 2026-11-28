@@ -65,19 +65,19 @@ Add `"$schema": "https://t3.codes/schema/t3.json"` for editor autocomplete and v
 
 Import `t3.json` scripts or define local actions in **Settings → Projects → Actions** (run them from the thread details panel, command palette, or [keybindings](./keybindings.md) via `script.<id>.run`).
 
-| Field                 | Description                                                                                                                                           |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                | Display name in the actions menu.                                                                                                                     |
-| `command`             | Shell command run in a T3 terminal at the project root.                                                                                               |
-| `icon`                | `"play"` (default), `"test"`, `"lint"`, `"configure"`, `"build"`, or `"debug"`.                                                                       |
-| `runOnWorktreeCreate` | Runs automatically when a new worktree is created. Skipped for agent-initiated worktrees below **Full access**.                                       |
-| `async`               | For `runOnWorktreeCreate` only: `true` (default) starts the agent immediately; `false` waits for the script to finish first.                          |
-| `stopOnSettle`        | Stops this action's terminal and child processes when its thread settles.                                                                             |
-| `runOnSettle`         | Runs in the thread's worktree whenever the thread settles (skipped in main checkouts). Terminal closes on success, stays open on failure.             |
-| `previewUrl`          | Opens this URL in the in-app browser when the script runs (desktop only).                                                                             |
-| `autoOpenPreview`     | Automatically opens the browser panel at `previewUrl` on script start.                                                                                |
-| `singleRun`           | **Only one run at a time**: one copy per thread, in its own terminal. Running it again restarts it.                                                   |
-| `runOnWorktreeDelete` | Runs in the worktree before T3 Code deletes it, e.g. to stop containers (no terminal; stopped after two minutes; a failure never keeps the worktree). |
+| Field                 | Description                                                                                                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | Display name in the actions menu.                                                                                                                                                             |
+| `command`             | Shell command run in a T3 terminal at the project root.                                                                                                                                       |
+| `icon`                | `"play"` (default), `"test"`, `"lint"`, `"configure"`, `"build"`, or `"debug"`.                                                                                                               |
+| `runOnWorktreeCreate` | Runs automatically when a new worktree is created. Skipped for agent-initiated worktrees below **Full access**.                                                                               |
+| `async`               | For `runOnWorktreeCreate` only: `true` (default) starts the agent immediately; `false` waits for the script to finish first.                                                                  |
+| `stopOnSettle`        | Stops this action's terminal and child processes when its thread settles.                                                                                                                     |
+| `runOnSettle`         | Runs in the thread's worktree whenever the thread settles (skipped in main checkouts). Settle scripts run one at a time across the server. Terminal closes on success, stays open on failure. |
+| `previewUrl`          | Opens this URL in the in-app browser when the script runs (desktop only).                                                                                                                     |
+| `autoOpenPreview`     | Automatically opens the browser panel at `previewUrl` on script start.                                                                                                                        |
+| `singleRun`           | **Only one run at a time**: one copy per thread, in its own terminal. Running it again restarts it.                                                                                           |
+| `runOnWorktreeDelete` | Runs in the worktree before T3 Code deletes it, e.g. to stop containers (no terminal; stopped after two minutes; a failure never keeps the worktree).                                         |
 
 In the app, **Only one run at a time** matches `singleRun`, and **Run in the thread's worktree before it is deleted** matches `runOnWorktreeDelete`. A teardown script runs whenever T3 Code deletes a worktree: when you delete threads with their worktree, when storage cleanup removes it, and when an agent's worktree handoff or a thread launch is rolled back. If it fails, deleting a thread shows a warning and the storage cleanup results note the failure.
 
